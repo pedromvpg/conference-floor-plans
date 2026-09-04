@@ -1,36 +1,44 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Conference Maps
 
-## Getting Started
+Standalone floor-plan **designer** and public **viewer** for Bitcoin conferences. Replaces ExpoFP. Embed the published viewer URL in btc-app (`events.venue_map_url`) — this repo does not share a database with btc-app.
 
-First, run the development server:
+## What you get
+
+- Desktop-first designer: named plans, PDF/PNG/SVG underlay, two-click scale (m/ft), rectangles, polygons, amenity icons, Airtable sponsor bind
+- Public viewer: pan/zoom, search, booth sheets, logos when they fit, `?booth=` / `?airtable=` highlight
+- Immutable publish snapshot + `GET /e/:slug/map.json` (native contract, version 1)
+- iframe / WebView friendly (`frame-ancestors *`)
+
+## Local demo (no Supabase)
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000), continue as editor. **Bitcoin Asia 2026** (`/e/bhk26`) is seeded from the XR hall coordinates (schematic underlay + booth rectangles + amenities). Draft lives in `.data/`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Viewer: [http://localhost:3000/e/bhk26](http://localhost:3000/e/bhk26)  
+JSON: [http://localhost:3000/e/bhk26/map.json](http://localhost:3000/e/bhk26/map.json)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Paste that viewer URL into btc-app admin → Venue Map.
 
-## Learn More
+## Production (Vercel + own Supabase)
 
-To learn more about Next.js, take a look at the following resources:
+1. Create a Supabase project. Run [`supabase/schema.sql`](supabase/schema.sql).
+2. Create a **public** Storage bucket named `maps`.
+3. Auth: enable email magic links. Redirect URL: `https://<host>/auth/callback`.
+4. Insert your production emails into `allowed_editors`, or set `ALLOWED_EMAILS`.
+5. `vercel link` this repo, set env from `.env.example`, deploy.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The app uses the service role on the server. RLS still protects the tables from the anon key.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Designer shortcuts
 
-## Deploy on Vercel
+- `V` select · `R` rectangle · `P` polygon · `I` amenity icon
+- Two-click **Scale** + known length
+- Size presets: 3×3 m, 6×6 m, 10×10 m, 10×10 ft, 20×20 ft
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Native contract
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`GET /e/:slug/map.json` is a versioned GeoJSON document in floor-local metres (origin top-left of the underlay, y down). A later Expo viewer can render it without joining this database.
