@@ -15,6 +15,12 @@ export type AmenityType =
 
 export type ObjectKind = "booth" | "amenity";
 
+export type Appearance = "booth" | "stage" | "custom";
+
+export type LibraryAssetKind = "texture" | "model";
+
+export type ViewMode = "plan" | "hall";
+
 export type Tool = "select" | "rect" | "polygon" | "icon" | "calibrate";
 
 export type Ring = [number, number][];
@@ -38,6 +44,11 @@ export type MapEvent = {
   airtableTable: string;
   airtableToken: string;
   airtableEventCode: string;
+  airtableAgendaTable: string;
+  airtableSpeakersTable: string;
+  sponsorsSyncedAt: string | null;
+  agendaSyncedAt: string | null;
+  speakersSyncedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -67,8 +78,47 @@ export type MapObject = {
   sponsorId: string | null;
   amenityType: AmenityType | null;
   color: string | null;
+  appearance: Appearance | null;
+  facingDeg: number;
+  modelAssetId: string | null;
+  rugTextureAssetId: string | null;
+  wallTextureAssetId: string | null;
+  /** Resolved onto the published snapshot; not stored on draft rows. */
+  modelUrl?: string;
+  rugTextureUrl?: string;
+  wallTextureUrl?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type LibraryAsset = {
+  id: string;
+  eventId: string;
+  kind: LibraryAssetKind;
+  name: string;
+  url: string;
+  contentType: string;
+  createdAt: string;
+};
+
+export type AgendaSession = {
+  id: string;
+  eventId: string;
+  airtableId: string;
+  title: string;
+  stage: string;
+  startUnix: number | null;
+  endUnix: number | null;
+  speakerIds: string[];
+  sessionType: string;
+};
+
+export type AgendaSpeaker = {
+  id: string;
+  eventId: string;
+  airtableId: string;
+  name: string;
+  photoUrl: string;
 };
 
 export type Sponsor = {
@@ -96,6 +146,8 @@ export type MapDocument = {
   publishedAt: string;
   floors: MapDocumentFloor[];
   sponsors: MapDocumentSponsor[];
+  sessions?: MapDocumentSession[];
+  speakers?: MapDocumentSpeaker[];
 };
 
 export type MapDocumentFloor = {
@@ -124,6 +176,22 @@ export type MapDocumentSponsor = {
   logoWhiteUrl: string;
 };
 
+export type MapDocumentSession = {
+  airtableId: string;
+  title: string;
+  stage: string;
+  startUnix: number | null;
+  endUnix: number | null;
+  speakerIds: string[];
+  sessionType: string;
+};
+
+export type MapDocumentSpeaker = {
+  airtableId: string;
+  name: string;
+  photoUrl: string;
+};
+
 export type DraftSlice = {
   floors: Floor[];
   objects: MapObject[];
@@ -144,6 +212,9 @@ export type DraftBundle = {
   floors: Floor[];
   objects: MapObject[];
   sponsors: Sponsor[];
+  sessions: AgendaSession[];
+  speakers: AgendaSpeaker[];
+  assets: LibraryAsset[];
   publication: Publication | null;
 };
 

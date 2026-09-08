@@ -1,8 +1,12 @@
 import type {
+  AgendaSession,
+  AgendaSpeaker,
   DraftBundle,
   DraftSlice,
   DraftVersionMeta,
   Floor,
+  LibraryAsset,
+  LibraryAssetKind,
   MapEvent,
   MapObject,
   Publication,
@@ -16,6 +20,19 @@ export type NewEventInput = {
   airtableTable?: string;
   airtableToken?: string;
   airtableEventCode?: string;
+  airtableAgendaTable?: string;
+  airtableSpeakersTable?: string;
+  sponsorsSyncedAt?: string | null;
+  agendaSyncedAt?: string | null;
+  speakersSyncedAt?: string | null;
+};
+
+export type NewLibraryAsset = {
+  eventId: string;
+  kind: LibraryAssetKind;
+  name: string;
+  url: string;
+  contentType: string;
 };
 
 export interface Store {
@@ -33,6 +50,13 @@ export interface Store {
   deleteObject(id: string): Promise<void>;
   replaceSponsors(eventId: string, sponsors: Omit<Sponsor, "id" | "eventId">[]): Promise<Sponsor[]>;
   listSponsors(eventId: string): Promise<Sponsor[]>;
+  replaceSessions(eventId: string, sessions: Omit<AgendaSession, "id" | "eventId">[]): Promise<AgendaSession[]>;
+  listSessions(eventId: string): Promise<AgendaSession[]>;
+  replaceSpeakers(eventId: string, speakers: Omit<AgendaSpeaker, "id" | "eventId">[]): Promise<AgendaSpeaker[]>;
+  listSpeakers(eventId: string): Promise<AgendaSpeaker[]>;
+  listAssets(eventId: string): Promise<LibraryAsset[]>;
+  createAsset(input: NewLibraryAsset): Promise<LibraryAsset>;
+  deleteAsset(id: string): Promise<void>;
   publish(eventId: string, publishedBy: string): Promise<Publication>;
   getPublicationBySlug(slug: string): Promise<Publication | null>;
   replaceDraft(eventId: string, slice: DraftSlice): Promise<DraftSlice>;

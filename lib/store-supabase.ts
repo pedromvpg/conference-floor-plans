@@ -1,9 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
+  AgendaSession,
+  AgendaSpeaker,
   Calibration,
   DraftBundle,
   DraftSlice,
   Floor,
+  LibraryAsset,
   MapEvent,
   MapObject,
   Publication,
@@ -11,8 +14,9 @@ import type {
 } from "./types";
 import { MAX_DRAFT_VERSIONS, sliceKey } from "./draft-versions";
 import { buildMapDocument } from "./map-document";
-import type { NewEventInput, Store } from "./store";
 import { nowIso } from "./store";
+import type { NewEventInput, NewLibraryAsset, Store } from "./store";
+import { normalizeObject } from "./appearance";
 
 type EventRow = {
   id: string;
@@ -22,6 +26,11 @@ type EventRow = {
   airtable_table: string;
   airtable_token: string;
   airtable_event_code: string;
+  airtable_agenda_table: string | null;
+  airtable_speakers_table: string | null;
+  sponsors_synced_at: string | null;
+  agenda_synced_at: string | null;
+  speakers_synced_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -51,6 +60,11 @@ type ObjectRow = {
   sponsor_id: string | null;
   amenity_type: MapObject["amenityType"];
   color: string | null;
+  appearance: MapObject["appearance"];
+  facing_deg: number | null;
+  model_asset_id: string | null;
+  rug_texture_asset_id: string | null;
+  wall_texture_asset_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -75,6 +89,11 @@ function eventFrom(r: EventRow): MapEvent {
     airtableTable: r.airtable_table ?? "",
     airtableToken: r.airtable_token ?? "",
     airtableEventCode: r.airtable_event_code ?? "",
+    airtableAgendaTable: r.airtable_agenda_table ?? "",
+    airtableSpeakersTable: r.airtable_speakers_table ?? "",
+    sponsorsSyncedAt: r.sponsors_synced_at ?? null,
+    agendaSyncedAt: r.agenda_synced_at ?? null,
+    speakersSyncedAt: r.speakers_synced_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -108,6 +127,11 @@ function objectFrom(r: ObjectRow): MapObject {
     sponsorId: r.sponsor_id,
     amenityType: r.amenity_type,
     color: r.color ?? null,
+    appearance: r.appearance ?? null,
+    facingDeg: r.facing_deg ?? 0,
+    modelAssetId: r.model_asset_id,
+    rugTextureAssetId: r.rug_texture_asset_id,
+    wallTextureAssetId: r.wall_texture_asset_id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -123,6 +147,72 @@ function sponsorFrom(r: SponsorRow): Sponsor {
     boothNumber: r.booth_number ?? "",
     logoUrl: r.logo_url ?? "",
     logoWhiteUrl: r.logo_white_url ?? "",
+  };
+}
+
+type SessionRow = {
+  id: string;
+  event_id: string;
+  airtable_id: string;
+  title: string;
+  stage: string;
+  start_unix: number | null;
+  end_unix: number | null;
+  speaker_ids: string[] | null;
+  session_type: string;
+};
+
+type SpeakerRow = {
+  id: string;
+  event_id: string;
+  airtable_id: string;
+  name: string;
+  photo_url: string;
+};
+
+type AssetRow = {
+  id: string;
+  event_id: string;
+  kind: LibraryAsset["kind"];
+  name: string;
+  url: string;
+  content_type: string;
+  created_at: string;
+};
+
+function sessionFrom(r: SessionRow): AgendaSession {
+  return {
+    id: r.id,
+    eventId: r.event_id,
+    airtableId: r.airtable_id,
+    title: r.title ?? "",
+    stage: r.stage ?? "",
+    startUnix: r.start_unix,
+    endUnix: r.end_unix,
+    speakerIds: Array.isArray(r.speaker_ids) ? r.speaker_ids : [],
+    sessionType: r.session_type ?? "",
+  };
+}
+
+function speakerFrom(r: SpeakerRow): AgendaSpeaker {
+  return {
+    id: r.id,
+    eventId: r.event_id,
+    airtableId: r.airtable_id,
+    name: r.name ?? "",
+    photoUrl: r.photo_url ?? "",
+  };
+}
+
+function assetFrom(r: AssetRow): LibraryAsset {
+  return {
+    id: r.id,
+    eventId: r.event_id,
+    kind: r.kind,
+    name: r.name ?? "",
+    url: r.url,
+    contentType: r.content_type ?? "",
+    createdAt: r.created_at,
   };
 }
 
@@ -151,6 +241,8 @@ export class SupabaseStore implements Store {
         airtable_table: input.airtableTable ?? "",
         airtable_token: input.airtableToken ?? "",
         airtable_event_code: input.airtableEventCode ?? "",
+        airtable_agenda_table: input.airtableAgendaTable ?? "",
+        airtable_speakers_table: input.airtableSpeakersTable ?? "",
       })
       .select("*")
       .single();
@@ -166,6 +258,11 @@ export class SupabaseStore implements Store {
     if (patch.airtableTable != null) row.airtable_table = patch.airtableTable;
     if (patch.airtableToken != null) row.airtable_token = patch.airtableToken;
     if (patch.airtableEventCode != null) row.airtable_event_code = patch.airtableEventCode;
+    if (patch.airtableAgendaTable != null) row.airtable_agenda_table = patch.airtableAgendaTable;
+    if (patch.airtableSpeakersTable != null) row.airtable_speakers_table = patch.airtableSpeakersTable;
+    if (patch.sponsorsSyncedAt !== undefined) row.sponsors_synced_at = patch.sponsorsSyncedAt;
+    if (patch.agendaSyncedAt !== undefined) row.agenda_synced_at = patch.agendaSyncedAt;
+    if (patch.speakersSyncedAt !== undefined) row.speakers_synced_at = patch.speakersSyncedAt;
     const { data, error } = await this.sb.from("events").update(row).eq("id", id).select("*").single();
     if (error) throw error;
     return eventFrom(data as EventRow);
@@ -180,11 +277,14 @@ export class SupabaseStore implements Store {
     if (floorIds.length) {
       const { data, error } = await this.sb.from("objects").select("*").in("floor_id", floorIds);
       if (error) throw error;
-      objects = (data as ObjectRow[]).map(objectFrom);
+      objects = (data as ObjectRow[]).map((r) => normalizeObject(objectFrom(r)));
     }
     const sponsors = await this.listSponsors(event.id);
+    const sessions = await this.listSessions(event.id);
+    const speakers = await this.listSpeakers(event.id);
+    const assets = await this.listAssets(event.id);
     const publication = await this.getPublicationBySlug(slug);
-    return { event, floors, objects, sponsors, publication };
+    return { event, floors, objects, sponsors, sessions, speakers, assets, publication };
   }
 
   async getFloor(id: string) {
@@ -247,13 +347,18 @@ export class SupabaseStore implements Store {
         sponsor_id: obj.sponsorId,
         amenity_type: obj.amenityType,
         color: obj.color,
+        appearance: obj.appearance,
+        facing_deg: obj.facingDeg ?? 0,
+        model_asset_id: obj.modelAssetId,
+        rug_texture_asset_id: obj.rugTextureAssetId,
+        wall_texture_asset_id: obj.wallTextureAssetId,
         created_at: obj.createdAt,
         updated_at: nowIso(),
       })
       .select("*")
       .single();
     if (error) throw error;
-    return objectFrom(data as ObjectRow);
+    return normalizeObject(objectFrom(data as ObjectRow));
   }
 
   async deleteObject(id: string) {
@@ -263,7 +368,10 @@ export class SupabaseStore implements Store {
 
   async replaceSponsors(eventId: string, sponsors: Omit<Sponsor, "id" | "eventId">[]) {
     await this.sb.from("sponsors").delete().eq("event_id", eventId);
-    if (!sponsors.length) return [];
+    if (!sponsors.length) {
+      await this.updateEvent(eventId, { sponsorsSyncedAt: nowIso() });
+      return [];
+    }
     const { data, error } = await this.sb
       .from("sponsors")
       .insert(
@@ -279,6 +387,7 @@ export class SupabaseStore implements Store {
       )
       .select("*");
     if (error) throw error;
+    await this.updateEvent(eventId, { sponsorsSyncedAt: nowIso() });
     return (data as SponsorRow[]).map(sponsorFrom);
   }
 
@@ -286,6 +395,93 @@ export class SupabaseStore implements Store {
     const { data, error } = await this.sb.from("sponsors").select("*").eq("event_id", eventId).order("name");
     if (error) throw error;
     return (data as SponsorRow[]).map(sponsorFrom);
+  }
+
+  async replaceSessions(eventId: string, sessions: Omit<AgendaSession, "id" | "eventId">[]) {
+    await this.sb.from("sessions").delete().eq("event_id", eventId);
+    if (!sessions.length) {
+      await this.updateEvent(eventId, { agendaSyncedAt: nowIso() });
+      return [];
+    }
+    const { data, error } = await this.sb
+      .from("sessions")
+      .insert(
+        sessions.map((s) => ({
+          event_id: eventId,
+          airtable_id: s.airtableId,
+          title: s.title,
+          stage: s.stage,
+          start_unix: s.startUnix,
+          end_unix: s.endUnix,
+          speaker_ids: s.speakerIds,
+          session_type: s.sessionType,
+        })),
+      )
+      .select("*");
+    if (error) throw error;
+    await this.updateEvent(eventId, { agendaSyncedAt: nowIso() });
+    return (data as SessionRow[]).map(sessionFrom);
+  }
+
+  async listSessions(eventId: string) {
+    const { data, error } = await this.sb.from("sessions").select("*").eq("event_id", eventId).order("start_unix");
+    if (error) throw error;
+    return (data as SessionRow[]).map(sessionFrom);
+  }
+
+  async replaceSpeakers(eventId: string, speakers: Omit<AgendaSpeaker, "id" | "eventId">[]) {
+    await this.sb.from("speakers").delete().eq("event_id", eventId);
+    if (!speakers.length) {
+      await this.updateEvent(eventId, { speakersSyncedAt: nowIso() });
+      return [];
+    }
+    const { data, error } = await this.sb
+      .from("speakers")
+      .insert(
+        speakers.map((s) => ({
+          event_id: eventId,
+          airtable_id: s.airtableId,
+          name: s.name,
+          photo_url: s.photoUrl,
+        })),
+      )
+      .select("*");
+    if (error) throw error;
+    await this.updateEvent(eventId, { speakersSyncedAt: nowIso() });
+    return (data as SpeakerRow[]).map(speakerFrom);
+  }
+
+  async listSpeakers(eventId: string) {
+    const { data, error } = await this.sb.from("speakers").select("*").eq("event_id", eventId).order("name");
+    if (error) throw error;
+    return (data as SpeakerRow[]).map(speakerFrom);
+  }
+
+  async listAssets(eventId: string) {
+    const { data, error } = await this.sb.from("library_assets").select("*").eq("event_id", eventId).order("created_at");
+    if (error) throw error;
+    return (data as AssetRow[]).map(assetFrom);
+  }
+
+  async createAsset(input: NewLibraryAsset) {
+    const { data, error } = await this.sb
+      .from("library_assets")
+      .insert({
+        event_id: input.eventId,
+        kind: input.kind,
+        name: input.name,
+        url: input.url,
+        content_type: input.contentType,
+      })
+      .select("*")
+      .single();
+    if (error) throw error;
+    return assetFrom(data as AssetRow);
+  }
+
+  async deleteAsset(id: string) {
+    const { error } = await this.sb.from("library_assets").delete().eq("id", id);
+    if (error) throw error;
   }
 
   async publish(eventId: string, publishedBy: string) {
@@ -298,11 +494,23 @@ export class SupabaseStore implements Store {
     if (floorIds.length) {
       const { data, error } = await this.sb.from("objects").select("*").in("floor_id", floorIds);
       if (error) throw error;
-      objects = (data as ObjectRow[]).map(objectFrom);
+      objects = (data as ObjectRow[]).map((r) => normalizeObject(objectFrom(r)));
     }
     const sponsors = await this.listSponsors(eventId);
+    const sessions = await this.listSessions(eventId);
+    const speakers = await this.listSpeakers(eventId);
+    const assets = await this.listAssets(eventId);
     const publishedAt = nowIso();
-    const snapshot = buildMapDocument({ event, floors, objects, sponsors, publishedAt });
+    const snapshot = buildMapDocument({
+      event,
+      floors,
+      objects,
+      sponsors,
+      sessions,
+      speakers,
+      assets,
+      publishedAt,
+    });
     await this.sb.from("publications").delete().eq("event_id", eventId);
     const { data, error } = await this.sb
       .from("publications")
@@ -384,7 +592,7 @@ export class SupabaseStore implements Store {
     if (floorIds.length) {
       const { data, error } = await this.sb.from("objects").select("*").in("floor_id", floorIds);
       if (error) throw error;
-      objects.push(...(data as ObjectRow[]).map(objectFrom));
+      objects.push(...(data as ObjectRow[]).map((r) => normalizeObject(objectFrom(r))));
     }
     return { floors, objects };
   }
@@ -412,7 +620,7 @@ export class SupabaseStore implements Store {
     if (floorIds.length) {
       const { data, error } = await this.sb.from("objects").select("*").in("floor_id", floorIds);
       if (error) throw error;
-      objects = (data as ObjectRow[]).map(objectFrom);
+      objects = (data as ObjectRow[]).map((r) => normalizeObject(objectFrom(r)));
     }
     const snapshot = { floors, objects };
     const { data: latest, error: latestErr } = await this.sb

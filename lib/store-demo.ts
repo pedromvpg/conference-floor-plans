@@ -2,10 +2,13 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type {
+  AgendaSession,
+  AgendaSpeaker,
   DraftBundle,
   DraftSlice,
   DraftVersion,
   Floor,
+  LibraryAsset,
   MapEvent,
   MapObject,
   Publication,
@@ -13,7 +16,8 @@ import type {
 } from "./types";
 import { MAX_DRAFT_VERSIONS, sliceKey } from "./draft-versions";
 import { buildMapDocument } from "./map-document";
-import { newId, nowIso, type NewEventInput, type Store } from "./store";
+import { hallDefaults, normalizeObject } from "./appearance";
+import { newId, nowIso, type NewEventInput, type NewLibraryAsset, type Store } from "./store";
 import zones from "../seed/bhk26-zones.json";
 
 type Db = {
@@ -21,6 +25,9 @@ type Db = {
   floors: Floor[];
   objects: MapObject[];
   sponsors: Sponsor[];
+  sessions?: AgendaSession[];
+  speakers?: AgendaSpeaker[];
+  assets?: LibraryAsset[];
   publications: Publication[];
   draftVersions?: DraftVersion[];
   editors: string[];
@@ -85,6 +92,9 @@ async function emptyDb(): Promise<Db> {
     floors: [],
     objects: [],
     sponsors: [],
+    sessions: [],
+    speakers: [],
+    assets: [],
     publications: [],
     draftVersions: [],
     editors: ["demo@local"],
@@ -102,6 +112,9 @@ async function loadDbUnlocked(): Promise<Db> {
   const raw = await readFile(DB_PATH, "utf8");
   const db = parseDbJson(raw);
   db.draftVersions ??= [];
+  db.sessions ??= [];
+  db.speakers ??= [];
+  db.assets ??= [];
   try {
     JSON.parse(raw);
   } catch {
@@ -125,6 +138,17 @@ function useDb<T>(write: boolean, fn: (db: Db) => Promise<T> | T): Promise<T> {
   });
 }
 
+function normalizeEvent(e: MapEvent): MapEvent {
+  return {
+    ...e,
+    airtableAgendaTable: e.airtableAgendaTable ?? "",
+    airtableSpeakersTable: e.airtableSpeakersTable ?? "",
+    sponsorsSyncedAt: e.sponsorsSyncedAt ?? null,
+    agendaSyncedAt: e.agendaSyncedAt ?? null,
+    speakersSyncedAt: e.speakersSyncedAt ?? null,
+  };
+}
+
 function applyDraftSlice(db: Db, eventId: string, slice: DraftSlice) {
   const keepFloorIds = new Set(slice.floors.map((f) => f.id));
   db.floors = db.floors.filter((f) => f.eventId !== eventId || keepFloorIds.has(f.id));
@@ -136,7 +160,7 @@ function applyDraftSlice(db: Db, eventId: string, slice: DraftSlice) {
   }
   const eventFloorIds = new Set(db.floors.filter((f) => f.eventId === eventId).map((f) => f.id));
   db.objects = db.objects.filter((o) => !eventFloorIds.has(o.floorId));
-  db.objects.push(...slice.objects.map((o) => ({ ...o, updatedAt: nowIso() })));
+  db.objects.push(...slice.objects.map((o) => normalizeObject({ ...o, updatedAt: nowIso() })));
   return {
     floors: db.floors.filter((f) => f.eventId === eventId).sort((a, b) => a.sortOrder - b.sortOrder),
     objects: db.objects.filter((o) => eventFloorIds.has(o.floorId)),
@@ -153,6 +177,11 @@ async function seedBhk26(db: Db): Promise<Db> {
     airtableTable: "",
     airtableToken: "",
     airtableEventCode: "BHK26",
+    airtableAgendaTable: "",
+    airtableSpeakersTable: "",
+    sponsorsSyncedAt: null,
+    agendaSyncedAt: null,
+    speakersSyncedAt: null,
     createdAt: t,
     updatedAt: t,
   };
@@ -188,6 +217,7 @@ async function seedBhk26(db: Db): Promise<Db> {
       sponsorId: null,
       amenityType: null,
       color: null,
+      ...hallDefaults(),
       createdAt: t,
       updatedAt: t,
     })),
@@ -204,6 +234,7 @@ async function seedBhk26(db: Db): Promise<Db> {
       sponsorId: null,
       amenityType: a.amenityType as MapObject["amenityType"],
       color: null,
+      ...hallDefaults(),
       createdAt: t,
       updatedAt: t,
     })),
@@ -230,11 +261,14 @@ async function seedBhk26(db: Db): Promise<Db> {
 
 export class DemoStore implements Store {
   async listEvents() {
-    return useDb(false, (db) => db.events);
+    return useDb(false, (db) => db.events.map(normalizeEvent));
   }
 
   async getEventBySlug(slug: string) {
-    return useDb(false, (db) => db.events.find((e) => e.slug === slug) ?? null);
+    return useDb(false, (db) => {
+      const event = db.events.find((e) => e.slug === slug);
+      return event ? normalizeEvent(event) : null;
+    });
   }
 
   async createEvent(input: NewEventInput) {
@@ -251,6 +285,11 @@ export class DemoStore implements Store {
         airtableTable: input.airtableTable ?? "",
         airtableToken: input.airtableToken ?? "",
         airtableEventCode: input.airtableEventCode ?? "",
+        airtableAgendaTable: input.airtableAgendaTable ?? "",
+        airtableSpeakersTable: input.airtableSpeakersTable ?? "",
+        sponsorsSyncedAt: null,
+        agendaSyncedAt: null,
+        speakersSyncedAt: null,
         createdAt: t,
         updatedAt: t,
       };
@@ -278,10 +317,13 @@ export class DemoStore implements Store {
       const floors = db.floors.filter((f) => f.eventId === event.id);
       const floorIds = new Set(floors.map((f) => f.id));
       return {
-        event,
+        event: normalizeEvent(event),
         floors,
-        objects: db.objects.filter((o) => floorIds.has(o.floorId)),
+        objects: db.objects.filter((o) => floorIds.has(o.floorId)).map(normalizeObject),
         sponsors: db.sponsors.filter((s) => s.eventId === event.id),
+        sessions: (db.sessions ?? []).filter((s) => s.eventId === event.id),
+        speakers: (db.speakers ?? []).filter((s) => s.eventId === event.id),
+        assets: (db.assets ?? []).filter((a) => a.eventId === event.id),
         publication: db.publications.filter((p) => p.eventId === event.id).at(-1) ?? null,
       };
     });
@@ -336,7 +378,7 @@ export class DemoStore implements Store {
   async upsertObject(obj: MapObject) {
     return useDb(true, (db) => {
       const i = db.objects.findIndex((o) => o.id === obj.id);
-      const next = { ...obj, updatedAt: nowIso() };
+      const next = normalizeObject({ ...obj, updatedAt: nowIso() });
       if (i >= 0) db.objects[i] = next;
       else db.objects.push(next);
       return next;
@@ -358,6 +400,8 @@ export class DemoStore implements Store {
         eventId,
       }));
       db.sponsors.push(...rows);
+      const event = db.events.find((e) => e.id === eventId);
+      if (event) event.sponsorsSyncedAt = nowIso();
       return rows;
     });
   }
@@ -366,16 +410,91 @@ export class DemoStore implements Store {
     return useDb(false, (db) => db.sponsors.filter((s) => s.eventId === eventId));
   }
 
+  async replaceSessions(eventId: string, sessions: Omit<AgendaSession, "id" | "eventId">[]) {
+    return useDb(true, (db) => {
+      db.sessions = (db.sessions ?? []).filter((s) => s.eventId !== eventId);
+      const rows: AgendaSession[] = sessions.map((s) => ({ ...s, id: newId(), eventId }));
+      db.sessions.push(...rows);
+      const event = db.events.find((e) => e.id === eventId);
+      if (event) event.agendaSyncedAt = nowIso();
+      return rows;
+    });
+  }
+
+  async listSessions(eventId: string) {
+    return useDb(false, (db) => (db.sessions ?? []).filter((s) => s.eventId === eventId));
+  }
+
+  async replaceSpeakers(eventId: string, speakers: Omit<AgendaSpeaker, "id" | "eventId">[]) {
+    return useDb(true, (db) => {
+      db.speakers = (db.speakers ?? []).filter((s) => s.eventId !== eventId);
+      const rows: AgendaSpeaker[] = speakers.map((s) => ({ ...s, id: newId(), eventId }));
+      db.speakers.push(...rows);
+      const event = db.events.find((e) => e.id === eventId);
+      if (event) event.speakersSyncedAt = nowIso();
+      return rows;
+    });
+  }
+
+  async listSpeakers(eventId: string) {
+    return useDb(false, (db) => (db.speakers ?? []).filter((s) => s.eventId === eventId));
+  }
+
+  async listAssets(eventId: string) {
+    return useDb(false, (db) => (db.assets ?? []).filter((a) => a.eventId === eventId));
+  }
+
+  async createAsset(input: NewLibraryAsset) {
+    return useDb(true, (db) => {
+      const row: LibraryAsset = {
+        id: newId(),
+        eventId: input.eventId,
+        kind: input.kind,
+        name: input.name,
+        url: input.url,
+        contentType: input.contentType,
+        createdAt: nowIso(),
+      };
+      db.assets = db.assets ?? [];
+      db.assets.push(row);
+      return row;
+    });
+  }
+
+  async deleteAsset(id: string) {
+    await useDb(true, (db) => {
+      db.assets = (db.assets ?? []).filter((a) => a.id !== id);
+      db.objects = db.objects.map((o) => ({
+        ...o,
+        modelAssetId: o.modelAssetId === id ? null : o.modelAssetId,
+        rugTextureAssetId: o.rugTextureAssetId === id ? null : o.rugTextureAssetId,
+        wallTextureAssetId: o.wallTextureAssetId === id ? null : o.wallTextureAssetId,
+      }));
+    });
+  }
+
   async publish(eventId: string, publishedBy: string) {
     return useDb(true, (db) => {
       const event = db.events.find((e) => e.id === eventId);
       if (!event) throw new Error("Event not found");
       const floors = db.floors.filter((f) => f.eventId === eventId);
       const floorIds = new Set(floors.map((f) => f.id));
-      const objects = db.objects.filter((o) => floorIds.has(o.floorId));
+      const objects = db.objects.filter((o) => floorIds.has(o.floorId)).map(normalizeObject);
       const sponsors = db.sponsors.filter((s) => s.eventId === eventId);
+      const sessions = (db.sessions ?? []).filter((s) => s.eventId === eventId);
+      const speakers = (db.speakers ?? []).filter((s) => s.eventId === eventId);
+      const assets = (db.assets ?? []).filter((a) => a.eventId === eventId);
       const publishedAt = nowIso();
-      const snapshot = buildMapDocument({ event, floors, objects, sponsors, publishedAt });
+      const snapshot = buildMapDocument({
+        event,
+        floors,
+        objects,
+        sponsors,
+        sessions,
+        speakers,
+        assets,
+        publishedAt,
+      });
       const pub: Publication = {
         id: newId(),
         eventId,

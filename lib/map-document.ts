@@ -1,20 +1,28 @@
 import type {
+  AgendaSession,
+  AgendaSpeaker,
   Floor,
+  LibraryAsset,
   MapDocument,
   MapEvent,
   MapObject,
   Sponsor,
 } from "./types";
 import { closeRing } from "./geometry";
+import { resolveAppearance } from "./appearance";
 
 export function buildMapDocument(input: {
   event: MapEvent;
   floors: Floor[];
   objects: MapObject[];
   sponsors: Sponsor[];
+  sessions?: AgendaSession[];
+  speakers?: AgendaSpeaker[];
+  assets?: LibraryAsset[];
   publishedAt: string;
 }): MapDocument {
   const sponsorById = new Map(input.sponsors.map((s) => [s.id, s]));
+  const assetById = new Map((input.assets ?? []).map((a) => [a.id, a]));
   const floors = [...input.floors].sort((a, b) => a.sortOrder - b.sortOrder);
 
   return {
@@ -25,7 +33,7 @@ export function buildMapDocument(input: {
       const cal = floor.calibration;
       const features: GeoJSON.Feature[] = input.objects
         .filter((o) => o.floorId === floor.id)
-        .map((o) => objectToFeature(o, sponsorById));
+        .map((o) => objectToFeature(o, sponsorById, assetById));
       return {
         id: floor.id,
         name: floor.name,
@@ -51,14 +59,32 @@ export function buildMapDocument(input: {
       logoUrl: s.logoUrl,
       logoWhiteUrl: s.logoWhiteUrl,
     })),
+    sessions: (input.sessions ?? []).map((s) => ({
+      airtableId: s.airtableId,
+      title: s.title,
+      stage: s.stage,
+      startUnix: s.startUnix,
+      endUnix: s.endUnix,
+      speakerIds: s.speakerIds,
+      sessionType: s.sessionType,
+    })),
+    speakers: (input.speakers ?? []).map((s) => ({
+      airtableId: s.airtableId,
+      name: s.name,
+      photoUrl: s.photoUrl,
+    })),
   };
 }
 
 function objectToFeature(
   o: MapObject,
   sponsorById: Map<string, Sponsor>,
+  assetById: Map<string, LibraryAsset>,
 ): GeoJSON.Feature {
   const sponsor = o.sponsorId ? sponsorById.get(o.sponsorId) : undefined;
+  const model = o.modelAssetId ? assetById.get(o.modelAssetId) : undefined;
+  const rug = o.rugTextureAssetId ? assetById.get(o.rugTextureAssetId) : undefined;
+  const wall = o.wallTextureAssetId ? assetById.get(o.wallTextureAssetId) : undefined;
   const properties: Record<string, unknown> = {
     kind: o.kind,
     boothNumber: o.boothNumber || sponsor?.boothNumber || "",
@@ -69,6 +95,11 @@ function objectToFeature(
     amenityType: o.amenityType,
     color: o.color,
     rotation: o.rotation,
+    appearance: resolveAppearance(o),
+    facingDeg: o.facingDeg ?? 0,
+    modelUrl: model?.url ?? "",
+    rugTextureUrl: rug?.url ?? "",
+    wallTextureUrl: wall?.url ?? "",
   };
 
   if (o.kind === "amenity" && o.x != null && o.y != null) {
