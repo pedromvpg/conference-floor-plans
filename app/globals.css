@@ -85,8 +85,13 @@
   --map-bg: #f4f4f1;
   --map-grid: #d4d4ce;
   --map-void: #e4e4de;
-  --map-stroke: #c4c4bc;
+  --map-stroke: #b8b8b0;
   --map-icon-ring: #ffffff;
+  --map-label: #161616;
+  --map-label-muted: #6a6a64;
+  --map-venue-stroke: #a8a8a0;
+  --map-geom-l: 68%;
+  --map-geom-a: 0.48;
 }
 
 .dark {
@@ -126,8 +131,13 @@
   --map-bg: #000000;
   --map-grid: #333333;
   --map-void: #111111;
-  --map-stroke: #333333;
+  --map-stroke: #3a3a3a;
   --map-icon-ring: #111111;
+  --map-label: #f4f4f1;
+  --map-label-muted: #888888;
+  --map-venue-stroke: #555555;
+  --map-geom-l: 38%;
+  --map-geom-a: 0.38;
 }
 
 @layer base {
@@ -202,6 +212,10 @@
   }
 }
 
-.map-frame-pulse {
-  animation: map-frame-pulse 0.45s ease-in-out 2;
+.map-underlay {
+  filter: none;
+}
+
+.dark .map-underlay {
+  filter: invert(1) hue-rotate(180deg);
 }
