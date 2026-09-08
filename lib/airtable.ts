@@ -40,16 +40,9 @@ export function resolveColorLogoSource(fields: Record<string, unknown>): { field
   ]);
 }
 
-export function resolveWhiteLogoSource(fields: Record<string, unknown>): { field: string | null; url: string } {
-  return first([
-    ["Logo White URL", httpUrl(fields["Logo White URL"])],
-    ["Logo White", firstImageAttachment(fields["Logo White"])],
-  ]);
-}
-
 export type AirtableRecord = { id: string; fields: Record<string, unknown> };
 
-export async function fetchAirtableSponsors(input: {
+export async function fetchAirtableTable(input: {
   token: string;
   baseId: string;
   table: string;
@@ -74,6 +67,11 @@ export async function fetchAirtableSponsors(input: {
   return all;
 }
 
+export const fetchAirtableSponsors = fetchAirtableTable;
+
+/** Airtable table name — same as conference-screens; no tbl id required. */
+export const AIRTABLE_SPONSORS_TABLE = "Sponsors";
+
 export function mapAirtableSponsor(
   rec: AirtableRecord,
   eventCode: string,
@@ -83,7 +81,6 @@ export function mapAirtableSponsor(
   tier: string;
   boothNumber: string;
   colorLogoUrl: string;
-  whiteLogoUrl: string;
 } {
   const f = rec.fields;
   const name = String(f.Name ?? f.name ?? "Untitled sponsor");
@@ -103,6 +100,100 @@ export function mapAirtableSponsor(
     tier,
     boothNumber: booth != null ? String(booth) : "",
     colorLogoUrl: resolveColorLogoSource(f).url,
-    whiteLogoUrl: resolveWhiteLogoSource(f).url,
+  };
+}
+
+function firstString(fields: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const v = fields[key];
+    if (v == null || v === "") continue;
+    if (Array.isArray(v)) {
+      const first = v[0];
+      if (first == null) continue;
+      if (typeof first === "string") return first;
+      if (typeof first === "object" && first && "url" in first) return String((first as { url?: string }).url ?? "");
+      return String(first);
+    }
+    return String(v);
+  }
+  return "";
+}
+
+function linkedIds(fields: Record<string, unknown>, keys: string[]): string[] {
+  for (const key of keys) {
+    const v = fields[key];
+    if (Array.isArray(v) && v.length && v.every((x) => typeof x === "string")) {
+      return v as string[];
+    }
+  }
+  return [];
+}
+
+function asUnix(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 1e12 ? value / 1000 : value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n > 1e12 ? n / 1000 : n;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed / 1000;
+  }
+  return null;
+}
+
+const TEST_EVENT_RE = /test/i;
+const AUTOMATION_RE = /automat/i;
+
+export function mapAirtableSession(rec: AirtableRecord): {
+  airtableId: string;
+  title: string;
+  stage: string;
+  startUnix: number | null;
+  endUnix: number | null;
+  speakerIds: string[];
+  sessionType: string;
+} | null {
+  const f = rec.fields;
+  const title = firstString(f, ["Title", "Session Name", "Name"]);
+  if (TEST_EVENT_RE.test(title) && AUTOMATION_RE.test(title)) return null;
+  const startUnix =
+    asUnix(f["Unix Time"] ?? f.unix_time) ??
+    asUnix(f["⚙️ Start Time"] ?? f["Start Time (Time Only)"]);
+  const endUnix =
+    asUnix(f["End Time (ISO8601)"]) ??
+    asUnix(f["⚙️ End Time"] ?? f["End Time (Time Only)"]);
+  return {
+    airtableId: rec.id,
+    title,
+    stage: firstString(f, ["Stage - Website Text", "Stage", "⚙️ Stage", "stage", "Track"]),
+    startUnix,
+    endUnix,
+    speakerIds: linkedIds(f, ["⚙️ Speakers", "Speakers"]),
+    sessionType: firstString(f, ["Type of Session", "Session Type", "Type"]),
+  };
+}
+
+export function resolveHeadshotSource(fields: Record<string, unknown>): string {
+  return (
+    firstImageAttachment(fields.Headshot) ||
+    firstImageAttachment(fields.Photo) ||
+    httpUrl(fields["Headshot image URL"]) ||
+    httpUrl(fields["Headshot image (from Website)"]) ||
+    httpUrl(fields["Headshot - Full Res URL"]) ||
+    httpUrl(fields["Headshot - Stylized - image URL"])
+  );
+}
+
+export function mapAirtableSpeaker(rec: AirtableRecord): {
+  airtableId: string;
+  name: string;
+  photoSourceUrl: string;
+} {
+  const f = rec.fields;
+  return {
+    airtableId: rec.id,
+    name: firstString(f, ["Full Name", "Name"]) || "Untitled speaker",
+    photoSourceUrl: resolveHeadshotSource(f),
   };
 }

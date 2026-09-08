@@ -1,6 +1,7 @@
 import { getStore } from "@/lib/get-store";
 import { requireEditor } from "@/lib/auth";
 import { fetchAirtableSponsors, mapAirtableSponsor } from "@/lib/airtable";
+import { resolveAirtable } from "@/lib/airtable-conf";
 import { cacheLogo } from "@/lib/logos";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -12,18 +13,22 @@ export async function POST(_req: Request, ctx: Ctx) {
     const store = getStore();
     const event = await store.getEventBySlug(slug);
     if (!event) return Response.json({ error: "Not found" }, { status: 404 });
-    if (!event.airtableToken || !event.airtableBaseId || !event.airtableTable) {
-      return Response.json({ error: "Airtable is not configured for this event" }, { status: 400 });
+    const airtable = resolveAirtable(event);
+    if (!airtable.sponsorsToken || !airtable.sponsorsBaseId || !airtable.sponsorsTable) {
+      return Response.json(
+        { error: "Airtable CONF_* is missing. Add CONF_BITCOINASIA2026 to .env.local / Vercel." },
+        { status: 400 },
+      );
     }
     const records = await fetchAirtableSponsors({
-      token: event.airtableToken,
-      baseId: event.airtableBaseId,
-      table: event.airtableTable,
+      token: airtable.sponsorsToken,
+      baseId: airtable.sponsorsBaseId,
+      table: airtable.sponsorsTable,
     });
     const mapped = records
-      .map((r) => mapAirtableSponsor(r, event.airtableEventCode))
+      .map((r) => mapAirtableSponsor(r, airtable.eventCode))
       .filter((s) => {
-        if (!event.airtableEventCode) return true;
+        if (!airtable.eventCode) return true;
         return Boolean(s.tier);
       });
     const withLogos = [];
@@ -37,22 +42,13 @@ export async function POST(_req: Request, ctx: Ctx) {
             sourceUrl: s.colorLogoUrl,
           })
         : "";
-      const logoWhiteUrl = s.whiteLogoUrl
-        ? await cacheLogo({
-            store,
-            eventId: event.id,
-            airtableId: s.airtableId,
-            kind: "white",
-            sourceUrl: s.whiteLogoUrl,
-          })
-        : "";
       withLogos.push({
         airtableId: s.airtableId,
         name: s.name,
         tier: s.tier,
         boothNumber: s.boothNumber,
         logoUrl: logoUrl || s.colorLogoUrl,
-        logoWhiteUrl: logoWhiteUrl || s.whiteLogoUrl,
+        logoWhiteUrl: "",
       });
     }
     const sponsors = await store.replaceSponsors(event.id, withLogos);
