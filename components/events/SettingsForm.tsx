@@ -17,27 +17,24 @@ import type { MapEvent } from "@/lib/types";
 import { useUnits } from "@/lib/use-units";
 import { UnitsToggle } from "@/components/units-toggle";
 
-export function SettingsForm({ event }: { event: MapEvent }) {
+export function SettingsForm({
+  event,
+  envStatus,
+}: {
+  event: MapEvent;
+  envStatus: { keys: string[]; loadedKey: string | null };
+}) {
   const [name, setName] = useState(event.name);
-  const [baseId, setBaseId] = useState(event.airtableBaseId);
-  const [table, setTable] = useState(event.airtableTable);
-  const [token, setToken] = useState("");
-  const [code, setCode] = useState(event.airtableEventCode);
   const [invite, setInvite] = useState("");
   const [units, setUnits] = useUnits();
+  const envLoaded = Boolean(envStatus.loadedKey);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
     const res = await fetch(`/api/events/${event.slug}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name,
-        airtableBaseId: baseId,
-        airtableTable: table,
-        airtableEventCode: code,
-        ...(token ? { airtableToken: token } : {}),
-      }),
+      body: JSON.stringify({ name }),
     });
     if (!res.ok) {
       toast.error("Could not save");
@@ -66,12 +63,23 @@ export function SettingsForm({ event }: { event: MapEvent }) {
         <Card>
           <CardHeader className="border-b">
             <p className="chrome-kicker">Event</p>
-            <CardTitle className="mt-1">Details & Airtable</CardTitle>
+            <CardTitle className="mt-1">Details</CardTitle>
             <CardDescription>
-              Name the map and connect the sponsors table used for sync.
+              Airtable lives in <code className="font-mono text-[11px]">CONF_BITCOINASIA2026</code> (same JSON as
+              conference-screens). Never stored on the event.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 pt-4 sm:grid-cols-2">
+            <div className="sm:col-span-2 border border-border bg-muted/30 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+              {envLoaded ? (
+                <>Loaded {envStatus.loadedKey} from .env / Vercel.</>
+              ) : (
+                <>
+                  Missing {envStatus.keys.join(" or ")}. Add the screens JSON to .env.local (and Vercel). Restart
+                  next after changing env.
+                </>
+              )}
+            </div>
             <div className="sm:col-span-2">
               <Label htmlFor="event-name">Name</Label>
               <Input
@@ -79,47 +87,6 @@ export function SettingsForm({ event }: { event: MapEvent }) {
                 className="mt-1"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="airtable-base">Airtable base ID</Label>
-              <Input
-                id="airtable-base"
-                className="mt-1 font-mono"
-                value={baseId}
-                onChange={(e) => setBaseId(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="airtable-table">Sponsors table</Label>
-              <Input
-                id="airtable-table"
-                className="mt-1 font-mono"
-                value={table}
-                onChange={(e) => setTable(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="airtable-code">Event-code column</Label>
-              <Input
-                id="airtable-code"
-                className="mt-1 font-mono"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder="BHK26"
-              />
-              <p className="mt-1 text-[11px] text-muted-foreground">Optional filter on the sponsors table.</p>
-            </div>
-            <div>
-              <Label htmlFor="airtable-token">Airtable token</Label>
-              <Input
-                id="airtable-token"
-                className="mt-1 font-mono"
-                type="password"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder={event.airtableToken ? "•••• leave blank to keep" : "pat…"}
-                autoComplete="off"
               />
             </div>
           </CardContent>

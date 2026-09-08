@@ -25,10 +25,6 @@ export async function POST(req: Request) {
     const body = (await req.json()) as {
       name?: string;
       slug?: string;
-      airtableBaseId?: string;
-      airtableTable?: string;
-      airtableToken?: string;
-      airtableEventCode?: string;
     };
     const name = body.name?.trim();
     if (!name) return Response.json({ error: "Name required" }, { status: 400 });
@@ -36,10 +32,6 @@ export async function POST(req: Request) {
     const event = await getStore().createEvent({
       name,
       slug,
-      airtableBaseId: body.airtableBaseId,
-      airtableTable: body.airtableTable,
-      airtableToken: body.airtableToken,
-      airtableEventCode: body.airtableEventCode,
     });
     return Response.json(event);
   } catch (err) {
