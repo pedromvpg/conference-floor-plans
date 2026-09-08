@@ -12,6 +12,8 @@ const TYPES: Record<string, string> = {
   svg: "image/svg+xml",
   json: "application/json",
   pdf: "application/pdf",
+  glb: "model/gltf-binary",
+  gltf: "model/gltf+json",
 };
 
 export async function GET(_req: Request, ctx: Ctx) {
