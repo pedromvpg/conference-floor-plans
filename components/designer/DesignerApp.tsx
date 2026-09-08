@@ -1,9 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import { ChevronDown, LayoutGrid, MapPin, Maximize2, Pentagon, Plus, Redo2, Settings, Square, Theater, Undo2 } from "lucide-react";
+import { Box, ChevronDown, LayoutGrid, MapPin, Maximize2, Pentagon, Plus, Redo2, Settings, Square, Theater, Undo2 } from "lucide-react";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
+import { ViewModeToggle } from "@/components/map/ViewModeToggle";
+import { UnitsToggle } from "@/components/units-toggle";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -30,11 +33,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AMENITIES, amenityLabel } from "@/lib/amenities";
-import { calibrationFromBounds, floorSizeMeters, ringBounds, rotateRing, scaleRingToSize } from "@/lib/geometry";
+import { STAGE_PRESET_METERS, resolveAppearance } from "@/lib/appearance";
+import { calibrationFromBounds, floorSizeMeters, ringBounds, scaleRingToSize } from "@/lib/geometry";
+import { rotatePlot } from "@/lib/hall";
 import { PRESETS, presetMeters as presetSize, formatSize, fromMeters, toMeters } from "@/lib/units";
 import { useUnits } from "@/lib/use-units";
 import type {
   AmenityType,
+  Appearance,
   Calibration,
   DraftBundle,
   DraftSlice,
@@ -44,6 +50,7 @@ import type {
   Sponsor,
   Tool,
   Units,
+  ViewMode,
 } from "@/lib/types";
 import { VENUE_ID } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -53,6 +60,15 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { toast } from "sonner";
+
+const HallCanvas = dynamic(() => import("@/components/hall/HallCanvas"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center bg-[#12110f] font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+      Loading hall…
+    </div>
+  ),
+});
 
 type ObjectFilter = "all" | "booths" | "stages" | "icons";
 type ObjectSort = "name" | "size" | "modified";
@@ -138,7 +154,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [bundle, setBundle] = useState(initial);
   const [floorId, setFloorId] = useState(initial.floors[0]?.id ?? "");
   const [tool, setTool] = useState<Tool>("select");
-  const [units] = useUnits();
+  const [viewMode, setViewMode] = useState<ViewMode>("plan");
+  const [stampAppearance, setStampAppearance] = useState<Appearance | null>(null);
+  const [stampModelId, setStampModelId] = useState<string | null>(null);
+  const [units, setUnits] = useUnits();
   const [presetId, setPresetId] = useState<string>("none");
   const [amenityStamp, setAmenityStamp] = useState<AmenityType>("bathroom");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -176,7 +195,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const objects = bundle.objects.filter((o) => o.floorId === floor?.id);
   const selected = objects.find((o) => o.id === selectedId) ?? null;
   const venueSelected = selectedId === VENUE_ID;
-  const preset = presetId ? presetSize(presetId) : null;
+  const preset =
+    presetId === "stage" ? STAGE_PRESET_METERS : presetId ? presetSize(presetId) : null;
   const listedObjects = useMemo(() => {
     const matches = objects.filter((o) => {
       if (objectFilter === "booths") return isBooth(o);
@@ -198,6 +218,19 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   }, [objects, objectFilter, objectSort, objectSortDir, bundle.sponsors]);
 
   const slug = bundle.event.slug;
+
+  useEffect(() => {
+    if (viewMode !== "hall") return;
+    void fetch(`/api/events/${slug}`).then(async (res) => {
+      if (!res.ok) return;
+      const data = (await res.json()) as DraftBundle;
+      setBundle((b) => ({
+        ...b,
+        assets: data.assets ?? b.assets,
+        sponsors: data.sponsors ?? b.sponsors,
+      }));
+    });
+  }, [viewMode, slug]);
 
   const cal = floor?.calibration;
   const calKey = cal
@@ -225,9 +258,16 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       return;
     }
     const b = ringBounds(selected.polygon);
-    setBoothWidth(fmtDim(b.w, units));
-    setBoothHeight(fmtDim(b.h, units));
-  }, [selected?.id, selected?.polygon, units]);
+    const nextW = fmtDim(b.w, units);
+    const nextH = fmtDim(b.h, units);
+    setBoothWidth((w) => (w === nextW ? w : nextW));
+    setBoothHeight((h) => (h === nextH ? h : nextH));
+  }, [
+    selected?.id,
+    selected?.polygon ? Math.round(ringBounds(selected.polygon).w * 1000) : 0,
+    selected?.polygon ? Math.round(ringBounds(selected.polygon).h * 1000) : 0,
+    units,
+  ]);
 
   function cloneSlice(b = bundleRef.current): DraftSlice {
     return {
@@ -413,6 +453,33 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     void patchObject({ ...selected, polygon });
   }
 
+  function matchingBoothPresetId(w: number, h: number): string {
+    const near = (a: number, b: number) => Math.abs(a - b) < 0.02;
+    for (const p of PRESETS) {
+      const m = presetSize(p.id);
+      if (!m) continue;
+      if ((near(w, m.w) && near(h, m.d)) || (near(w, m.d) && near(h, m.w))) return p.id;
+    }
+    if (
+      (near(w, STAGE_PRESET_METERS.w) && near(h, STAGE_PRESET_METERS.d)) ||
+      (near(w, STAGE_PRESET_METERS.d) && near(h, STAGE_PRESET_METERS.w))
+    ) {
+      return "stage";
+    }
+    return "custom";
+  }
+
+  function applyBoothPreset(id: string) {
+    if (!selected?.polygon || id === "custom") return;
+    const size = id === "stage" ? STAGE_PRESET_METERS : presetSize(id);
+    if (!size) return;
+    const polygon = scaleRingToSize(selected.polygon, size.w, size.d);
+    const nb = ringBounds(polygon);
+    setBoothWidth(fmtDim(nb.w, units));
+    setBoothHeight(fmtDim(nb.h, units));
+    void patchObject({ ...selected, polygon });
+  }
+
   function onVenueWidthChange(v: string) {
     setVenueWidth(v);
   }
@@ -521,21 +588,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     markSaved();
   }
 
-  async function syncAirtable() {
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/events/${bundle.event.slug}/sync`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Sync failed");
-      setBundle((b) => ({ ...b, sponsors: data.sponsors as Sponsor[] }));
-      toast.success(`Synced ${data.sponsors.length} sponsors`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Sync failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function publish() {
     setBusy(true);
     try {
@@ -598,7 +650,25 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
         setTool("select");
       }
       if (e.key === "r" || e.key === "R") {
+        if (
+          viewMode === "hall" &&
+          tool === "select" &&
+          selected?.kind === "booth" &&
+          selected.polygon
+        ) {
+          e.preventDefault();
+          const next = rotatePlot(selected.polygon, selected.facingDeg ?? 0, 45);
+          void patchObject({
+            ...selected,
+            polygon: next.polygon,
+            facingDeg: next.facingDeg,
+            rotation: selected.rotation + 45,
+          });
+          return;
+        }
         setSidebarTab("objects");
+        setStampAppearance(null);
+        setStampModelId(null);
         setPresetId("none");
         setTool("rect");
       }
@@ -695,10 +765,18 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <ViewModeToggle
+            value={viewMode}
+            onChange={(mode) => {
+              setViewMode(mode);
+              if (mode === "hall" && tool === "calibrate") setTool("select");
+            }}
+          />
+          <UnitsToggle units={units} onChange={setUnits} />
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
-          <Button size="sm" variant="outline" onClick={() => void syncAirtable()} disabled={busy}>
-            Sync sponsors
+          <Button size="sm" variant="outline" asChild>
+            <Link href={`/e/${bundle.event.slug}/assets`}>Assets</Link>
           </Button>
           <Button size="sm" onClick={() => void publish()} disabled={busy}>
             Publish
@@ -774,6 +852,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       <DropdownMenuItem
                         key={p.id}
                         onClick={() => {
+                          setStampAppearance(null);
+                          setStampModelId(null);
                           setPresetId(p.id);
                           setTool("rect");
                         }}
@@ -784,6 +864,19 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       onClick={() => {
+                        setStampAppearance("stage");
+                        setStampModelId(null);
+                        setPresetId("stage");
+                        setTool("rect");
+                      }}
+                    >
+                      <Theater />
+                      Stage
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setStampAppearance(null);
+                        setStampModelId(null);
                         setPresetId("none");
                         setTool("rect");
                       }}
@@ -794,6 +887,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => {
+                        setStampAppearance(null);
+                        setStampModelId(null);
                         setPresetId("none");
                         setTool("polygon");
                       }}
@@ -812,6 +907,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                           <DropdownMenuItem
                             key={a.type}
                             onClick={() => {
+                              setStampAppearance(null);
+                              setStampModelId(null);
                               setAmenityStamp(a.type);
                               setTool("icon");
                             }}
@@ -821,23 +918,56 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         ))}
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>
+                        <Box />
+                        Library model
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>
+                        {bundle.assets
+                          .filter((a) => a.kind === "model")
+                          .map((a) => (
+                            <DropdownMenuItem
+                              key={a.id}
+                              onClick={() => {
+                                setStampAppearance("custom");
+                                setStampModelId(a.id);
+                                setPresetId("3x3m");
+                                setTool("rect");
+                              }}
+                            >
+                              {a.name}
+                            </DropdownMenuItem>
+                          ))}
+                        {!bundle.assets.some((a) => a.kind === "model") ? (
+                          <DropdownMenuItem disabled>Upload a GLB in Assets → Library</DropdownMenuItem>
+                        ) : null}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
                   </DropdownMenuContent>
                 </DropdownMenu>
                 {tool === "rect" ? (
                   <p className="text-[11px] text-primary">
                     {presetId && presetId !== "none"
-                      ? `Click the plan to place a ${PRESETS.find((p) => p.id === presetId)?.label} booth.`
-                      : "Drag on the plan to draw a rectangle. Esc cancels."}
+                      ? `Click the ${viewMode === "hall" ? "hall floor" : "plan"} to place a ${
+                          presetId === "stage"
+                            ? "stage"
+                            : PRESETS.find((p) => p.id === presetId)?.label ?? "booth"
+                        }.`
+                      : `Drag on the ${viewMode === "hall" ? "hall floor" : "plan"} to draw a rectangle. Esc cancels.`}
                   </p>
                 ) : null}
                 {tool === "polygon" ? (
                   <p className="text-[11px] text-primary">
-                    Click corners on the plan, then Enter to close. Esc cancels.
+                    {viewMode === "hall"
+                      ? "Switch to Plan to trace a polygon. Esc cancels."
+                      : "Click corners on the plan, then Enter to close. Esc cancels."}
                   </p>
                 ) : null}
                 {tool === "icon" ? (
                   <p className="text-[11px] text-primary">
-                    Click the plan to place {amenityLabel(amenityStamp).toLowerCase()}. Esc cancels.
+                    Click the {viewMode === "hall" ? "hall floor" : "plan"} to place{" "}
+                    {amenityLabel(amenityStamp).toLowerCase()}. Esc cancels.
                   </p>
                 ) : null}
               </div>
@@ -1094,6 +1224,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <Button
                       size="sm"
                       variant={tool === "calibrate" ? "default" : "outline"}
+                      disabled={viewMode === "hall"}
                       onClick={() => setTool(tool === "calibrate" ? "select" : "calibrate")}
                     >
                       {tool === "calibrate" ? "Cancel scale" : "Set scale"}
@@ -1116,31 +1247,63 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
 
         <main className="relative min-w-0 flex-1">
           {floor ? (
-            <FloorCanvas
-              mode="edit"
-              floor={floor}
-              objects={objects}
-              sponsors={bundle.sponsors}
-              selectedId={selectedId}
-              frameNonce={frameNonce}
-              fitNonce={fitNonce}
-              tool={tool}
-              units={units}
-              amenityStamp={amenityStamp}
-              presetMeters={presetId && presetId !== "none" ? preset : null}
-              constrainProportions={constrainProportions}
-              editLayer={sidebarTab}
-              onSelect={setSelectedId}
-              onChangeObject={(o) => void patchObject(o)}
-              onCreateObject={(o) => {
-                void createObject(o);
-                setTool("select");
-                setPresetId("none");
-              }}
-              onCalibrated={(n, p) => void onCalibrated(n, p)}
-              knownLengthMeters={toMeters(Number(scaleLength), units)}
-              underlayOpacity={underlayOpacity}
-            />
+            viewMode === "hall" ? (
+              <HallCanvas
+                mode="edit"
+                floor={floor}
+                objects={objects}
+                sponsors={bundle.sponsors}
+                assets={bundle.assets}
+                selectedId={selectedId}
+                frameNonce={frameNonce}
+                fitNonce={fitNonce}
+                tool={tool}
+                units={units}
+                amenityStamp={amenityStamp}
+                presetMeters={presetId && presetId !== "none" ? preset : null}
+                stampAppearance={stampAppearance}
+                stampModelAssetId={stampModelId}
+                onSelect={setSelectedId}
+                onChangeObject={(o) => void patchObject(o)}
+                onCreateObject={(o) => {
+                  void createObject(o);
+                  setTool("select");
+                  setPresetId("none");
+                  setStampAppearance(null);
+                  setStampModelId(null);
+                }}
+              />
+            ) : (
+              <FloorCanvas
+                mode="edit"
+                floor={floor}
+                objects={objects}
+                sponsors={bundle.sponsors}
+                selectedId={selectedId}
+                frameNonce={frameNonce}
+                fitNonce={fitNonce}
+                tool={tool}
+                units={units}
+                amenityStamp={amenityStamp}
+                presetMeters={presetId && presetId !== "none" ? preset : null}
+                stampAppearance={stampAppearance}
+                stampModelAssetId={stampModelId}
+                constrainProportions={constrainProportions}
+                editLayer={sidebarTab}
+                onSelect={setSelectedId}
+                onChangeObject={(o) => void patchObject(o)}
+                onCreateObject={(o) => {
+                  void createObject(o);
+                  setTool("select");
+                  setPresetId("none");
+                  setStampAppearance(null);
+                  setStampModelId(null);
+                }}
+                onCalibrated={(n, p) => void onCalibrated(n, p)}
+                knownLengthMeters={toMeters(Number(scaleLength), units)}
+                underlayOpacity={underlayOpacity}
+              />
+            )
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               Add a named plan to start.
@@ -1154,7 +1317,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
             </div>
           ) : null}
           <div className="pointer-events-none absolute bottom-4 left-4 font-mono text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
-            pinch / wheel zoom · 0 fits view · handles resize · shift-drag slides drawing
+            {viewMode === "hall"
+              ? "pinch / wheel zoom · 0 fits view · left-drag pan · right-drag orbit"
+              : "pinch / wheel zoom · 0 fits view · handles resize · shift-drag slides drawing"}
           </div>
         </main>
 
@@ -1254,6 +1419,29 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         />
                       </div>
                     </div>
+                    <div>
+                      <Label className="text-[10px] text-muted-foreground">Preset</Label>
+                      <Select
+                        value={matchingBoothPresetId(
+                          ringBounds(selected.polygon).w,
+                          ringBounds(selected.polygon).h,
+                        )}
+                        onValueChange={(id) => applyBoothPreset(id)}
+                      >
+                        <SelectTrigger className="mt-1 w-full" size="sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="custom">Custom</SelectItem>
+                          {PRESETS.map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.label}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value="stage">Stage (12 × 8 m)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
                       <input
                         type="checkbox"
@@ -1294,26 +1482,32 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() =>
+                      onClick={() => {
+                        if (!selected.polygon) return;
+                        const next = rotatePlot(selected.polygon, selected.facingDeg ?? 0, -45);
                         void patchObject({
                           ...selected,
-                          polygon: rotateRing(selected.polygon!, -45),
+                          polygon: next.polygon,
+                          facingDeg: next.facingDeg,
                           rotation: selected.rotation - 45,
-                        })
-                      }
+                        });
+                      }}
                     >
                       Rotate −45°
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() =>
+                      onClick={() => {
+                        if (!selected.polygon) return;
+                        const next = rotatePlot(selected.polygon, selected.facingDeg ?? 0, 45);
                         void patchObject({
                           ...selected,
-                          polygon: rotateRing(selected.polygon!, 45),
+                          polygon: next.polygon,
+                          facingDeg: next.facingDeg,
                           rotation: selected.rotation + 45,
-                        })
-                      }
+                        });
+                      }}
                     >
                       Rotate +45°
                     </Button>
@@ -1322,6 +1516,105 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 <Button size="sm" variant="destructive" onClick={() => void deleteSelected()}>
                   Delete
                 </Button>
+                {selected.kind === "booth" && selected.polygon ? (
+                  <div className="space-y-2 border-t border-border pt-3">
+                    <p className="chrome-kicker">Hall</p>
+                    <div>
+                      <Label className="text-[10px] text-muted-foreground">Appearance</Label>
+                      <Select
+                        value={resolveAppearance(selected)}
+                        onValueChange={(v) =>
+                          void patchObject({ ...selected, appearance: v as Appearance })
+                        }
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="booth">Booth</SelectItem>
+                          <SelectItem value="stage">Stage</SelectItem>
+                          <SelectItem value="custom">Custom</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <p className="font-mono text-[10px] text-muted-foreground">
+                      Facing {Math.round(selected.facingDeg ?? 0)}°
+                    </p>
+                    <div>
+                      <Label className="text-[10px] text-muted-foreground">Rug texture</Label>
+                      <Select
+                        value={selected.rugTextureAssetId ?? "none"}
+                        onValueChange={(v) =>
+                          void patchObject({ ...selected, rugTextureAssetId: v === "none" ? null : v })
+                        }
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder="None" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          {bundle.assets
+                            .filter((a) => a.kind === "texture")
+                            .map((a) => (
+                              <SelectItem key={a.id} value={a.id}>
+                                {a.name}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-[10px] text-muted-foreground">Wall texture</Label>
+                      <Select
+                        value={selected.wallTextureAssetId ?? "none"}
+                        onValueChange={(v) =>
+                          void patchObject({ ...selected, wallTextureAssetId: v === "none" ? null : v })
+                        }
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder="None" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          {bundle.assets
+                            .filter((a) => a.kind === "texture")
+                            .map((a) => (
+                              <SelectItem key={a.id} value={a.id}>
+                                {a.name}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-[10px] text-muted-foreground">3D model</Label>
+                      <Select
+                        value={selected.modelAssetId ?? "none"}
+                        onValueChange={(v) =>
+                          void patchObject({
+                            ...selected,
+                            modelAssetId: v === "none" ? null : v,
+                            appearance: v === "none" ? selected.appearance : "custom",
+                          })
+                        }
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder="None" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          {bundle.assets
+                            .filter((a) => a.kind === "model")
+                            .map((a) => (
+                              <SelectItem key={a.id} value={a.id}>
+                                {a.name}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p className="mt-2 text-sm text-muted-foreground">Select a booth or icon.</p>
@@ -1357,7 +1650,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               ))}
               {!bundle.sponsors.length ? (
                 <p className="text-xs text-muted-foreground">
-                  Sync Airtable in Settings, or keep booths unbound.
+                  Sync Airtable in Assets, or keep booths unbound.
                 </p>
               ) : null}
             </div>

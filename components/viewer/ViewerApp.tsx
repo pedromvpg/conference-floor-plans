@@ -1,17 +1,29 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { ChevronLeft, Search } from "lucide-react";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
+import { ViewModeToggle } from "@/components/map/ViewModeToggle";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { upcomingOnStage, speakersForSession } from "@/lib/agenda-match";
 import { amenityLabel } from "@/lib/amenities";
 import { ringBounds } from "@/lib/geometry";
 import { useUnits } from "@/lib/use-units";
-import type { Floor, MapDocument, MapObject, Sponsor } from "@/lib/types";
+import type { Appearance, Floor, MapDocument, MapObject, Sponsor, ViewMode } from "@/lib/types";
+
+const HallCanvas = dynamic(() => import("@/components/hall/HallCanvas"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center bg-[#12110f] font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+      Loading hall…
+    </div>
+  ),
+});
 
 type LocationTab = "all" | "booths" | "stages" | "size" | "theme";
 
@@ -67,11 +79,21 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
     const kind = (p.kind as MapObject["kind"]) || "booth";
     const airtableId = (p.airtableId as string) || "";
     const sponsor = airtableId ? byAir.get(airtableId) : undefined;
+    const hall = {
+      appearance: (p.appearance as Appearance) ?? null,
+      facingDeg: Number(p.facingDeg ?? 0),
+      modelAssetId: null as string | null,
+      rugTextureAssetId: null as string | null,
+      wallTextureAssetId: null as string | null,
+      modelUrl: String(p.modelUrl ?? ""),
+      rugTextureUrl: String(p.rugTextureUrl ?? ""),
+      wallTextureUrl: String(p.wallTextureUrl ?? ""),
+    };
     if (feat.geometry.type === "Point") {
       return {
         id,
         floorId,
-        kind: "amenity",
+        kind: "amenity" as const,
         polygon: null,
         x: feat.geometry.coordinates[0],
         y: feat.geometry.coordinates[1],
@@ -81,6 +103,7 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
         sponsorId: null,
         amenityType: (p.amenityType as MapObject["amenityType"]) ?? "info",
         color: typeof p.color === "string" ? p.color : null,
+        ...hall,
         createdAt: "",
         updatedAt: "",
       };
@@ -99,6 +122,7 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
       sponsorId: sponsor?.id ?? null,
       amenityType: null,
       color: typeof p.color === "string" ? p.color : null,
+      ...hall,
       createdAt: "",
       updatedAt: "",
     };
@@ -131,10 +155,14 @@ function floorFromDoc(f: MapDocument["floors"][number], eventId: string): Floor 
 function Detail({
   selected,
   sponsor,
+  doc,
 }: {
   selected: MapObject;
   sponsor?: Sponsor;
+  doc: MapDocument;
 }) {
+  const next = upcomingOnStage(doc.sessions, selected);
+  const speakers = next ? speakersForSession(next.speakerIds, doc.speakers) : [];
   return (
     <div className="space-y-2 px-3 py-3">
       {sponsor?.logoUrl ? (
@@ -147,6 +175,19 @@ function Detail({
       ) : null}
       {sponsor?.tier ? <p className="text-[11px] text-muted-foreground">{sponsor.tier}</p> : null}
       {selected.amenityType ? <p className="text-[11px]">{amenityLabel(selected.amenityType)}</p> : null}
+      {next ? (
+        <div className="border-t border-border pt-2">
+          <p className="chrome-kicker">Up next</p>
+          <p className="mt-1 text-[13px]">{next.title}</p>
+          <p className="font-mono text-[10px] text-muted-foreground">
+            {next.startUnix ? new Date(next.startUnix * 1000).toLocaleString() : ""}
+            {next.sessionType ? ` · ${next.sessionType}` : ""}
+          </p>
+          {speakers.length ? (
+            <p className="mt-1 text-[11px] text-muted-foreground">{speakers.map((s) => s.name).join(", ")}</p>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -169,6 +210,11 @@ export function ViewerApp({
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [locationTab, setLocationTab] = useState<LocationTab>("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("plan");
+
+  useEffect(() => {
+    if (window.matchMedia("(min-width: 768px)").matches) setViewMode("hall");
+  }, []);
 
   const floorDoc = doc.floors.find((f) => f.id === floorId) ?? doc.floors[0];
   const floor = floorDoc ? floorFromDoc(floorDoc, doc.event.slug) : null;
@@ -276,7 +322,7 @@ export function ViewerApp({
       {selected ? (
         <div className="border-b border-border">
           <p className="chrome-kicker px-3 pt-3">Selected</p>
-          <Detail selected={selected} sponsor={selectedSponsor} />
+          <Detail selected={selected} sponsor={selectedSponsor} doc={doc} />
         </div>
       ) : null}
       <p className="chrome-kicker px-3 pt-3">Locations</p>
@@ -341,26 +387,43 @@ export function ViewerApp({
   );
 
   return (
-    <div className="relative h-dvh overflow-hidden bg-background">
+    <div className="relative h-dvh overflow-clip bg-background">
       <main
-        className="absolute inset-y-0 left-0"
+        className="absolute inset-y-0 left-0 overflow-clip"
         style={{ right: sidebarOpen ? 260 : 44 }}
       >
         {floor ? (
-          <FloorCanvas
-            mode="view"
-            floor={floor}
-            objects={objects}
-            sponsors={sponsors}
-            selectedId={selectedId}
-            frameNonce={frameNonce}
-            highlightId={highlightId}
-            units={units}
-            onSelect={(id) => {
-              setSelectedId(id);
-              if (id && window.matchMedia("(max-width: 767px)").matches) setSheetOpen(true);
-            }}
-          />
+          viewMode === "hall" ? (
+            <HallCanvas
+              mode="view"
+              floor={floor}
+              objects={objects}
+              sponsors={sponsors}
+              selectedId={selected?.id ?? null}
+              highlightId={highlightId}
+              frameNonce={frameNonce}
+              units={units}
+              onSelect={(id) => {
+                setSelectedId(id);
+                if (id && window.matchMedia("(max-width: 767px)").matches) setSheetOpen(true);
+              }}
+            />
+          ) : (
+            <FloorCanvas
+              mode="view"
+              floor={floor}
+              objects={objects}
+              sponsors={sponsors}
+              selectedId={selectedId}
+              frameNonce={frameNonce}
+              highlightId={highlightId}
+              units={units}
+              onSelect={(id) => {
+                setSelectedId(id);
+                if (id && window.matchMedia("(max-width: 767px)").matches) setSheetOpen(true);
+              }}
+            />
+          )
         ) : (
           <div className="flex h-full items-center justify-center text-[11px] text-muted-foreground">
             Map has not been published yet.
@@ -377,6 +440,7 @@ export function ViewerApp({
       </div>
 
       <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 flex-wrap justify-center gap-2.5">
+        <ViewModeToggle value={viewMode} onChange={setViewMode} />
         {doc.floors.map((f) => (
           <button
             key={f.id}
@@ -444,7 +508,7 @@ export function ViewerApp({
               <SheetHeader>
                 <SheetTitle className="text-sm">{selectedSponsor?.name || selected.name || selected.boothNumber}</SheetTitle>
               </SheetHeader>
-              <Detail selected={selected} sponsor={selectedSponsor} />
+              <Detail selected={selected} sponsor={selectedSponsor} doc={doc} />
             </>
           ) : (
             <>

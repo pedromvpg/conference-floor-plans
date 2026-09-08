@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AmenityType,
+  Appearance,
   Calibration,
   Floor,
   MapObject,
@@ -49,7 +50,9 @@ import {
 } from "@/lib/geometry";
 import { formatSize, gridSize } from "@/lib/units";
 import { AMENITY_COLOR, amenityLabel } from "@/lib/amenities";
+import { tierFill } from "@/lib/colors";
 import { newId, nowIso } from "@/lib/store";
+import { hallDefaults } from "@/lib/appearance";
 
 type Props = {
   mode: "edit" | "view";
@@ -63,6 +66,8 @@ type Props = {
   amenityStamp?: AmenityType;
   presetId?: string | null;
   presetMeters?: { w: number; d: number } | null;
+  stampAppearance?: Appearance | null;
+  stampModelAssetId?: string | null;
   constrainProportions?: boolean;
   onSelect?: (id: string | null) => void;
   onChangeObject?: (obj: MapObject) => void;
@@ -165,14 +170,6 @@ function handleXY(
   return [x, y];
 }
 
-function tierFill(tier: string): string {
-  if (!tier) return "rgba(249, 115, 22, 0.22)";
-  let h = 0;
-  for (let i = 0; i < tier.length; i++) h = (h * 31 + tier.charCodeAt(i)) >>> 0;
-  const hue = h % 360;
-  return `hsla(${hue}, 38%, 38%, 0.32)`;
-}
-
 export function FloorCanvas({
   mode,
   floor,
@@ -184,6 +181,8 @@ export function FloorCanvas({
   units = "m",
   amenityStamp = "bathroom",
   presetMeters = null,
+  stampAppearance = null,
+  stampModelAssetId = null,
   constrainProportions = true,
   onSelect,
   onChangeObject,
@@ -573,6 +572,7 @@ export function FloorCanvas({
         sponsorId: null,
         amenityType: amenityStamp,
         color: null,
+        ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
         createdAt: t,
         updatedAt: t,
       });
@@ -767,10 +767,11 @@ export function FloorCanvas({
       y: null,
       rotation: 0,
       boothNumber: "",
-      name: "",
+      name: stampAppearance === "stage" ? "Stage" : "",
       sponsorId: null,
       amenityType: null,
       color: null,
+      ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
       createdAt: t,
       updatedAt: t,
     });
@@ -815,10 +816,11 @@ export function FloorCanvas({
       y: null,
       rotation: 0,
       boothNumber: "",
-      name: "",
+      name: stampAppearance === "stage" ? "Stage" : "",
       sponsorId: null,
       amenityType: null,
       color: null,
+      ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
       createdAt: t,
       updatedAt: t,
     });
@@ -924,6 +926,7 @@ export function FloorCanvas({
           height={underlayH || size.h}
           opacity={underlayOpacity}
           preserveAspectRatio="none"
+          className="map-underlay"
           onLoad={(ev) => {
             const img = ev.currentTarget as unknown as SVGImageElement;
             const w = (img as SVGImageElement).getBBox?.();
@@ -936,21 +939,25 @@ export function FloorCanvas({
           }}
         />
       ) : (
-        <rect x={0} y={0} width={size.w} height={size.h} fill="var(--map-void)" />
-      )}
-      {mode === "edit" ? (
         <rect
           x={underlayX}
           y={underlayY}
           width={underlayW || size.w}
           height={underlayH || size.h}
-          fill="none"
-          stroke={canEditVenue && selectedId === VENUE_ID ? "#f97316" : "var(--map-grid)"}
-          strokeWidth={Math.max(size.w, size.h) * (canEditVenue && selectedId === VENUE_ID ? 0.0035 : 0.002)}
-          strokeDasharray={canEditVenue && selectedId === VENUE_ID ? undefined : `${Math.max(size.w, size.h) * 0.012} ${Math.max(size.w, size.h) * 0.008}`}
-          pointerEvents="none"
+          fill="var(--map-void)"
         />
-      ) : null}
+      )}
+      <rect
+        x={underlayX}
+        y={underlayY}
+        width={underlayW || size.w}
+        height={underlayH || size.h}
+        fill="none"
+        stroke={canEditVenue && selectedId === VENUE_ID ? "#f97316" : "var(--map-venue-stroke)"}
+        strokeWidth={Math.max(size.w, size.h) * (canEditVenue && selectedId === VENUE_ID ? 0.0035 : 0.002)}
+        strokeDasharray={canEditVenue && selectedId === VENUE_ID ? undefined : `${Math.max(size.w, size.h) * 0.012} ${Math.max(size.w, size.h) * 0.008}`}
+        pointerEvents="none"
+      />
       {mode === "edit" && cal ? <rect x={cam.x} y={cam.y} width={cam.w} height={cam.h} fill="url(#grid)" pointerEvents="none" /> : null}
       {mode === "edit" && showPixelGrid ? (
         <rect x={underlayX} y={underlayY} width={underlayW} height={underlayH} fill="url(#pixgrid)" pointerEvents="none" />
@@ -1023,7 +1030,7 @@ export function FloorCanvas({
                 textAnchor="middle"
                 dominantBaseline="middle"
                 fontSize={Math.min(b.w, b.h) * (showLogo ? 0.16 : 0.2)}
-                fill="#111"
+                fill="var(--map-label)"
                 fontFamily="var(--font-mono), ui-monospace, monospace"
                 fontWeight={700}
                 pointerEvents="none"
@@ -1038,8 +1045,7 @@ export function FloorCanvas({
                 textAnchor="middle"
                 dominantBaseline="middle"
                 fontSize={Math.min(b.w, b.h) * 0.12}
-                fill="#111"
-                fillOpacity={0.7}
+                fill="var(--map-label-muted)"
                 fontFamily="var(--font-mono), ui-monospace, monospace"
                 pointerEvents="none"
               >
