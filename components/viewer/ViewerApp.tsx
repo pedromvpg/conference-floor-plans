@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { ChevronLeft, Search } from "lucide-react";
+import { ChevronDown, ChevronLeft, LayoutGrid, MapPin, Search, Square, Theater } from "lucide-react";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
 import { FloorSwitcher, GridToggle, RulersToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
 import { UnitsToggle } from "@/components/units-toggle";
@@ -13,16 +13,31 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ThemeToggle } from "@/components/theme-toggle";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { upcomingOnStage, speakersForSession } from "@/lib/agenda-match";
 import { amenityLabel } from "@/lib/amenities";
 import { ringBounds } from "@/lib/geometry";
 import { displayLogoUrl } from "@/lib/hall";
+import { formatSize } from "@/lib/units";
 import { useUnits } from "@/lib/use-units";
+import { isMapPinObject, MAP_PIN_META } from "@/lib/types";
 import type { Appearance, Floor, MapDocument, MapObject, Sponsor, ViewMode } from "@/lib/types";
 
 const HallCanvas = dynamic(() => import("@/components/hall/HallCanvas"), {
@@ -34,14 +49,19 @@ const HallCanvas = dynamic(() => import("@/components/hall/HallCanvas"), {
   ),
 });
 
-type LocationTab = "all" | "booths" | "stages" | "size" | "theme";
+type ObjectFilter = "all" | "booths" | "stages" | "icons";
+type ObjectSort = "name" | "size" | "modified";
+type SortDir = "asc" | "desc";
 
-const LOCATION_TABS: { value: LocationTab; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "booths", label: "Booths" },
-  { value: "stages", label: "Stages" },
-  { value: "size", label: "Size" },
-  { value: "theme", label: "Theme" },
+const OBJECT_FILTERS: {
+  value: ObjectFilter;
+  label: string;
+  icon: typeof Square;
+}[] = [
+  { value: "all", label: "All", icon: LayoutGrid },
+  { value: "booths", label: "Booths", icon: Square },
+  { value: "stages", label: "Stages", icon: Theater },
+  { value: "icons", label: "Icons", icon: MapPin },
 ];
 
 function isStage(o: MapObject): boolean {
@@ -52,22 +72,14 @@ function isBooth(o: MapObject): boolean {
   return o.kind === "booth" && !isStage(o);
 }
 
-function polygonArea(o: MapObject): number {
+function objectTitle(o: MapObject, sponsor?: Sponsor): string {
+  return sponsor?.name || o.name || o.boothNumber || (isMapPinObject(o) ? MAP_PIN_META[o.kind].label : amenityLabel(o.amenityType ?? "info"));
+}
+
+function objectArea(o: MapObject): number {
   if (!o.polygon?.length) return 0;
   const b = ringBounds(o.polygon);
   return b.w * b.h;
-}
-
-function objectTitle(o: MapObject, sponsor?: Sponsor): string {
-  return sponsor?.name || o.name || o.boothNumber || (o.kind === "side_event" ? "Side event" : amenityLabel(o.amenityType ?? "info"));
-}
-
-function themeOf(o: MapObject, sponsor?: Sponsor): string {
-  if (sponsor?.tier) return sponsor.tier;
-  if (isStage(o)) return "Stages";
-  if (o.kind === "side_event") return "Side events";
-  if (o.kind === "amenity") return amenityLabel(o.amenityType ?? "info");
-  return o.name || "Untitled";
 }
 
 function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject[]; sponsors: Sponsor[] } {
@@ -104,7 +116,8 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
       fillTextureUrl: String(p.fillTextureUrl ?? ""),
     };
     if (feat.geometry.type === "Point") {
-      const kind = (p.kind as MapObject["kind"]) === "side_event" ? "side_event" : "amenity";
+      const rawKind = p.kind as MapObject["kind"];
+      const kind = rawKind === "side_event" || rawKind === "hotel" ? rawKind : "amenity";
       return {
         id,
         floorId,
@@ -198,7 +211,7 @@ function Detail({
   const next = upcomingOnStage(doc.sessions, selected);
   const speakers = next ? speakersForSession(next.speakerIds, doc.speakers) : [];
   const logoUrl = displayLogoUrl(selected, [], sponsor);
-  if (selected.kind === "side_event") {
+  if (isMapPinObject(selected)) {
     const when = selected.eventDate
       ? new Date(`${selected.eventDate}T12:00:00`).toLocaleDateString(undefined, {
           weekday: "short",
@@ -263,7 +276,9 @@ export function ViewerApp({
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [locationTab, setLocationTab] = useState<LocationTab>("all");
+  const [objectFilter, setObjectFilter] = useState<ObjectFilter>("all");
+  const [objectSort, setObjectSort] = useState<ObjectSort>("name");
+  const [objectSortDir, setObjectSortDir] = useState<SortDir>("asc");
   const [viewMode, setViewMode] = useState<ViewMode>("plan");
   const [showGrid, setShowGrid] = useState(false);
   const [showRulers, setShowRulers] = useState(false);
@@ -311,39 +326,25 @@ export function ViewerApp({
       if (q) {
         const blob = `${o.name} ${o.boothNumber} ${o.description} ${o.eventDate} ${s?.name ?? ""} ${s?.tier ?? ""} ${o.amenityType ?? ""} ${o.kind}`.toLowerCase();
         if (!blob.includes(q)) return false;
-      } else if (locationTab === "all" || locationTab === "theme") {
-        if (o.kind !== "booth" && !o.name) return false;
       }
-      if (locationTab === "booths") return isBooth(o);
-      if (locationTab === "stages") return isStage(o);
-      if (locationTab === "size") return Boolean(o.polygon?.length);
+      if (isMapPinObject(o)) return objectFilter === "all";
+      if (objectFilter === "booths") return isBooth(o);
+      if (objectFilter === "stages") return isStage(o);
+      if (objectFilter === "icons") return o.kind === "amenity";
       return true;
     });
-    const ranked = [...matches];
-    if (locationTab === "size") {
-      ranked.sort((a, b) => polygonArea(b) - polygonArea(a));
-    } else {
-      ranked.sort((a, b) => {
-        const sa = a.sponsorId ? sponsors.find((sp) => sp.id === a.sponsorId) : undefined;
-        const sb = b.sponsorId ? sponsors.find((sp) => sp.id === b.sponsorId) : undefined;
-        return objectTitle(a, sa).localeCompare(objectTitle(b, sb));
-      });
-    }
-    return ranked;
-  }, [objects, sponsors, query, tier, locationTab]);
-
-  const themeGroups = useMemo(() => {
-    if (locationTab !== "theme") return null;
-    const groups = new Map<string, MapObject[]>();
-    for (const o of results) {
-      const s = o.sponsorId ? sponsors.find((sp) => sp.id === o.sponsorId) : undefined;
-      const key = themeOf(o, s);
-      const list = groups.get(key);
-      if (list) list.push(o);
-      else groups.set(key, [o]);
-    }
-    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [locationTab, results, sponsors]);
+    return [...matches].sort((a, b) => {
+      const sa = a.sponsorId ? sponsors.find((sp) => sp.id === a.sponsorId) : undefined;
+      const sb = b.sponsorId ? sponsors.find((sp) => sp.id === b.sponsorId) : undefined;
+      const byName = objectTitle(a, sa).localeCompare(objectTitle(b, sb));
+      let cmp = 0;
+      if (objectSort === "size") cmp = objectArea(a) - objectArea(b);
+      else if (objectSort === "modified") cmp = Date.parse(a.updatedAt || "0") - Date.parse(b.updatedAt || "0");
+      else cmp = byName;
+      if (cmp === 0) cmp = byName;
+      return objectSortDir === "asc" ? cmp : -cmp;
+    });
+  }, [objects, sponsors, query, tier, objectFilter, objectSort, objectSortDir]);
 
   function openItem(id: string) {
     setSelectedId(id);
@@ -382,62 +383,114 @@ export function ViewerApp({
           </div>
         ) : null}
       </div>
-      <p className="chrome-kicker px-3 pt-3">Locations</p>
-      <Tabs
-        value={locationTab}
-        onValueChange={(value) => setLocationTab(value as LocationTab)}
-        className="shrink-0 gap-0 bg-background px-2 pb-1"
+      <div
+        className="flex shrink-0 items-center gap-0.5 border-b border-border px-3 py-1.5"
+        role="tablist"
+        aria-label="Filter objects"
       >
-        <TabsList
-          className="grid h-8 w-full grid-cols-3 gap-0.5 rounded-lg p-0.5 group-data-horizontal/tabs:h-8"
-        >
-          {LOCATION_TABS.map((tab) => (
-            <TabsTrigger
-              key={tab.value}
-              value={tab.value}
-              className="h-7 flex-none rounded-md px-2 text-[11px]"
+        {OBJECT_FILTERS.map((tab) => {
+          const Icon = tab.icon;
+          const active = objectFilter === tab.value;
+          return (
+            <Tooltip key={tab.value}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-label={tab.label}
+                  aria-selected={active}
+                  data-active={active}
+                  onClick={() => setObjectFilter(tab.value)}
+                  className={`flex size-8 items-center justify-center rounded-md transition-colors ${
+                    active
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
+                  }`}
+                >
+                  <Icon className="size-4 shrink-0" strokeWidth={1.5} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{tab.label}</TooltipContent>
+            </Tooltip>
+          );
+        })}
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Sort objects"
+                  className="ml-auto flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+                >
+                  <ChevronDown
+                    className={`size-4 shrink-0 ${objectSortDir === "desc" ? "rotate-180" : ""}`}
+                    strokeWidth={1.5}
+                  />
+                </button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Sort</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end" className="min-w-40">
+            <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={objectSort}
+              onValueChange={(v) => setObjectSort(v as ObjectSort)}
             >
-              {tab.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+              <DropdownMenuRadioItem value="name">Name</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="size">Size</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="modified">Last modified</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuRadioGroup
+              value={objectSortDir}
+              onValueChange={(v) => setObjectSortDir(v as SortDir)}
+            >
+              <DropdownMenuRadioItem value="asc">Ascending</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="desc">Descending</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
       <ScrollArea className="flex-1">
         <div className="py-1">
-          {(themeGroups ?? [["", results]]).map(([group, items]) => (
-            <div key={group || "all"}>
-              {group ? <p className="chrome-kicker px-3 pt-2 pb-1">{group}</p> : null}
-              {items.map((o) => {
-                const s = o.sponsorId ? sponsors.find((sp) => sp.id === o.sponsorId) : undefined;
-                const title = objectTitle(o, s);
-                const logoUrl = displayLogoUrl(o, [], s);
-                const area = locationTab === "size" ? polygonArea(o) : 0;
-                const sub =
-                  locationTab === "size" && area > 0
-                    ? `${Math.round(area)} m²`
-                    : o.boothNumber && o.boothNumber !== title
-                      ? o.boothNumber
-                      : "";
-                return (
-                  <button
-                    key={o.id}
-                    type="button"
-                    data-active={o.id === selected?.id}
-                    onClick={() => openItem(o.id)}
-                    onDoubleClick={() => frameItem(o.id)}
-                    className="chrome-row"
-                  >
-                    {logoUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
-                    ) : null}
-                    <span className="min-w-0 flex-1 truncate">{title}</span>
-                    {sub ? <span className="font-mono text-[10px] text-muted-foreground">{sub}</span> : null}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+          {results.map((o) => {
+            const s = o.sponsorId ? sponsors.find((sp) => sp.id === o.sponsorId) : undefined;
+            const title = objectTitle(o, s);
+            const logoUrl = displayLogoUrl(o, [], s);
+            const sub = isMapPinObject(o)
+              ? MAP_PIN_META[o.kind].label
+              : o.kind === "amenity"
+                ? "Icon"
+                : o.polygon
+                  ? formatSize(ringBounds(o.polygon).w, ringBounds(o.polygon).h, units)
+                  : isStage(o)
+                    ? "Stage"
+                    : "Booth";
+            return (
+              <button
+                key={o.id}
+                type="button"
+                data-active={o.id === selected?.id}
+                onClick={() => openItem(o.id)}
+                onDoubleClick={() => frameItem(o.id)}
+                className="chrome-row"
+              >
+                {logoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
+                ) : null}
+                <span className="min-w-0 flex-1 truncate">{title}</span>
+                <span className="font-mono text-[10px] text-muted-foreground">{sub}</span>
+              </button>
+            );
+          })}
+          {!results.length ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
+              No {objectFilter === "all" ? "objects" : objectFilter} on this plan.
+            </p>
+          ) : null}
         </div>
       </ScrollArea>
     </div>
@@ -493,9 +546,10 @@ export function ViewerApp({
       <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-background/80 p-1 shadow-sm backdrop-blur-md">
         <div className="flex items-center">
           <GridToggle value={showGrid} onChange={setShowGrid} />
-          <ViewModeToggle value={viewMode} onChange={setViewMode} />
           <RulersToggle value={showRulers} onChange={setShowRulers} />
         </div>
+        <span className="h-5 w-px bg-border" aria-hidden />
+        <ViewModeToggle value={viewMode} onChange={setViewMode} />
         <FloorSwitcher
           floors={[...doc.floors].sort((a, b) => a.order - b.order)}
           value={floorId}
@@ -554,13 +608,13 @@ export function ViewerApp({
             <>
               <DialogHeader>
                 <DialogTitle>
-                  {selectedSponsor?.name || selected.name || selected.boothNumber || (selected.kind === "side_event" ? "Side event" : amenityLabel(selected.amenityType ?? "info"))}
+                  {selectedSponsor?.name || selected.name || selected.boothNumber || (isMapPinObject(selected) ? MAP_PIN_META[selected.kind].label : amenityLabel(selected.amenityType ?? "info"))}
                 </DialogTitle>
                 <DialogDescription>
                   {selected.boothNumber
                     ? `Booth ${selected.boothNumber}${selectedSponsor?.tier ? ` · ${selectedSponsor.tier}` : ""}`
-                    : selected.kind === "side_event"
-                      ? selected.eventDate || "Side event"
+                    : isMapPinObject(selected)
+                      ? selected.eventDate || MAP_PIN_META[selected.kind].label
                       : selectedSponsor?.tier || (selected.amenityType ? amenityLabel(selected.amenityType) : "Location")}
                 </DialogDescription>
               </DialogHeader>
