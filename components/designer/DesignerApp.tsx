@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import { Box, CalendarDays, ChevronDown, Eye, EyeOff, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, Square, Theater, Undo2 } from "lucide-react";
+import { Box, Building2, CalendarDays, ChevronDown, Eye, EyeOff, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, RefreshCw, Square, Theater, Undo2 } from "lucide-react";
 import { ObjectMediaFields } from "@/components/designer/ObjectMediaFields";
 import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
 import { UnderlayPreview } from "@/components/designer/UnderlayPreview";
@@ -64,7 +64,7 @@ import type {
   Units,
   ViewMode,
 } from "@/lib/types";
-import { VENUE_ID, isPinObject } from "@/lib/types";
+import { VENUE_ID, isPinObject, isMapPinObject, MAP_PIN_META } from "@/lib/types";
 import {
   blankVenueSvg,
   deleteSvgLayer,
@@ -108,6 +108,14 @@ const HallCanvas = dynamic(() => import("@/components/hall/HallCanvas"), {
 type ObjectFilter = "all" | "booths" | "stages" | "icons";
 type ObjectSort = "name" | "size" | "modified";
 type SortDir = "asc" | "desc";
+type SponsorFilter = "all" | "placed" | "unplaced";
+type SponsorSort = "name" | "status";
+
+const SPONSOR_FILTERS: { value: SponsorFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "placed", label: "Placed" },
+  { value: "unplaced", label: "Not placed" },
+];
 
 const OBJECT_FILTERS: {
   value: ObjectFilter;
@@ -129,7 +137,7 @@ function isBooth(o: MapObject): boolean {
 }
 
 function objectTitle(o: MapObject, sponsor?: Sponsor): string {
-  return sponsor?.name || o.name || o.boothNumber || (o.kind === "side_event" ? "Side event" : amenityLabel(o.amenityType ?? "info"));
+  return sponsor?.name || o.name || o.boothNumber || (isMapPinObject(o) ? MAP_PIN_META[o.kind].label : amenityLabel(o.amenityType ?? "info"));
 }
 
 function objectArea(o: MapObject): number {
@@ -207,6 +215,19 @@ function formatSavedWhen(at: Date, now: Date): string {
   return `${hr}h ago`;
 }
 
+function formatTimeAgo(at: Date, now: Date): string {
+  const ms = Math.max(0, now.getTime() - at.getTime());
+  const sec = Math.floor(ms / 1000);
+  if (sec < 10) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  return `${day}d ago`;
+}
+
 function fmtDim(meters: number, units: Units): string {
   const v = fromMeters(meters, units);
   return Number.isInteger(v) ? String(v) : String(Math.round(v * 1000) / 1000);
@@ -258,7 +279,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [frameNonce, setFrameNonce] = useState(0);
   const [fitNonce, setFitNonce] = useState(0);
   const [sponsorQuery, setSponsorQuery] = useState("");
+  const [sponsorFilter, setSponsorFilter] = useState<SponsorFilter>("all");
+  const [sponsorSort, setSponsorSort] = useState<SponsorSort>("status");
+  const [sponsorSortDir, setSponsorSortDir] = useState<SortDir>("asc");
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"objects" | "venue" | "map">("objects");
   const [derivedMapZoom, setDerivedMapZoom] = useState<number | null>(null);
   const [mapZoomTo, setMapZoomTo] = useState<{ zoom: number; nonce: number } | null>(null);
@@ -328,9 +353,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     presetId === "stage" ? STAGE_PRESET_METERS : presetId ? presetSize(presetId) : null;
   const listedObjects = useMemo(() => {
     const matches = objects.filter((o) => {
+      if (isMapPinObject(o)) return false;
       if (objectFilter === "booths") return isBooth(o);
       if (objectFilter === "stages") return isStage(o);
-      if (objectFilter === "icons") return isPinObject(o);
+      if (objectFilter === "icons") return o.kind === "amenity";
       return true;
     });
     return [...matches].sort((a, b) => {
@@ -345,6 +371,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       return objectSortDir === "asc" ? cmp : -cmp;
     });
   }, [objects, objectFilter, objectSort, objectSortDir, bundle.sponsors]);
+
+  const listedMapPins = useMemo(() => {
+    return objects
+      .filter(isMapPinObject)
+      .sort((a, b) => objectTitle(a).localeCompare(objectTitle(b)));
+  }, [objects]);
 
   const selectedVenueLayer = useMemo(() => {
     if (!venueSvg || !selectedVenueEl) return null;
@@ -631,16 +663,38 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     snapshotVersion(true);
   }, [refreshVersions, snapshotVersion]);
 
+  const placedBoothBySponsorId = useMemo(() => {
+    const map = new Map<string, MapObject>();
+    for (const o of bundle.objects) {
+      if (o.sponsorId && !map.has(o.sponsorId)) map.set(o.sponsorId, o);
+    }
+    return map;
+  }, [bundle.objects]);
+
   const filteredSponsors = useMemo(() => {
     const q = sponsorQuery.trim().toLowerCase();
-    if (!q) return bundle.sponsors.slice(0, 40);
-    return bundle.sponsors.filter(
-      (s) =>
+    const list = bundle.sponsors.filter((s) => {
+      const placed = placedBoothBySponsorId.has(s.id);
+      if (sponsorFilter === "placed" && !placed) return false;
+      if (sponsorFilter === "unplaced" && placed) return false;
+      if (!q) return true;
+      return (
         s.name.toLowerCase().includes(q) ||
         s.boothNumber.toLowerCase().includes(q) ||
-        s.tier.toLowerCase().includes(q),
-    );
-  }, [bundle.sponsors, sponsorQuery]);
+        s.tier.toLowerCase().includes(q)
+      );
+    });
+    return [...list].sort((a, b) => {
+      let cmp = 0;
+      if (sponsorSort === "status") {
+        cmp = Number(placedBoothBySponsorId.has(a.id)) - Number(placedBoothBySponsorId.has(b.id));
+      }
+      if (!cmp) cmp = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      return sponsorSortDir === "asc" ? cmp : -cmp;
+    });
+  }, [bundle.sponsors, sponsorQuery, sponsorFilter, sponsorSort, sponsorSortDir, placedBoothBySponsorId]);
+
+  const hasSelection = selectedIds.length > 0 || Boolean(selectedVenueEl);
 
   const patchObject = useCallback(async (obj: MapObject) => {
     markHistory();
@@ -757,7 +811,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     setSaveLabel("Saving…");
     setBundle((b) => ({ ...b, objects: [...b.objects, ...objs] }));
     setSelectedIds(objs.map((o) => o.id));
-    setSidebarTab("objects");
+    if (!objs.some(isMapPinObject)) setSidebarTab("objects");
     await Promise.all(
       objs.map((obj) =>
         fetch("/api/objects", {
@@ -1034,6 +1088,26 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     }
   }
 
+  async function syncSponsors() {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const res = await fetch(`/api/events/${slug}/sync`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Sync failed");
+      setBundle((b) => ({
+        ...b,
+        sponsors: data.sponsors ?? b.sponsors,
+        event: { ...b.event, sponsorsSyncedAt: nowIso() },
+      }));
+      toast.success(`Synced ${data.sponsors?.length ?? 0} sponsors`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function publish() {
     setBusy(true);
     try {
@@ -1058,6 +1132,15 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       name: s ? selected.name || s.name : selected.name,
       boothNumber: s ? selected.boothNumber || s.boothNumber : selected.boothNumber,
     });
+  }
+
+  function focusPlacedSponsor(s: Sponsor) {
+    const booth = placedBoothBySponsorId.get(s.id);
+    if (!booth) return;
+    if (booth.floorId !== floor?.id) setFloorId(booth.floorId);
+    setSelectedIds([booth.id]);
+    setTool("select");
+    setFrameNonce((n) => n + 1);
   }
 
   async function deleteSelected() {
@@ -1330,6 +1413,26 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               </DropdownMenuContent>
             </DropdownMenu>
           </h1>
+          <button
+            type="button"
+            disabled={syncing}
+            onClick={() => void syncSponsors()}
+            title="Sync sponsors from Airtable"
+            aria-label="Sync Airtable sponsors"
+            className="flex min-w-0 items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          >
+            <RefreshCw
+              className={`size-3.5 shrink-0 ${syncing ? "animate-spin" : ""}`}
+              strokeWidth={1.5}
+            />
+            <span className="hidden truncate sm:inline">
+              {syncing
+                ? "Syncing…"
+                : bundle.event.sponsorsSyncedAt
+                  ? `Synced ${formatTimeAgo(new Date(bundle.event.sponsorsSyncedAt), new Date(nowTick))}`
+                  : "Never synced"}
+            </span>
+          </button>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="flex items-center">
@@ -1402,15 +1505,16 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           <span className="h-5 w-px bg-border" aria-hidden />
           <div className="flex items-center">
             <GridToggle value={showGrid} onChange={setShowGrid} />
-            <ViewModeToggle
-              value={viewMode}
-              onChange={(mode) => {
-                setViewMode(mode);
-                if (mode === "hall" && tool === "calibrate") setTool("select");
-              }}
-            />
             <RulersToggle value={showRulers} onChange={setShowRulers} />
           </div>
+          <span className="h-5 w-px bg-border" aria-hidden />
+          <ViewModeToggle
+            value={viewMode}
+            onChange={(mode) => {
+              setViewMode(mode);
+              if (mode === "hall" && tool === "calibrate") setTool("select");
+            }}
+          />
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
           <div className="group relative">
@@ -1459,9 +1563,14 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     setSelectedIds([VENUE_ID]);
                     setTool("select");
                     setPresetId("none");
+                  } else if (id === "map") {
+                    if (selectedId === VENUE_ID) setSelectedIds([]);
+                    if (tool === "calibrate" || tool === "rect" || tool === "polygon") setTool("select");
+                    if (tool === "icon" && pinKind === "amenity") setTool("select");
                   } else {
                     if (selectedId === VENUE_ID) setSelectedIds([]);
                     if (tool === "calibrate") setTool("select");
+                    if (tool === "icon" && pinKind !== "amenity") setTool("select");
                   }
                 }}
               >
@@ -1558,17 +1667,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       Polygon
                       <DropdownMenuShortcut>P</DropdownMenuShortcut>
                     </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setStampAppearance(null);
-                        setStampModelId(null);
-                        setPinKind("side_event");
-                        setTool("icon");
-                      }}
-                    >
-                      <CalendarDays strokeWidth={1.5} />
-                      Side event
-                    </DropdownMenuItem>
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger>
                         <MapPin strokeWidth={1.5} />
@@ -1637,10 +1735,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       : "Click a corner; drag for Bézier handles. Click the first point or Enter to close. Alt-drag breaks handle symmetry."}
                   </p>
                 ) : null}
-                {tool === "icon" ? (
+                {tool === "icon" && pinKind === "amenity" ? (
                   <p className="text-[11px] text-primary">
                     Click the {viewMode === "hall" ? "hall floor" : "plan"} to place{" "}
-                    {pinKind === "side_event" ? "a side event" : amenityLabel(amenityStamp).toLowerCase()}. Esc cancels.
+                    {amenityLabel(amenityStamp).toLowerCase()}. Esc cancels.
                   </p>
                 ) : null}
               </div>
@@ -1723,9 +1821,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     const title = objectTitle(o, s);
                     const logoUrl = displayLogoUrl(o, bundle.assets, s);
                     const sub =
-                      o.kind === "side_event"
-                        ? "Side event"
-                        : o.kind === "amenity"
+                      o.kind === "amenity"
                         ? "Icon"
                         : o.polygon
                           ? formatSize(ringBounds(o.polygon).w, ringBounds(o.polygon).h, units)
@@ -1772,7 +1868,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               </ScrollArea>
             </div>
           ) : sidebarTab === "map" ? (
-            <div className="min-h-0 overflow-auto p-3">
+            <div className="min-h-0 flex-1 overflow-auto p-3">
               <div className="space-y-3">
                 <p className="text-xs text-muted-foreground">
                   Pan and zoom move the drawing and the map together. Turn on align to drag the hall onto the streets. Lat/lng arrows move about 1 m.
@@ -1911,6 +2007,81 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       setMapZoomTo((n) => ({ zoom: Math.min(22, Math.max(1, zoom)), nonce: (n?.nonce ?? 0) + 1 }));
                     }}
                   />
+                </div>
+                <div className="space-y-2 border-t border-border pt-3">
+                  <p className="text-xs text-muted-foreground">
+                    Place side events and hotels on the city map.
+                  </p>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        variant={tool === "icon" && pinKind !== "amenity" ? "default" : "outline"}
+                      >
+                        <Plus strokeWidth={1.5} />
+                        Add pin
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="min-w-52">
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setViewMode("plan");
+                          setAlignDrawingToMap(false);
+                          setPinKind("side_event");
+                          setTool("icon");
+                        }}
+                      >
+                        <CalendarDays strokeWidth={1.5} />
+                        Side event
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setViewMode("plan");
+                          setAlignDrawingToMap(false);
+                          setPinKind("hotel");
+                          setTool("icon");
+                        }}
+                      >
+                        <Building2 strokeWidth={1.5} />
+                        Hotel
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  {tool === "icon" && pinKind !== "amenity" ? (
+                    <p className="text-[11px] text-primary">
+                      Click the map to place a {MAP_PIN_META[pinKind].label.toLowerCase()}. Esc cancels.
+                    </p>
+                  ) : null}
+                  <p className="chrome-kicker">Pins</p>
+                  <div>
+                    {listedMapPins.map((o) => (
+                      <button
+                        key={o.id}
+                        type="button"
+                        data-active={selectedIds.includes(o.id)}
+                        onClick={() => {
+                          setSelectedIds([o.id]);
+                          setTool("select");
+                        }}
+                        className="chrome-row"
+                      >
+                        <span
+                          className="flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                          style={{ background: MAP_PIN_META[o.kind].color }}
+                        >
+                          {MAP_PIN_META[o.kind].mark}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">{objectTitle(o)}</span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {MAP_PIN_META[o.kind].label}
+                        </span>
+                      </button>
+                    ))}
+                    {!listedMapPins.length ? (
+                      <p className="px-1 py-3 text-xs text-muted-foreground">No side events or hotels yet.</p>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             </div>
@@ -2279,6 +2450,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 onChangeObjects={(objs) => void patchObjects(objs)}
                 onCreateObject={(o) => {
                   void createObject(o);
+                  if (isMapPinObject(o)) return;
                   setTool("select");
                   setPresetId("none");
                   setStampAppearance(null);
@@ -2560,37 +2732,39 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               <div className="mt-2 min-w-0 space-y-2">
                 <div>
                   <Label htmlFor="insp-label" className="text-[10px] text-muted-foreground">
-                    {selected.kind === "side_event" ? "Title" : "Label"}
+                    {isMapPinObject(selected) ? "Title" : "Label"}
                   </Label>
                   <Input
                     id="insp-label"
                     value={selected.name}
                     onChange={(e) => void patchObject({ ...selected, name: e.target.value })}
-                    placeholder={selected.kind === "side_event" ? "Afterparty" : "Display name"}
+                    placeholder={isMapPinObject(selected) ? MAP_PIN_META[selected.kind].label : "Display name"}
                   />
                 </div>
-                {selected.kind === "side_event" ? (
+                {isMapPinObject(selected) ? (
                   <>
-                    <div>
-                      <Label htmlFor="insp-event-date" className="text-[10px] text-muted-foreground">
-                        Date
-                      </Label>
-                      <Input
-                        id="insp-event-date"
-                        type="date"
-                        value={selected.eventDate}
-                        onChange={(e) => void patchObject({ ...selected, eventDate: e.target.value })}
-                      />
-                    </div>
+                    {selected.kind === "side_event" ? (
+                      <div>
+                        <Label htmlFor="insp-event-date" className="text-[10px] text-muted-foreground">
+                          Date
+                        </Label>
+                        <Input
+                          id="insp-event-date"
+                          type="date"
+                          value={selected.eventDate}
+                          onChange={(e) => void patchObject({ ...selected, eventDate: e.target.value })}
+                        />
+                      </div>
+                    ) : null}
                     <div>
                       <Label htmlFor="insp-event-desc" className="text-[10px] text-muted-foreground">
-                        Description
+                        {selected.kind === "hotel" ? "Address / notes" : "Description"}
                       </Label>
                       <Textarea
                         id="insp-event-desc"
                         value={selected.description}
                         onChange={(e) => void patchObject({ ...selected, description: e.target.value })}
-                        placeholder="What happens here"
+                        placeholder={selected.kind === "hotel" ? "Hotel name, address" : "What happens here"}
                         className="mt-1 min-h-24 text-sm"
                       />
                     </div>
@@ -2900,39 +3074,114 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               <p className="mt-2 text-sm text-muted-foreground">Select a booth or icon.</p>
             )}
           </div>
-          <div className="w-full min-w-0 max-w-full overflow-x-hidden p-3">
-            <p className="chrome-kicker">Sponsors</p>
-            <Input
-              className="mt-2"
-              value={sponsorQuery}
-              onChange={(e) => setSponsorQuery(e.target.value)}
-              placeholder="Search name or booth"
-            />
-          </div>
-            <div className="min-w-0 space-y-1 px-3 pb-3">
-              {filteredSponsors.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => void bindSponsor(s)}
-                  className="chrome-row px-2"
-                >
-                  {s.logoUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={s.logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
-                  ) : (
-                    <span className="h-6 w-6 rounded bg-muted" />
-                  )}
-                  <span className="min-w-0 flex-1 truncate">{s.name}</span>
-                  <span className="font-mono text-[10px] text-muted-foreground">{s.boothNumber}</span>
-                </button>
-              ))}
-              {!bundle.sponsors.length ? (
-                <p className="text-xs text-muted-foreground">
-                  Sync Airtable in Assets, or keep booths unbound.
-                </p>
-              ) : null}
-            </div>
+          {!hasSelection ? (
+            <>
+              <div className="w-full min-w-0 max-w-full overflow-x-hidden p-3">
+                <p className="chrome-kicker">Sponsors</p>
+                <Input
+                  className="mt-2"
+                  value={sponsorQuery}
+                  onChange={(e) => setSponsorQuery(e.target.value)}
+                  placeholder="Search name or booth"
+                />
+                <div className="mt-2 flex min-w-0 items-center gap-0.5">
+                  {SPONSOR_FILTERS.map((f) => {
+                    const active = sponsorFilter === f.value;
+                    return (
+                      <button
+                        key={f.value}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setSponsorFilter(f.value)}
+                        className={`rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+                          active
+                            ? "bg-muted text-foreground"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    );
+                  })}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="Sort sponsors"
+                        className="ml-auto flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                      >
+                        {sponsorSort === "name" ? "Name" : "Status"}
+                        <ChevronDown
+                          className={`size-3 shrink-0 ${sponsorSortDir === "desc" ? "rotate-180" : ""}`}
+                          strokeWidth={1.5}
+                        />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-36">
+                      <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+                      <DropdownMenuRadioGroup
+                        value={sponsorSort}
+                        onValueChange={(v) => setSponsorSort(v as SponsorSort)}
+                      >
+                        <DropdownMenuRadioItem value="status">Status</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="name">Name</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuRadioGroup
+                        value={sponsorSortDir}
+                        onValueChange={(v) => setSponsorSortDir(v as SortDir)}
+                      >
+                        <DropdownMenuRadioItem value="asc">Ascending</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="desc">Descending</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
+              <div className="min-w-0 space-y-1 px-3 pb-3">
+                {filteredSponsors.map((s) => {
+                  const booth = placedBoothBySponsorId.get(s.id);
+                  const placed = Boolean(booth);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => focusPlacedSponsor(s)}
+                      className="chrome-row px-2"
+                    >
+                      {s.logoUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={s.logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
+                      ) : (
+                        <span className="h-6 w-6 rounded bg-muted" />
+                      )}
+                      <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                      <span
+                        className={`shrink-0 text-[10px] ${
+                          placed ? "text-foreground" : "text-muted-foreground"
+                        }`}
+                      >
+                        {placed ? "Placed" : "Not placed"}
+                      </span>
+                    </button>
+                  );
+                })}
+                {!bundle.sponsors.length ? (
+                  <p className="text-xs text-muted-foreground">
+                    Sync Airtable in Assets, or keep booths unbound.
+                  </p>
+                ) : !filteredSponsors.length ? (
+                  <p className="text-xs text-muted-foreground">
+                    {sponsorQuery.trim()
+                      ? `No sponsors matching “${sponsorQuery.trim()}”.`
+                      : sponsorFilter === "placed"
+                        ? "No placed sponsors."
+                        : "No unplaced sponsors."}
+                  </p>
+                ) : null}
+              </div>
+            </>
+          ) : null}
           </ScrollArea>
         </aside>
       </div>
