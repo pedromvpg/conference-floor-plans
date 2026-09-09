@@ -11,6 +11,7 @@ export function BoothKit({
   facingDeg,
   rugColor,
   rugUrl,
+  fillUrl,
   wallUrl,
   logoUrl,
   selected,
@@ -19,6 +20,7 @@ export function BoothKit({
   facingDeg: number;
   rugColor: string;
   rugUrl?: string;
+  fillUrl?: string;
   wallUrl?: string;
   logoUrl?: string;
   selected: boolean;
@@ -26,6 +28,8 @@ export function BoothKit({
   const obb = facingObb(ring, facingDeg);
   const wallH = selected ? 2.7 : 2.5;
   const wallColor = darkenHex(rugColor, 0.32);
+  const floorUrl = fillUrl || rugUrl;
+  const floorFit = fillUrl ? "cover" : "repeat";
   return (
     <group>
       <Suspense fallback={<PolygonSlab ring={ring} thickness={0.05} y={0} color={rugColor} selected={selected} />}>
@@ -34,7 +38,9 @@ export function BoothKit({
           thickness={0.05}
           y={0}
           color={rugColor}
-          mapUrl={rugUrl}
+          mapUrl={floorUrl}
+          mapFit={floorFit}
+          facingDeg={facingDeg}
           selected={selected}
         />
       </Suspense>

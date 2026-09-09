@@ -2,9 +2,9 @@
 
 import { useMemo } from "react";
 import * as THREE from "three";
-import { closeRing } from "@/lib/geometry";
+import { closeRing, ringBounds, ringCentroid, rotateRing } from "@/lib/geometry";
 import type { Ring } from "@/lib/types";
-import { ColorOrMap } from "./materials";
+import { ColorOrMap, type MapFit } from "./materials";
 
 export { ColorOrMap } from "./materials";
 
@@ -25,12 +25,35 @@ export function slabGeometry(ring: Ring, thickness: number): THREE.ExtrudeGeomet
   return g;
 }
 
+function applyCoverUvs(geom: THREE.BufferGeometry, ring: Ring, facingDeg: number) {
+  const local = rotateRing(ring, -facingDeg);
+  const b = ringBounds(local);
+  const pos = geom.getAttribute("position");
+  if (!pos || !(b.w > 0) || !(b.h > 0)) return;
+  const uv = new Float32Array(pos.count * 2);
+  const rad = (-facingDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const { x: cx, y: cy } = ringCentroid(ring);
+  for (let i = 0; i < pos.count; i++) {
+    const dx = pos.getX(i) - cx;
+    const dy = pos.getZ(i) - cy;
+    const lx = cx + dx * cos - dy * sin;
+    const ly = cy + dx * sin + dy * cos;
+    uv[i * 2] = (lx - b.minX) / b.w;
+    uv[i * 2 + 1] = 1 - (ly - b.minY) / b.h;
+  }
+  geom.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+}
+
 export function PolygonSlab({
   ring,
   thickness,
   y,
   color,
   mapUrl,
+  mapFit = "repeat",
+  facingDeg = 0,
   selected,
 }: {
   ring: Ring;
@@ -38,14 +61,25 @@ export function PolygonSlab({
   y: number;
   color: string;
   mapUrl?: string;
+  mapFit?: MapFit;
+  facingDeg?: number;
   selected?: boolean;
 }) {
-  const geom = useMemo(() => slabGeometry(ring, thickness), [ring, thickness]);
+  const geom = useMemo(() => {
+    const g = slabGeometry(ring, thickness);
+    if (mapFit === "cover") applyCoverUvs(g, ring, facingDeg);
+    return g;
+  }, [ring, thickness, mapFit, facingDeg]);
   const edges = useMemo(() => new THREE.EdgesGeometry(geom), [geom]);
+  const aspect = useMemo(() => {
+    const local = rotateRing(ring, -facingDeg);
+    const b = ringBounds(local);
+    return b.h > 0 ? b.w / b.h : 1;
+  }, [ring, facingDeg]);
   return (
     <group>
       <mesh geometry={geom} position={[0, y, 0]}>
-        <ColorOrMap color={color} url={mapUrl} />
+        <ColorOrMap color={color} url={mapUrl} fit={mapFit} aspect={aspect} />
       </mesh>
       {selected ? (
         <lineSegments geometry={edges} position={[0, y + thickness + 0.01, 0]}>

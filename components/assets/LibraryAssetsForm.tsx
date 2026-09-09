@@ -51,7 +51,7 @@ export function LibraryAssetsForm({ slug, initial }: { slug: string; initial: Li
     <div className="space-y-6">
       <UploadCard
         title="Textures"
-        description="PNG, JPG, WebP, or SVG for rugs, walls, and decals."
+        description="PNG, JPG, WebP, or SVG for logos, booth backgrounds, rugs, walls, and decals."
         accept="image/png,image/jpeg,image/webp,image/svg+xml"
         kind="texture"
         busy={busy}

@@ -20,6 +20,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { upcomingOnStage, speakersForSession } from "@/lib/agenda-match";
 import { amenityLabel } from "@/lib/amenities";
 import { ringBounds } from "@/lib/geometry";
+import { displayLogoUrl } from "@/lib/hall";
 import { useUnits } from "@/lib/use-units";
 import type { Appearance, Floor, MapDocument, MapObject, Sponsor, ViewMode } from "@/lib/types";
 
@@ -92,9 +93,13 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
       modelAssetId: null as string | null,
       rugTextureAssetId: null as string | null,
       wallTextureAssetId: null as string | null,
+      logoAssetId: null as string | null,
+      fillTextureAssetId: null as string | null,
       modelUrl: String(p.modelUrl ?? ""),
       rugTextureUrl: String(p.rugTextureUrl ?? ""),
       wallTextureUrl: String(p.wallTextureUrl ?? ""),
+      logoUrl: String(p.logoUrl ?? ""),
+      fillTextureUrl: String(p.fillTextureUrl ?? ""),
     };
     if (feat.geometry.type === "Point") {
       return {
@@ -171,12 +176,13 @@ function Detail({
 }) {
   const next = upcomingOnStage(doc.sessions, selected);
   const speakers = next ? speakersForSession(next.speakerIds, doc.speakers) : [];
+  const logoUrl = displayLogoUrl(selected, [], sponsor);
   return (
     <div className="space-y-3">
-      {sponsor?.logoUrl ? (
+      {logoUrl ? (
         <div className="mx-auto w-fit bg-white p-2">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={sponsor.logoUrl} alt="" className="h-14 object-contain" />
+          <img src={logoUrl} alt="" className="h-14 object-contain" />
         </div>
       ) : null}
       {next ? (
@@ -376,9 +382,9 @@ export function ViewerApp({
                     onDoubleClick={() => frameItem(o.id)}
                     className="chrome-row"
                   >
-                    {s?.logoUrl ? (
+                    {displayLogoUrl(o, [], s) ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={s.logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
+                      <img src={displayLogoUrl(o, [], s)} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
                     ) : null}
                     <span className="min-w-0 flex-1 truncate">{title}</span>
                     {sub ? <span className="font-mono text-[10px] text-muted-foreground">{sub}</span> : null}

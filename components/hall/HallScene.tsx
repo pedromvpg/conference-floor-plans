@@ -5,10 +5,11 @@ import * as THREE from "three";
 import { Grid, useTexture } from "@react-three/drei";
 import { useThree, type ThreeEvent } from "@react-three/fiber";
 import { AMENITY_COLOR, amenityLabel } from "@/lib/amenities";
-import { resolveAppearance } from "@/lib/appearance";
+import { hallDefaults, resolveAppearance } from "@/lib/appearance";
 import { boothFillHex, HALL_THEME, type MapTone } from "@/lib/colors";
-import { rectFromCenter, rectRing, ringBounds, translateRing, venueWorldRect } from "@/lib/geometry";
-import { objectUrls, snapWorld } from "@/lib/hall";
+import { rectFromCenter, rectRing, ringBounds, venueWorldRect } from "@/lib/geometry";
+import { displayLogoUrl, objectUrls, snapWorld } from "@/lib/hall";
+import { commitShape, objectShape, translateBezier } from "@/lib/bezier";
 import { newMapObject } from "@/lib/new-object";
 import { gridSize } from "@/lib/units";
 import type {
@@ -155,6 +156,7 @@ export function HallScene({
     ox: number;
     oy: number;
     polygon: Ring | null;
+    path?: MapObject["path"];
     x: number | null;
     y: number | null;
   } | null>(null);
@@ -251,8 +253,10 @@ export function HallScene({
       if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return;
       if (obj.kind === "amenity") {
         onChangeRef.current?.({ ...obj, x: (d.x ?? 0) + dx, y: (d.y ?? 0) + dy });
-      } else if (d.polygon) {
-        onChangeRef.current?.({ ...obj, polygon: translateRing(d.polygon, dx, dy) });
+      } else if (d.polygon || d.path) {
+        const path = translateBezier(d.path?.length ? d.path : objectShape({ polygon: d.polygon, path: d.path }), dx, dy);
+        const next = commitShape(path);
+        onChangeRef.current?.({ ...obj, polygon: next.polygon, path: next.path });
       }
     }
 
@@ -321,6 +325,7 @@ export function HallScene({
       ox: p.x,
       oy: p.y,
       polygon: obj.polygon,
+      path: obj.path ?? objectShape(obj),
       x: obj.x,
       y: obj.y,
     };
@@ -428,11 +433,7 @@ export function HallScene({
             sponsorId: null,
             amenityType: null,
             color: null,
-            appearance: stampAppearance,
-            facingDeg: 0,
-            modelAssetId: stampModelAssetId,
-            rugTextureAssetId: null,
-            wallTextureAssetId: null,
+            ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
             createdAt: "",
             updatedAt: "",
           }}
@@ -534,9 +535,18 @@ function HallPlot({
       </Suspense>
     );
   }
+  const fillUrl = urls.fillTextureUrl || undefined;
+  const logoUrl = displayLogoUrl(object, assets, sponsor) || undefined;
   if (appearance === "stage") {
     return (
-      <StageKit ring={object.polygon} facingDeg={object.facingDeg ?? 0} color={rug} selected={selected} />
+      <StageKit
+        ring={object.polygon}
+        facingDeg={object.facingDeg ?? 0}
+        color={rug}
+        fillUrl={fillUrl}
+        logoUrl={logoUrl}
+        selected={selected}
+      />
     );
   }
   return (
@@ -545,8 +555,9 @@ function HallPlot({
       facingDeg={object.facingDeg ?? 0}
       rugColor={rug}
       rugUrl={urls.rugTextureUrl || undefined}
+      fillUrl={fillUrl}
       wallUrl={urls.wallTextureUrl || undefined}
-      logoUrl={sponsor?.logoUrl || undefined}
+      logoUrl={logoUrl}
       selected={selected}
     />
   );
