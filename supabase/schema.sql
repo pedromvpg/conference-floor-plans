@@ -31,6 +31,7 @@ create table if not exists public.floors (
   underlay_url text,
   original_url text,
   calibration jsonb,
+  basemap jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

@@ -11,6 +11,7 @@ export function sliceKey(slice: DraftSlice): string {
       underlayUrl: f.underlayUrl,
       originalUrl: f.originalUrl,
       calibration: f.calibration,
+      basemap: f.basemap,
     })),
     objects: slice.objects.map((o) => ({
       id: o.id,

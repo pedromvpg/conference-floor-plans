@@ -6,6 +6,7 @@ import type {
   DraftBundle,
   DraftSlice,
   Floor,
+  FloorBasemap,
   LibraryAsset,
   MapEvent,
   MapObject,
@@ -14,6 +15,7 @@ import type {
 } from "./types";
 import { MAX_DRAFT_VERSIONS, sliceKey } from "./draft-versions";
 import { buildMapDocument } from "./map-document";
+import { normalizeFloorBasemap } from "./basemap";
 import { nowIso } from "./store";
 import type { NewEventInput, NewLibraryAsset, Store } from "./store";
 import { normalizeObject } from "./appearance";
@@ -43,6 +45,7 @@ type FloorRow = {
   underlay_url: string | null;
   original_url: string | null;
   calibration: Calibration | null;
+  basemap: FloorBasemap | null;
   created_at: string;
   updated_at: string;
 };
@@ -108,6 +111,7 @@ function floorFrom(r: FloorRow): Floor {
     underlayUrl: r.underlay_url,
     originalUrl: r.original_url,
     calibration: r.calibration,
+    basemap: normalizeFloorBasemap(r.basemap),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -321,6 +325,7 @@ export class SupabaseStore implements Store {
     if (patch.underlayUrl !== undefined) row.underlay_url = patch.underlayUrl;
     if (patch.originalUrl !== undefined) row.original_url = patch.originalUrl;
     if (patch.calibration !== undefined) row.calibration = patch.calibration;
+    if (patch.basemap !== undefined) row.basemap = patch.basemap;
     const { data, error } = await this.sb.from("floors").update(row).eq("id", id).select("*").single();
     if (error) throw error;
     return floorFrom(data as FloorRow);
@@ -573,6 +578,7 @@ export class SupabaseStore implements Store {
           underlay_url: floor.underlayUrl,
           original_url: floor.originalUrl,
           calibration: floor.calibration,
+          basemap: floor.basemap,
           created_at: floor.createdAt,
           updated_at: nowIso(),
         });

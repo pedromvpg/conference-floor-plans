@@ -5,11 +5,13 @@ import type {
   LibraryAsset,
   MapDocument,
   MapEvent,
+  MapGeo,
   MapObject,
   Sponsor,
 } from "./types";
 import { closeRing } from "./geometry";
 import { resolveAppearance } from "./appearance";
+import { normalizeFloorBasemap } from "./basemap";
 
 export function buildMapDocument(input: {
   event: MapEvent;
@@ -31,7 +33,7 @@ export function buildMapDocument(input: {
     publishedAt: input.publishedAt,
     floors: floors.map((floor) => {
       const cal = floor.calibration;
-      const features: GeoJSON.Feature[] = input.objects
+      const features: MapGeo.Feature[] = input.objects
         .filter((o) => o.floorId === floor.id)
         .map((o) => objectToFeature(o, sponsorById, assetById));
       return {
@@ -48,6 +50,7 @@ export function buildMapDocument(input: {
           originY: cal?.originY ?? 0,
           rotationDeg: cal?.rotationDeg ?? 0,
         },
+        basemap: normalizeFloorBasemap(floor.basemap),
         features: { type: "FeatureCollection", features },
       };
     }),
@@ -80,7 +83,7 @@ function objectToFeature(
   o: MapObject,
   sponsorById: Map<string, Sponsor>,
   assetById: Map<string, LibraryAsset>,
-): GeoJSON.Feature {
+): MapGeo.Feature {
   const sponsor = o.sponsorId ? sponsorById.get(o.sponsorId) : undefined;
   const model = o.modelAssetId ? assetById.get(o.modelAssetId) : undefined;
   const rug = o.rugTextureAssetId ? assetById.get(o.rugTextureAssetId) : undefined;

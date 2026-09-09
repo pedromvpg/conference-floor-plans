@@ -17,6 +17,7 @@ import type {
 import { MAX_DRAFT_VERSIONS, sliceKey } from "./draft-versions";
 import { buildMapDocument } from "./map-document";
 import { hallDefaults, normalizeObject } from "./appearance";
+import { normalizeFloorBasemap } from "./basemap";
 import { newId, nowIso, type NewEventInput, type NewLibraryAsset, type Store } from "./store";
 import zones from "../seed/bhk26-zones.json";
 
@@ -111,6 +112,7 @@ async function loadDbUnlocked(): Promise<Db> {
   }
   const raw = await readFile(DB_PATH, "utf8");
   const db = parseDbJson(raw);
+  db.floors = db.floors.map((f) => ({ ...f, basemap: normalizeFloorBasemap(f.basemap) }));
   db.draftVersions ??= [];
   db.sessions ??= [];
   db.speakers ??= [];
@@ -200,6 +202,7 @@ async function seedBhk26(db: Db): Promise<Db> {
       widthPx: zones.widthPx,
       heightPx: zones.heightPx,
     },
+    basemap: null,
     createdAt: t,
     updatedAt: t,
   };
@@ -351,6 +354,7 @@ export class DemoStore implements Store {
         underlayUrl: null,
         originalUrl: null,
         calibration: null,
+        basemap: null,
         createdAt: t,
         updatedAt: t,
       };

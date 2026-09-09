@@ -36,6 +36,16 @@ export type Calibration = {
   heightPx: number;
 };
 
+export type FloorBasemap = {
+  enabled: boolean;
+  lat: number;
+  lng: number;
+  zoom: number;
+  opacity: number;
+  /** MapLibre bearing: 0 = north up, 90 = east up (clockwise from north). */
+  bearing: number;
+};
+
 export type MapEvent = {
   id: string;
   slug: string;
@@ -61,6 +71,7 @@ export type Floor = {
   underlayUrl: string | null;
   originalUrl: string | null;
   calibration: Calibration | null;
+  basemap: FloorBasemap | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -164,7 +175,9 @@ export type MapDocumentFloor = {
     originY: number;
     rotationDeg: number;
   };
-  features: GeoJSON.FeatureCollection;
+  /** Present when an OSM background was enabled at publish time. */
+  basemap?: FloorBasemap | null;
+  features: MapGeo.FeatureCollection;
 };
 
 export type MapDocumentSponsor = {
@@ -218,19 +231,16 @@ export type DraftBundle = {
   publication: Publication | null;
 };
 
-declare global {
-  // eslint-disable-next-line @typescript-eslint/no-namespace
-  namespace GeoJSON {
-    type Position = [number, number];
-    type Polygon = { type: "Polygon"; coordinates: Position[][] };
-    type Point = { type: "Point"; coordinates: Position };
-    type Geometry = Polygon | Point;
-    type Feature = {
-      type: "Feature";
-      id?: string;
-      geometry: Geometry;
-      properties: Record<string, unknown>;
-    };
-    type FeatureCollection = { type: "FeatureCollection"; features: Feature[] };
-  }
+export namespace MapGeo {
+  export type Position = [number, number];
+  export type Polygon = { type: "Polygon"; coordinates: Position[][] };
+  export type Point = { type: "Point"; coordinates: Position };
+  export type Geometry = Polygon | Point;
+  export type Feature = {
+    type: "Feature";
+    id?: string;
+    geometry: Geometry;
+    properties: Record<string, unknown>;
+  };
+  export type FeatureCollection = { type: "FeatureCollection"; features: Feature[] };
 }
