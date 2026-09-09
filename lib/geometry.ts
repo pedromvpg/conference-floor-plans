@@ -331,9 +331,13 @@ export function alignmentTargets(
   underlayH: number,
   originX = 0,
   originY = 0,
+  include: { objects?: boolean; underlay?: boolean } = {},
 ): { xs: number[]; ys: number[] } {
-  const xs = [originX, originX + underlayW / 2, originX + underlayW];
-  const ys = [originY, originY + underlayH / 2, originY + underlayH];
+  const includeObjects = include.objects !== false;
+  const includeUnderlay = include.underlay !== false;
+  const xs: number[] = includeUnderlay ? [originX, originX + underlayW / 2, originX + underlayW] : [];
+  const ys: number[] = includeUnderlay ? [originY, originY + underlayH / 2, originY + underlayH] : [];
+  if (!includeObjects) return { xs, ys };
   for (const o of objects) {
     if (skipId && o.id === skipId) continue;
     if (o.polygon?.length) {

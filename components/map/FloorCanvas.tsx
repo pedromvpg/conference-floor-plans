@@ -57,7 +57,7 @@ import {
   venueWorldRect,
   type BoundsHandle,
 } from "@/lib/geometry";
-import { formatSize, gridSize } from "@/lib/units";
+import { formatSize, gridSize, snap } from "@/lib/units";
 import { AMENITY_COLOR, amenityLabel } from "@/lib/amenities";
 import { tierFill } from "@/lib/colors";
 import { newId, nowIso } from "@/lib/store";
@@ -121,6 +121,8 @@ type Props = {
   knownLengthMeters?: number;
   underlayOpacity?: number;
   showGrid?: boolean;
+  snapToObjects?: boolean;
+  snapToUnits?: boolean;
   /** Increment to animate the camera so `selectedId` fills the view. */
   frameNonce?: number;
   /** Increment to frame the drawing and all objects. */
@@ -317,6 +319,8 @@ export function FloorCanvas({
   knownLengthMeters = 10,
   underlayOpacity = 1,
   showGrid = mode === "edit",
+  snapToObjects = true,
+  snapToUnits = false,
   frameNonce = 0,
   fitNonce = 0,
   editLayer = "objects",
@@ -544,15 +548,19 @@ export function FloorCanvas({
     let usedDy = dy;
     const primary = starts[0];
     if (primary?.polygon && !altSnapOff.current) {
-      const pix = snapToPixel((primary.polygon[0]?.[0] ?? 0) + dx, (primary.polygon[0]?.[1] ?? 0) + dy, cal);
+      const pix = snapBase((primary.polygon[0]?.[0] ?? 0) + dx, (primary.polygon[0]?.[1] ?? 0) + dy);
       usedDx = pix.x - (primary.polygon[0]?.[0] ?? 0);
       usedDy = pix.y - (primary.polygon[0]?.[1] ?? 0);
       const b = ringBounds(primary.polygon);
-      const { xs, ys } = alignmentTargets(objects, primary.id, underlayW, underlayH, underlayX, underlayY);
-      const mag = snapTranslation(b, usedDx, usedDy, xs, ys, snapThreshNow());
-      usedDx = mag.dx;
-      usedDy = mag.dy;
-      setGuides({ gx: mag.gx, gy: mag.gy });
+      const { xs, ys } = objectAlignTargets(primary.id);
+      if (xs.length || ys.length) {
+        const mag = snapTranslation(b, usedDx, usedDy, xs, ys, snapThreshNow());
+        usedDx = mag.dx;
+        usedDy = mag.dy;
+        setGuides({ gx: mag.gx, gy: mag.gy });
+      } else {
+        setGuides({ gx: [], gy: [] });
+      }
     } else if (primary && primary.x != null && primary.y != null) {
       const p = snapPoint(primary.x + dx, primary.y + dy, primary.id);
       usedDx = p.x - primary.x;
@@ -753,15 +761,32 @@ export function FloorCanvas({
     return screenPx(10, ppm);
   }
 
+  function snapBase(x: number, y: number) {
+    if (altSnapOff.current) return { x, y };
+    if (snapToUnits) {
+      const g = gridSize(units);
+      return { x: snap(x, g), y: snap(y, g) };
+    }
+    return snapToPixel(x, y, cal);
+  }
+
+  function objectAlignTargets(skipId: string | null) {
+    if (!snapToObjects) return { xs: [] as number[], ys: [] as number[] };
+    return alignmentTargets(objects, skipId, underlayW, underlayH, underlayX, underlayY, {
+      objects: true,
+      underlay: false,
+    });
+  }
+
   function snapPoint(x: number, y: number, skipId: string | null) {
     if (altSnapOff.current) return { x, y, gx: [] as number[], gy: [] as number[] };
-    const pix = snapToPixel(x, y, cal);
-    const { xs, ys } = alignmentTargets(objects, skipId, underlayW, underlayH, underlayX, underlayY);
+    const pix = snapBase(x, y);
+    const { xs, ys } = objectAlignTargets(skipId);
     const thresh = snapThreshNow();
     const gx: number[] = [];
     const gy: number[] = [];
-    const sx = snapScalar(pix.x, xs, thresh);
-    const sy = snapScalar(pix.y, ys, thresh);
+    const sx = xs.length ? snapScalar(pix.x, xs, thresh) : null;
+    const sy = ys.length ? snapScalar(pix.y, ys, thresh) : null;
     if (sx != null) gx.push(sx);
     if (sy != null) gy.push(sy);
     return { x: sx ?? pix.x, y: sy ?? pix.y, gx, gy };
@@ -1397,7 +1422,7 @@ export function FloorCanvas({
         const lock = e.shiftKey ? !constrainProportions : constrainProportions;
         let nextB = d.startBounds;
         if (d.mode === "resize" && d.handle) {
-          const cursor = altSnapOff.current ? w : snapToPixel(w.x, w.y, liveCal);
+          const cursor = snapBase(w.x, w.y);
           nextB = { ...resizeBounds(d.startBounds, d.handle, cursor.x, cursor.y, 0, lock), w: 0, h: 0 };
           nextB = {
             minX: nextB.minX,
@@ -1447,7 +1472,7 @@ export function FloorCanvas({
           return;
         }
         if ((d.mode === "vertex" || d.mode === "handle-in" || d.mode === "handle-out") && d.path && d.vertex != null) {
-          const cursor = altSnapOff.current ? w : snapToPixel(w.x, w.y, cal);
+          const cursor = snapBase(w.x, w.y);
           let nextPath = d.path;
           if (d.mode === "vertex") nextPath = d.path.map((n, i) => (i === d.vertex ? { ...n, x: cursor.x, y: cursor.y } : n));
           else {
@@ -1459,8 +1484,15 @@ export function FloorCanvas({
         }
         if (d.mode === "resize" && d.polygon && d.handle && d.startBounds) {
           const lock = e.shiftKey ? !constrainProportions : constrainProportions;
-          const cursor = altSnapOff.current ? w : snapToPixel(w.x, w.y, cal);
-          const nextB = resizeBounds(d.startBounds, d.handle, cursor.x, cursor.y, 0, lock);
+          const cursor = snapBase(w.x, w.y);
+          const nextB = resizeBounds(
+            d.startBounds,
+            d.handle,
+            cursor.x,
+            cursor.y,
+            snapToUnits ? gridSize(units) : 0,
+            lock,
+          );
           const path = d.path?.length
             ? applyBoundsToBezier(d.path, d.startBounds, nextB)
             : null;
@@ -1482,15 +1514,19 @@ export function FloorCanvas({
           onChangeObject?.({ ...obj, x: p.x, y: p.y });
         } else if (d.polygon) {
           if (!altSnapOff.current) {
-            const pix = snapToPixel((d.polygon[0]?.[0] ?? 0) + dx, (d.polygon[0]?.[1] ?? 0) + dy, cal);
+            const pix = snapBase((d.polygon[0]?.[0] ?? 0) + dx, (d.polygon[0]?.[1] ?? 0) + dy);
             dx = pix.x - (d.polygon[0]?.[0] ?? 0);
             dy = pix.y - (d.polygon[0]?.[1] ?? 0);
             const b = ringBounds(d.polygon);
-            const { xs, ys } = alignmentTargets(objects, obj.id, underlayW, underlayH, underlayX, underlayY);
-            const mag = snapTranslation(b, dx, dy, xs, ys, snapThreshNow());
-            dx = mag.dx;
-            dy = mag.dy;
-            setGuides({ gx: mag.gx, gy: mag.gy });
+            const { xs, ys } = objectAlignTargets(obj.id);
+            if (xs.length || ys.length) {
+              const mag = snapTranslation(b, dx, dy, xs, ys, snapThreshNow());
+              dx = mag.dx;
+              dy = mag.dy;
+              setGuides({ gx: mag.gx, gy: mag.gy });
+            } else {
+              setGuides({ gx: [], gy: [] });
+            }
           } else {
             setGuides({ gx: [], gy: [] });
           }
