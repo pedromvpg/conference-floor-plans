@@ -4,9 +4,11 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type {
   AmenityType,
   Appearance,
+  BezierNode,
   Calibration,
   Floor,
   FloorBasemap,
+  LibraryAsset,
   MapObject,
   Ring,
   Sponsor,
@@ -29,6 +31,7 @@ function calibrationNearlyEqual(a: Calibration, b: Calibration): boolean {
 }
 import {
   alignmentTargets,
+  angleDeg,
   applyBoundsToRing,
   axisScale,
   calibrationFromTwoClicks,
@@ -43,6 +46,9 @@ import {
   resizeBounds,
   ringBounds,
   ringCentroid,
+  rotateHandlePos,
+  rotateRing,
+  snapDeg,
   snapToPixel,
   snapScalar,
   snapTranslation,
@@ -56,14 +62,33 @@ import { AMENITY_COLOR, amenityLabel } from "@/lib/amenities";
 import { tierFill } from "@/lib/colors";
 import { newId, nowIso } from "@/lib/store";
 import { hallDefaults } from "@/lib/appearance";
+import { displayLogoUrl, objectUrls } from "@/lib/hall";
+import {
+  applyBoundsToBezier,
+  closestOnPath,
+  commitShape,
+  corner,
+  dragHandle,
+  insertNode,
+  objectShape,
+  setMirroredHandles,
+  svgPathD,
+  tessellate,
+  toggleSmooth,
+  translateBezier,
+} from "@/lib/bezier";
 import {
   LAYER_ATTR,
-  appendSvgPolygon,
+  LOCK_ATTR,
+  appendSvgBezier,
   appendSvgRect,
   lastSvgLayerId,
   layerAttrSelector,
+  setSvgElementBezier,
   setSvgElementPoint,
-  svgElementPoints,
+  setSvgElementRotation,
+  svgElementBezier,
+  svgElementRotation,
   svgInnerMarkup,
   svgViewBox,
   translateSvgElement,
@@ -74,6 +99,7 @@ type Props = {
   floor: Floor;
   objects: MapObject[];
   sponsors: Sponsor[];
+  assets?: LibraryAsset[];
   selectedId: string | null;
   highlightId?: string | null;
   tool?: Tool;
@@ -122,6 +148,8 @@ type Props = {
 type Cam = { x: number; y: number; w: number; h: number };
 
 const HANDLE_HALF_PX = 5;
+const VERTEX_HIT_PX = 12;
+const STROKE_HIT_PX = 10;
 const STROKE_SELECTED_PX = 2;
 const STROKE_DEFAULT_PX = 1;
 
@@ -239,11 +267,19 @@ function handleXY(
   return [x, y];
 }
 
+function amenityBounds(o: MapObject): { minX: number; minY: number; maxX: number; maxY: number; w: number; h: number } {
+  const r = 1.15;
+  const x = o.x ?? 0;
+  const y = o.y ?? 0;
+  return { minX: x - r, minY: y - r, maxX: x + r, maxY: y + r, w: r * 2, h: r * 2 };
+}
+
 export function FloorCanvas({
   mode,
   floor,
   objects,
   sponsors,
+  assets = [],
   selectedId,
   selectedIds,
   highlightId,
@@ -287,11 +323,15 @@ export function FloorCanvas({
   const lastVenuePreview = useRef<string | null>(null);
   const svgElDrag = useRef<{
     id: string;
-    mode: "move" | "vertex";
+    mode: "move" | "vertex" | "handle-in" | "handle-out" | "rotate";
     vertex?: number;
     startMarkup: string;
     ox: number;
     oy: number;
+    nodes?: BezierNode[];
+    closed?: boolean;
+    startAngle?: number;
+    startRot?: number;
   } | null>(null);
   const svgElPending = useRef<{
     id: string;
@@ -316,7 +356,11 @@ export function FloorCanvas({
   const camAnim = useRef<number | null>(null);
   const [pulseId, setPulseId] = useState<string | null>(null);
   const [draftRect, setDraftRect] = useState<Ring | null>(null);
-  const [draftPoly, setDraftPoly] = useState<Ring>([]);
+  const [draftNodes, setDraftNodes] = useState<BezierNode[]>([]);
+  const [draftCursor, setDraftCursor] = useState<{ x: number; y: number } | null>(null);
+  const [editAnchor, setEditAnchor] = useState<number | null>(null);
+  const [venueAnchor, setVenueAnchor] = useState<number | null>(null);
+  const penPress = useRef<{ index: number; x: number; y: number } | null>(null);
   const [calPts, setCalPts] = useState<{ x: number; y: number }[]>([]);
   const [calCursor, setCalCursor] = useState<{ x: number; y: number } | null>(null);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
@@ -326,15 +370,19 @@ export function FloorCanvas({
   const drag = useRef<{
     id: string;
     ids?: string[];
-    starts?: { id: string; polygon: Ring | null; x: number | null; y: number | null }[];
-    mode: "move" | "resize";
+    starts?: { id: string; polygon: Ring | null; path: BezierNode[] | null; x: number | null; y: number | null }[];
+    mode: "move" | "resize" | "vertex" | "handle-in" | "handle-out" | "rotate";
     handle?: BoundsHandle;
     ox: number;
     oy: number;
     polygon: Ring | null;
+    path?: BezierNode[] | null;
+    vertex?: number;
     x: number | null;
     y: number | null;
     startBounds?: ReturnType<typeof ringBounds>;
+    startAngle?: number;
+    startRot?: number;
   } | null>(null);
   const pendingMove = useRef<{
     clientX: number;
@@ -351,7 +399,7 @@ export function FloorCanvas({
   const calPress = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const altSnapOff = useRef(false);
   const [guides, setGuides] = useState<{ gx: number[]; gy: number[] }>({ gx: [], gy: [] });
-  const [hoverHandle, setHoverHandle] = useState<BoundsHandle | null>(null);
+  const [hoverHandle, setHoverHandle] = useState<BoundsHandle | "rotate" | null>(null);
   const [previewCal, setPreviewCal] = useState<Calibration | null>(null);
 
   function cancelCamAnim() {
@@ -470,7 +518,7 @@ export function FloorCanvas({
   }
 
   function commitGroupMove(
-    starts: { id: string; polygon: Ring | null; x: number | null; y: number | null }[],
+    starts: { id: string; polygon: Ring | null; path?: BezierNode[] | null; x: number | null; y: number | null }[],
     dx: number,
     dy: number,
   ) {
@@ -501,8 +549,13 @@ export function FloorCanvas({
       if (!obj) continue;
       if (obj.kind === "amenity" && s.x != null && s.y != null) {
         next.push({ ...obj, x: s.x + usedDx, y: s.y + usedDy });
-      } else if (s.polygon) {
-        next.push({ ...obj, polygon: translateRing(s.polygon, usedDx, usedDy) });
+      } else if (s.polygon || s.path) {
+        const path = s.path?.length ? translateBezier(s.path, usedDx, usedDy) : null;
+        next.push({
+          ...obj,
+          polygon: path ? tessellate(path, true) : s.polygon ? translateRing(s.polygon, usedDx, usedDy) : obj.polygon,
+          path,
+        });
       }
     }
     if (!next.length) return;
@@ -524,7 +577,28 @@ export function FloorCanvas({
     };
   }
 
+  function worldNodesToSvg(nodes: BezierNode[]): BezierNode[] | null {
+    const out: BezierNode[] = [];
+    for (const n of nodes) {
+      const p = worldToSvgPt(n.x, n.y);
+      const hin = worldToSvgPt(n.x + n.inDx, n.y + n.inDy);
+      const hout = worldToSvgPt(n.x + n.outDx, n.y + n.outDy);
+      if (!p || !hin || !hout) return null;
+      out.push({
+        ...n,
+        x: p.x,
+        y: p.y,
+        inDx: hin.x - p.x,
+        inDy: hin.y - p.y,
+        outDx: hout.x - p.x,
+        outDy: hout.y - p.y,
+      });
+    }
+    return out;
+  }
+
   function commitVenueRing(ring: Ring, kind: "rect" | "polygon") {
+    if (kind === "polygon") return commitVenuePath(ring.map(([x, y]) => corner(x, y)));
     if (!underlaySvg) return false;
     const pts = ring.map(([x, y]) => worldToSvgPt(x, y)).filter((p): p is { x: number; y: number } => Boolean(p));
     if (pts.length < 3) return false;
@@ -535,10 +609,17 @@ export function FloorCanvas({
     const maxX = Math.max(...xs);
     const maxY = Math.max(...ys);
     if (maxX - minX < 1 && maxY - minY < 1) return false;
-    const next =
-      kind === "rect"
-        ? appendSvgRect(underlaySvg, minX, minY, maxX - minX, maxY - minY)
-        : appendSvgPolygon(underlaySvg, pts);
+    const next = appendSvgRect(underlaySvg, minX, minY, maxX - minX, maxY - minY);
+    onCommitVenueSvg?.(next);
+    onSelectVenueElement?.(lastSvgLayerId(next));
+    return true;
+  }
+
+  function commitVenuePath(nodes: BezierNode[]) {
+    if (!underlaySvg) return false;
+    const svgNodes = worldNodesToSvg(nodes);
+    if (!svgNodes || svgNodes.length < 3) return false;
+    const next = appendSvgBezier(underlaySvg, svgNodes, true);
     onCommitVenueSvg?.(next);
     onSelectVenueElement?.(lastSvgLayerId(next));
     return true;
@@ -569,10 +650,17 @@ export function FloorCanvas({
   }
 
   function venueElFromEvent(e: React.PointerEvent): string | null {
-    const t = e.target;
-    if (!(t instanceof Element)) return null;
-    const hit = t.closest(`[${LAYER_ATTR}]`);
-    return hit?.getAttribute(LAYER_ATTR) ?? null;
+    let node: Element | null = e.target instanceof Element ? e.target : null;
+    while (node) {
+      const hit = node.closest(`[${LAYER_ATTR}]`);
+      if (!hit) return null;
+      if (hit.getAttribute(LOCK_ATTR) === "1") {
+        node = hit.parentElement;
+        continue;
+      }
+      return hit.getAttribute(LAYER_ATTR);
+    }
+    return null;
   }
 
   function nestLayerEl(id: string): SVGGraphicsElement | null {
@@ -635,6 +723,7 @@ export function FloorCanvas({
       .map((o) => ({
         id: o.id,
         polygon: o.polygon ? o.polygon.map((p) => [...p] as [number, number]) : null,
+        path: o.path ? o.path.map((n) => ({ ...n })) : objectShape(o),
         x: o.x,
         y: o.y,
       }));
@@ -780,19 +869,53 @@ export function FloorCanvas({
         const hrEl = screenPx(HANDLE_HALF_PX, ppm);
         if (selectedVenueElementId) {
           const live = nestLayerEl(selectedVenueElementId);
-          const pts = svgElementPoints(underlaySvg, selectedVenueElementId);
-          if (live && pts) {
-            for (let i = 0; i < pts.length; i++) {
-              const svg = svgRef.current;
-              if (!svg) break;
+          const selectedLocked = live?.getAttribute(LOCK_ATTR) === "1";
+          const parsed = !selectedLocked ? svgElementBezier(underlaySvg, selectedVenueElementId) : null;
+          const svg = svgRef.current;
+          if (live && parsed && svg) {
+            const toW = (x: number, y: number) => {
               const pt = svg.createSVGPoint();
-              pt.x = pts[i].x;
-              pt.y = pts[i].y;
+              pt.x = x;
+              pt.y = y;
               const ctm = live.getScreenCTM();
-              if (!ctm) continue;
+              if (!ctm) return { x: 0, y: 0 };
               const screen = pt.matrixTransform(ctm);
-              const world = toWorld(screen.x, screen.y);
-              if (hypot(w.x - world.x, w.y - world.y) <= hrEl * 1.8) {
+              return toWorld(screen.x, screen.y);
+            };
+            if (venueAnchor != null && parsed.nodes[venueAnchor] && e.detail !== 2) {
+              const n = parsed.nodes[venueAnchor];
+              for (const which of ["out", "in"] as const) {
+                const hx = n.x + (which === "out" ? n.outDx : n.inDx);
+                const hy = n.y + (which === "out" ? n.outDy : n.inDy);
+                const world = toW(hx, hy);
+                if (hypot(w.x - world.x, w.y - world.y) <= hrEl * 1.8) {
+                  svgElDrag.current = {
+                    id: selectedVenueElementId,
+                    mode: which === "out" ? "handle-out" : "handle-in",
+                    vertex: venueAnchor,
+                    startMarkup: underlaySvg,
+                    ox: n.x,
+                    oy: n.y,
+                    nodes: parsed.nodes,
+                    closed: parsed.closed,
+                  };
+                  lastVenuePreview.current = underlaySvg;
+                  return;
+                }
+              }
+            }
+            const vertexSlop = screenPx(VERTEX_HIT_PX, ppm);
+            const strokeSlop = screenPx(STROKE_HIT_PX, ppm);
+            for (let i = 0; i < parsed.nodes.length; i++) {
+              const world = toW(parsed.nodes[i].x, parsed.nodes[i].y);
+              if (hypot(w.x - world.x, w.y - world.y) <= vertexSlop) {
+                setVenueAnchor(i);
+                if (e.detail === 2) {
+                  const nextNodes = toggleSmooth(parsed.nodes, i, parsed.closed);
+                  const next = setSvgElementBezier(underlaySvg, selectedVenueElementId, nextNodes, parsed.closed);
+                  onCommitVenueSvg?.(next);
+                  return;
+                }
                 const local = clientToSvgEl(live, e.clientX, e.clientY);
                 svgElDrag.current = {
                   id: selectedVenueElementId,
@@ -801,9 +924,25 @@ export function FloorCanvas({
                   startMarkup: underlaySvg,
                   ox: local.x,
                   oy: local.y,
+                  nodes: parsed.nodes,
+                  closed: parsed.closed,
                 };
                 lastVenuePreview.current = underlaySvg;
                 return;
+              }
+            }
+            if (e.detail !== 2) {
+              const local = clientToSvgEl(live, e.clientX, e.clientY);
+              const near = closestOnPath(parsed.nodes, local.x, local.y, parsed.closed);
+              if (near && near.t > 0.04 && near.t < 0.96) {
+                const worldHit = toW(near.x, near.y);
+                if (hypot(w.x - worldHit.x, w.y - worldHit.y) <= strokeSlop) {
+                  const nextNodes = insertNode(parsed.nodes, near.index, near.t, parsed.closed);
+                  const next = setSvgElementBezier(underlaySvg, selectedVenueElementId, nextNodes, parsed.closed);
+                  onCommitVenueSvg?.(next);
+                  setVenueAnchor(near.index + 1);
+                  return;
+                }
               }
             }
           }
@@ -811,6 +950,7 @@ export function FloorCanvas({
         const elId = venueElFromEvent(e);
         if (elId) {
           onSelectVenueElement?.(elId);
+          setVenueAnchor(null);
           const live = nestLayerEl(elId);
           const parent =
             live?.parentNode instanceof SVGGraphicsElement ? live.parentNode : nestRef.current;
@@ -827,10 +967,69 @@ export function FloorCanvas({
           return;
         }
         onSelectVenueElement?.(null);
+        setVenueAnchor(null);
       }
       const sole =
         selectedSet.size === 1 ? objects.find((o) => selectedSet.has(o.id)) : undefined;
       if (canEditObjects && tool === "select" && sole?.polygon) {
+        const shape = objectShape(sole);
+        const ppmObj = svgUserToScreen(svgRef.current, cam.w, cam.h);
+        const hrV = screenPx(HANDLE_HALF_PX, ppmObj);
+        const vertexSlop = screenPx(VERTEX_HIT_PX, ppmObj);
+        const strokeSlop = screenPx(STROKE_HIT_PX, ppmObj);
+        if (editAnchor != null && shape[editAnchor] && e.detail !== 2) {
+          const n = shape[editAnchor];
+          for (const which of ["out", "in"] as const) {
+            const hx = n.x + (which === "out" ? n.outDx : n.inDx);
+            const hy = n.y + (which === "out" ? n.outDy : n.inDy);
+            if (hypot(w.x - hx, w.y - hy) <= hrV * 1.8) {
+              drag.current = {
+                id: sole.id,
+                mode: which === "out" ? "handle-out" : "handle-in",
+                vertex: editAnchor,
+                ox: w.x,
+                oy: w.y,
+                polygon: sole.polygon,
+                path: shape.map((node) => ({ ...node })),
+                x: sole.x,
+                y: sole.y,
+              };
+              return;
+            }
+          }
+        }
+        for (let i = 0; i < shape.length; i++) {
+          if (hypot(w.x - shape[i].x, w.y - shape[i].y) <= vertexSlop) {
+            setEditAnchor(i);
+            if (e.detail === 2) {
+              const next = commitShape(toggleSmooth(shape, i, true));
+              onChangeObject?.({ ...sole, ...next });
+              return;
+            }
+            drag.current = {
+              id: sole.id,
+              mode: "vertex",
+              vertex: i,
+              ox: w.x,
+              oy: w.y,
+              polygon: sole.polygon,
+              path: shape.map((node) => ({ ...node })),
+              x: sole.x,
+              y: sole.y,
+            };
+            return;
+          }
+        }
+        if (e.detail !== 2) {
+          const near = closestOnPath(shape, w.x, w.y, true);
+          if (near && near.t > 0.04 && near.t < 0.96 && near.dist <= strokeSlop) {
+            const nextPath = insertNode(shape, near.index, near.t, true);
+            const next = commitShape(nextPath);
+            onChangeObject?.({ ...sole, ...next });
+            setEditAnchor(near.index + 1);
+            return;
+          }
+        }
         const b = ringBounds(sole.polygon);
         let handle: BoundsHandle | null = null;
         for (const h of HANDLES) {
@@ -848,6 +1047,7 @@ export function FloorCanvas({
             ox: w.x,
             oy: w.y,
             polygon: sole.polygon.map((p) => [...p] as [number, number]),
+            path: shape.map((node) => ({ ...node })),
             x: sole.x,
             y: sole.y,
             startBounds: b,
@@ -957,7 +1157,17 @@ export function FloorCanvas({
       if (!canEditObjects && !drawVenueShapes) return;
       const p = snapPoint(w.x, w.y, null);
       setGuides({ gx: p.gx, gy: p.gy });
-      setDraftPoly((prev) => [...prev, [p.x, p.y]]);
+      const first = draftNodes[0];
+      const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
+      const closeR = screenPx(10, ppm);
+      if (first && draftNodes.length >= 3 && hypot(p.x - first.x, p.y - first.y) <= closeR) {
+        closePolygon();
+        return;
+      }
+      const node = corner(p.x, p.y);
+      setDraftNodes((prev) => [...prev, node]);
+      penPress.current = { index: draftNodes.length, x: p.x, y: p.y };
+      return;
     }
   }
 
@@ -1001,6 +1211,19 @@ export function FloorCanvas({
       } else if (d.mode === "vertex" && d.vertex != null && live) {
         const local = clientToSvgEl(live, e.clientX, e.clientY);
         const next = setSvgElementPoint(d.startMarkup, d.id, d.vertex, local);
+        lastVenuePreview.current = next;
+        onPreviewVenueSvg?.(next);
+      } else if ((d.mode === "handle-in" || d.mode === "handle-out") && d.vertex != null && live && d.nodes) {
+        const local = clientToSvgEl(live, e.clientX, e.clientY);
+        const nextNodes = dragHandle(
+          d.nodes,
+          d.vertex,
+          d.mode === "handle-out" ? "out" : "in",
+          local.x,
+          local.y,
+          e.altKey,
+        );
+        const next = setSvgElementBezier(d.startMarkup, d.id, nextNodes, d.closed ?? true);
         lastVenuePreview.current = next;
         onPreviewVenueSvg?.(next);
       }
@@ -1107,11 +1330,29 @@ export function FloorCanvas({
       }
       const obj = objects.find((o) => o.id === d.id);
       if (obj) {
+        if ((d.mode === "vertex" || d.mode === "handle-in" || d.mode === "handle-out") && d.path && d.vertex != null) {
+          const cursor = altSnapOff.current ? w : snapToPixel(w.x, w.y, cal);
+          let nextPath = d.path;
+          if (d.mode === "vertex") nextPath = d.path.map((n, i) => (i === d.vertex ? { ...n, x: cursor.x, y: cursor.y } : n));
+          else {
+            nextPath = dragHandle(d.path, d.vertex, d.mode === "handle-out" ? "out" : "in", cursor.x, cursor.y, e.altKey);
+          }
+          const next = commitShape(nextPath);
+          onChangeObject?.({ ...obj, ...next });
+          return;
+        }
         if (d.mode === "resize" && d.polygon && d.handle && d.startBounds) {
           const lock = e.shiftKey ? !constrainProportions : constrainProportions;
           const cursor = altSnapOff.current ? w : snapToPixel(w.x, w.y, cal);
           const nextB = resizeBounds(d.startBounds, d.handle, cursor.x, cursor.y, 0, lock);
-          onChangeObject?.({ ...obj, polygon: applyBoundsToRing(d.polygon, nextB) });
+          const path = d.path?.length
+            ? applyBoundsToBezier(d.path, d.startBounds, nextB)
+            : null;
+          onChangeObject?.({
+            ...obj,
+            polygon: path ? tessellate(path, true) : applyBoundsToRing(d.polygon, nextB),
+            path,
+          });
           setGuides({ gx: [nextB.minX, nextB.maxX], gy: [nextB.minY, nextB.maxY] });
           return;
         }
@@ -1137,7 +1378,11 @@ export function FloorCanvas({
           } else {
             setGuides({ gx: [], gy: [] });
           }
-          onChangeObject?.({ ...obj, polygon: translateRing(d.polygon, dx, dy) });
+          onChangeObject?.({
+            ...obj,
+            polygon: translateRing(d.polygon, dx, dy),
+            path: d.path?.length ? translateBezier(d.path, dx, dy) : obj.path ? translateBezier(objectShape(obj), dx, dy) : null,
+          });
         }
       }
       return;
@@ -1151,6 +1396,21 @@ export function FloorCanvas({
         setDraftRect(squareRectRing(drawing.current.x, drawing.current.y, p.x, p.y, 0));
       } else {
         setDraftRect(rectRing(drawing.current.x, drawing.current.y, p.x, p.y, 0));
+      }
+      return;
+    }
+    if (tool === "polygon" && (draftNodes.length || penPress.current)) {
+      const p = snapPoint(w.x, w.y, null);
+      setDraftCursor({ x: p.x, y: p.y });
+      setGuides({ gx: p.gx, gy: p.gy });
+      if (penPress.current) {
+        const dx = p.x - penPress.current.x;
+        const dy = p.y - penPress.current.y;
+        const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
+        if (hypot(dx, dy) > screenPx(3, ppm)) {
+          const idx = penPress.current.index;
+          setDraftNodes((nodes) => setMirroredHandles(nodes, idx, dx, dy));
+        }
       }
       return;
     }
@@ -1251,6 +1511,7 @@ export function FloorCanvas({
     }
     drawing.current = null;
     setDraftRect(null);
+    penPress.current = null;
     drag.current = null;
     panLast.current = null;
     if (mode === "view" && viewPress.current && !viewPress.current.moved && remaining === 0) {
@@ -1263,21 +1524,25 @@ export function FloorCanvas({
   }
 
   function closePolygon() {
-    if (draftPoly.length < 3) {
-      setDraftPoly([]);
+    if (draftNodes.length < 3) {
+      setDraftNodes([]);
+      setDraftCursor(null);
       return;
     }
     if (drawVenueShapes) {
-      commitVenueRing(draftPoly, "polygon");
-      setDraftPoly([]);
+      commitVenuePath(draftNodes);
+      setDraftNodes([]);
+      setDraftCursor(null);
       return;
     }
     const t = nowIso();
+    const shape = commitShape(draftNodes);
     onCreateObject?.({
       id: newId(),
       floorId: floor.id,
       kind: "booth",
-      polygon: draftPoly,
+      polygon: shape.polygon,
+      path: shape.path,
       x: null,
       y: null,
       rotation: 0,
@@ -1290,15 +1555,22 @@ export function FloorCanvas({
       createdAt: t,
       updatedAt: t,
     });
-    setDraftPoly([]);
+    setDraftNodes([]);
+    setDraftCursor(null);
   }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === "Enter" && draftPoly.length) closePolygon();
+      if (e.key === "Enter" && draftNodes.length) closePolygon();
+      if ((e.key === "Backspace" || e.key === "Delete") && tool === "polygon" && draftNodes.length) {
+        e.preventDefault();
+        setDraftNodes((n) => n.slice(0, -1));
+        return;
+      }
       if (e.key === "Escape") {
-        setDraftPoly([]);
+        setDraftNodes([]);
+        setDraftCursor(null);
         setDraftRect(null);
         setCalPts([]);
         emitSelect([]);
@@ -1349,31 +1621,43 @@ export function FloorCanvas({
   const strokeDefault = screenPx(STROKE_DEFAULT_PX, pxPerMeterScreen);
   const meterGrid = gridSize(units);
   const showPixelGrid = Boolean(cal) && pxPerMeterScreen * px.x >= 6;
-  const [elHandles, setElHandles] = useState<{ x: number; y: number }[]>([]);
+  const [elHandles, setElHandles] = useState<{ x: number; y: number; kind: "anchor" | "in" | "out"; i: number }[]>([]);
   useLayoutEffect(() => {
     if (!editVenueElements || !selectedVenueElementId || !underlaySvg) {
       setElHandles([]);
       return;
     }
     const live = nestLayerEl(selectedVenueElementId);
-    const pts = svgElementPoints(underlaySvg, selectedVenueElementId);
-    const svg = svgRef.current;
-    if (!live || !pts || !svg) {
+    if (live?.getAttribute(LOCK_ATTR) === "1") {
       setElHandles([]);
       return;
     }
-    setElHandles(
-      pts.map((p) => {
-        const pt = svg.createSVGPoint();
-        pt.x = p.x;
-        pt.y = p.y;
-        const ctm = live.getScreenCTM();
-        if (!ctm) return { x: 0, y: 0 };
-        const screen = pt.matrixTransform(ctm);
-        return toWorld(screen.x, screen.y);
-      }),
-    );
-  }, [editVenueElements, selectedVenueElementId, underlaySvg, cam, underlayW, underlayH, viewportTick]);
+    const parsed = svgElementBezier(underlaySvg, selectedVenueElementId);
+    const svg = svgRef.current;
+    if (!live || !parsed || !svg) {
+      setElHandles([]);
+      return;
+    }
+    const toW = (x: number, y: number) => {
+      const pt = svg.createSVGPoint();
+      pt.x = x;
+      pt.y = y;
+      const ctm = live.getScreenCTM();
+      if (!ctm) return { x: 0, y: 0 };
+      const screen = pt.matrixTransform(ctm);
+      return toWorld(screen.x, screen.y);
+    };
+    const next: { x: number; y: number; kind: "anchor" | "in" | "out"; i: number }[] = [];
+    parsed.nodes.forEach((n, i) => {
+      const a = toW(n.x, n.y);
+      next.push({ ...a, kind: "anchor", i });
+      if (venueAnchor === i) {
+        next.push({ ...toW(n.x + n.inDx, n.y + n.inDy), kind: "in", i });
+        next.push({ ...toW(n.x + n.outDx, n.y + n.outDy), kind: "out", i });
+      }
+    });
+    setElHandles(next);
+  }, [editVenueElements, selectedVenueElementId, underlaySvg, cam, underlayW, underlayH, viewportTick, venueAnchor]);
 
   const hallX = underlayX + (underlayW || size.w) / 2;
   const hallY = underlayY + (underlayH || size.h) / 2;
@@ -1490,6 +1774,16 @@ export function FloorCanvas({
             <path d={`M ${px.x} 0 L 0 0 0 ${px.y}`} fill="none" stroke="var(--map-grid)" strokeOpacity="0.45" strokeWidth={px.x * 0.08} />
           </pattern>
         ) : null}
+        {objects.map((o) => {
+          if (o.kind === "amenity" || !o.polygon?.length) return null;
+          const fillUrl = objectUrls(o, assets).fillTextureUrl;
+          if (!fillUrl) return null;
+          return (
+            <clipPath key={`clip-fill-${o.id}`} id={`clip-fill-${o.id}`}>
+              <path d={svgPathD(objectShape(o), true)} />
+            </clipPath>
+          );
+        })}
       </defs>
       {showUnderlay && underlayInner && underlayVb ? (
         <g
@@ -1562,19 +1856,33 @@ export function FloorCanvas({
         pointerEvents="none"
       />
       {editVenueElements &&
-        elHandles.map((p, i) => (
-          <rect
-            key={`vh-${i}`}
-            x={p.x - handleR}
-            y={p.y - handleR}
-            width={handleR * 2}
-            height={handleR * 2}
-            fill="#fff"
-            stroke="#f97316"
-            strokeWidth={handleR * 0.35}
-            pointerEvents="none"
-          />
-        ))}
+        elHandles.map((p) =>
+          p.kind === "anchor" ? (
+            <rect
+              key={`vh-${p.i}`}
+              x={p.x - handleR}
+              y={p.y - handleR}
+              width={handleR * 2}
+              height={handleR * 2}
+              fill={venueAnchor === p.i ? "#f97316" : "#fff"}
+              stroke="#f97316"
+              strokeWidth={handleR * 0.35}
+              pointerEvents="none"
+            />
+          ) : (
+            <g key={`vh-${p.kind}-${p.i}`} pointerEvents="none">
+              <line
+                x1={elHandles.find((h) => h.kind === "anchor" && h.i === p.i)?.x}
+                y1={elHandles.find((h) => h.kind === "anchor" && h.i === p.i)?.y}
+                x2={p.x}
+                y2={p.y}
+                stroke="#f97316"
+                strokeWidth={handleR * 0.25}
+              />
+              <circle cx={p.x} cy={p.y} r={handleR * 0.85} fill="#fff" stroke="#f97316" strokeWidth={handleR * 0.3} />
+            </g>
+          ),
+        )}
       {showGrid && cal ? <rect x={cam.x} y={cam.y} width={cam.w} height={cam.h} fill="url(#grid)" pointerEvents="none" /> : null}
       {showGrid && showPixelGrid ? (
         <rect x={underlayX} y={underlayY} width={underlayW} height={underlayH} fill="url(#pixgrid)" pointerEvents="none" />
@@ -1591,24 +1899,48 @@ export function FloorCanvas({
         const c = ringCentroid(o.polygon);
         const screenW = b.w * pxPerMeterScreen;
         const screenH = b.h * pxPerMeterScreen;
-        const showLogo = Boolean(sponsor?.logoUrl) && screenW > 56 && screenH > 32;
+        const media = objectUrls(o, assets);
+        const logoUrl = displayLogoUrl(o, assets, sponsor);
+        const fillUrl = media.fillTextureUrl;
+        const showLogo = Boolean(logoUrl) && screenW > 56 && screenH > 32;
         const label = o.boothNumber || sponsor?.name || o.name;
         const sizeLabel = formatSize(b.w, b.h, units);
         const showSize = screenW > 44 && screenH > 22;
+        const local = rotateRing(o.polygon, -(o.facingDeg ?? 0));
+        const lb = ringBounds(local);
         return (
           <g key={o.id} pointerEvents={canEditVenue ? "none" : undefined}>
-            <polygon
-              points={points(o.polygon)}
+            <path
+              d={svgPathD(objectShape(o), true)}
               fill={
                 highlighted || pulsing
                   ? "rgba(249, 115, 22, 0.45)"
-                  : o.color || tierFill(sponsor?.tier ?? "")
+                  : fillUrl
+                    ? "transparent"
+                    : o.color || tierFill(sponsor?.tier ?? "")
               }
-              fillOpacity={mode === "edit" ? 0.36 : 0.9}
+              fillOpacity={mode === "edit" && !fillUrl ? 0.36 : 0.9}
               stroke={selected || pulsing ? "#f97316" : highlighted ? "#f97316" : "var(--map-stroke)"}
               strokeWidth={selected || pulsing ? strokeSelected : strokeDefault}
               className={pulsing ? "map-frame-pulse" : undefined}
             />
+            {fillUrl ? (
+              <g clipPath={`url(#clip-fill-${o.id})`} pointerEvents="none">
+                <image
+                  href={fillUrl}
+                  x={lb.minX}
+                  y={lb.minY}
+                  width={lb.w}
+                  height={lb.h}
+                  transform={`rotate(${o.facingDeg ?? 0} ${c.x} ${c.y})`}
+                  preserveAspectRatio="xMidYMid slice"
+                  opacity={mode === "edit" ? 0.88 : 1}
+                />
+                {highlighted || pulsing ? (
+                  <path d={svgPathD(objectShape(o), true)} fill="rgba(249, 115, 22, 0.28)" />
+                ) : null}
+              </g>
+            ) : null}
             {showLogo ? (
               <>
                 <rect
@@ -1620,7 +1952,7 @@ export function FloorCanvas({
                   pointerEvents="none"
                 />
                 <image
-                  href={sponsor!.logoUrl}
+                  href={logoUrl}
                   x={b.minX + b.w * 0.12}
                   y={b.minY + b.h * 0.12}
                   width={b.w * 0.76}
@@ -1711,13 +2043,31 @@ export function FloorCanvas({
           })()}
         </g>
       ) : null}
-      {draftPoly.length ? (
-        <polyline
-          points={points(draftPoly)}
-          fill="none"
-          stroke="#f97316"
-          strokeWidth={strokeSelected}
-        />
+      {draftNodes.length ? (
+        <g pointerEvents="none">
+          <path
+            d={svgPathD(
+              draftCursor ? [...draftNodes, corner(draftCursor.x, draftCursor.y)] : draftNodes,
+              false,
+            )}
+            fill={draftNodes.length >= 3 ? "rgba(249,115,22,0.12)" : "none"}
+            stroke="#f97316"
+            strokeWidth={strokeSelected}
+          />
+          {draftNodes.map((n, i) => (
+            <g key={`dn-${i}`}>
+              {(n.outDx || n.outDy || n.inDx || n.inDy) && i === draftNodes.length - 1 ? (
+                <>
+                  <line x1={n.x} y1={n.y} x2={n.x + n.outDx} y2={n.y + n.outDy} stroke="#f97316" strokeWidth={handleR * 0.25} />
+                  <line x1={n.x} y1={n.y} x2={n.x + n.inDx} y2={n.y + n.inDy} stroke="#f97316" strokeWidth={handleR * 0.25} />
+                  <circle cx={n.x + n.outDx} cy={n.y + n.outDy} r={handleR * 0.75} fill="#fff" stroke="#f97316" strokeWidth={handleR * 0.25} />
+                  <circle cx={n.x + n.inDx} cy={n.y + n.inDy} r={handleR * 0.75} fill="#fff" stroke="#f97316" strokeWidth={handleR * 0.25} />
+                </>
+              ) : null}
+              <circle cx={n.x} cy={n.y} r={handleR} fill={i === 0 ? "#f97316" : "#fff"} stroke="#f97316" strokeWidth={handleR * 0.3} />
+            </g>
+          ))}
+        </g>
       ) : null}
       {marqueeNow ? (
         <rect
@@ -1775,32 +2125,57 @@ export function FloorCanvas({
       {mode === "edit" && tool === "select"
         ? (() => {
             if (selectedSet.size !== 1) return null;
+            const selected = objects.find((o) => selectedSet.has(o.id));
             const b =
               canEditVenue && selectedSet.has(VENUE_ID) && venueRect
                 ? venueRect
-                : canEditObjects
-                  ? (() => {
-                      const selected = objects.find((o) => selectedSet.has(o.id));
-                      return selected?.polygon ? ringBounds(selected.polygon) : null;
-                    })()
+                : canEditObjects && selected?.polygon
+                  ? ringBounds(selected.polygon)
                   : null;
-            if (!b) return null;
-            return HANDLES.map((h) => {
-              const [x, y] = handleXY(b, h);
-              return (
-                <rect
-                  key={h}
-                  x={x - handleR}
-                  y={y - handleR}
-                  width={handleR * 2}
-                  height={handleR * 2}
-                  fill="#fff"
-                  stroke="#f97316"
-                  strokeWidth={screenPx(1.5, pxPerMeterScreen)}
-                  style={{ cursor: handleCursor(h) }}
-                />
-              );
-            });
+            const shape = canEditObjects && selected?.polygon ? objectShape(selected) : [];
+            return (
+              <g pointerEvents="none">
+                {b
+                  ? HANDLES.map((h) => {
+                      const [x, y] = handleXY(b, h);
+                      return (
+                        <rect
+                          key={h}
+                          x={x - handleR}
+                          y={y - handleR}
+                          width={handleR * 2}
+                          height={handleR * 2}
+                          fill="#fff"
+                          stroke="#f97316"
+                          strokeWidth={screenPx(1.5, pxPerMeterScreen)}
+                          style={{ cursor: handleCursor(h) }}
+                        />
+                      );
+                    })
+                  : null}
+                {shape.map((n, i) => (
+                  <g key={`an-${i}`}>
+                    {editAnchor === i ? (
+                      <>
+                        <line x1={n.x} y1={n.y} x2={n.x + n.inDx} y2={n.y + n.inDy} stroke="#f97316" strokeWidth={handleR * 0.25} />
+                        <line x1={n.x} y1={n.y} x2={n.x + n.outDx} y2={n.y + n.outDy} stroke="#f97316" strokeWidth={handleR * 0.25} />
+                        <circle cx={n.x + n.inDx} cy={n.y + n.inDy} r={handleR * 0.85} fill="#fff" stroke="#f97316" strokeWidth={handleR * 0.3} />
+                        <circle cx={n.x + n.outDx} cy={n.y + n.outDy} r={handleR * 0.85} fill="#fff" stroke="#f97316" strokeWidth={handleR * 0.3} />
+                      </>
+                    ) : null}
+                    <rect
+                      x={n.x - handleR}
+                      y={n.y - handleR}
+                      width={handleR * 2}
+                      height={handleR * 2}
+                      fill={editAnchor === i ? "#f97316" : "#fff"}
+                      stroke="#f97316"
+                      strokeWidth={handleR * 0.35}
+                    />
+                  </g>
+                ))}
+              </g>
+            );
           })()
         : null}
     </svg>
