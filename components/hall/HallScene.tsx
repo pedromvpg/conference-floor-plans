@@ -27,6 +27,7 @@ import type {
 import { isPinObject } from "@/lib/types";
 import { BoothKit } from "./BoothKit";
 import { CustomModel } from "./CustomModel";
+import { HallRulers } from "./HallRulers";
 import { StageKit } from "./StageKit";
 
 export type HallSceneProps = {
@@ -51,6 +52,7 @@ export type HallSceneProps = {
   spacePan?: boolean;
   tone?: MapTone;
   showGrid?: boolean;
+  showRulers?: boolean;
 };
 
 export type HallExtent = {
@@ -147,6 +149,7 @@ export function HallScene({
   spacePan = false,
   tone = "dark",
   showGrid = true,
+  showRulers = false,
 }: HallSceneProps) {
   const hall = HALL_THEME[tone];
   const canEdit = mode === "edit";
@@ -379,6 +382,7 @@ export function HallScene({
           infiniteGrid
         />
       ) : null}
+      {showRulers ? <HallRulers extent={extent} units={units} color={hall.grid} /> : null}
 
       {objects
         .filter((o) => !isPinObject(o))

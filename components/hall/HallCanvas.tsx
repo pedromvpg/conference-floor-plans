@@ -41,6 +41,7 @@ export type HallCanvasProps = {
   frameNonce?: number;
   fitNonce?: number;
   showGrid?: boolean;
+  showRulers?: boolean;
 };
 
 export function HallCanvas({
@@ -64,6 +65,7 @@ export function HallCanvas({
   frameNonce = 0,
   fitNonce = 0,
   showGrid = mode === "edit",
+  showRulers = false,
 }: HallCanvasProps) {
   const { resolvedTheme } = useTheme();
   const tone: MapTone = resolvedTheme === "light" ? "light" : "dark";
@@ -152,6 +154,7 @@ export function HallCanvas({
     spacePan,
     tone,
     showGrid,
+    showRulers,
   };
 
   return (

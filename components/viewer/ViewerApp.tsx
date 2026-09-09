@@ -461,6 +461,7 @@ export function ViewerApp({
               frameNonce={frameNonce}
               units={units}
               showGrid={showGrid}
+              showRulers={showRulers}
               onSelect={selectFromMap}
             />
           ) : (
@@ -474,6 +475,7 @@ export function ViewerApp({
               highlightId={highlightId}
               units={units}
               showGrid={showGrid}
+              showRulers={showRulers}
               onSelect={selectFromMap}
             />
           )
@@ -489,9 +491,11 @@ export function ViewerApp({
       </div>
 
       <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-background/80 p-1 shadow-sm backdrop-blur-md">
-        <GridToggle value={showGrid} onChange={setShowGrid} />
-        <span className="h-5 w-px bg-border" aria-hidden />
-        <ViewModeToggle value={viewMode} onChange={setViewMode} />
+        <div className="flex items-center">
+          <GridToggle value={showGrid} onChange={setShowGrid} />
+          <RulersToggle value={showRulers} onChange={setShowRulers} />
+          <ViewModeToggle value={viewMode} onChange={setViewMode} />
+        </div>
         <FloorSwitcher
           floors={[...doc.floors].sort((a, b) => a.order - b.order)}
           value={floorId}
