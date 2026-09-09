@@ -25,6 +25,18 @@ export type Tool = "select" | "rect" | "polygon" | "icon" | "calibrate";
 
 export type Ring = [number, number][];
 
+export type BezierMode = "none" | "mirrored" | "independent";
+
+export type BezierNode = {
+  x: number;
+  y: number;
+  inDx: number;
+  inDy: number;
+  outDx: number;
+  outDy: number;
+  mode: BezierMode;
+};
+
 export type Calibration = {
   originX: number;
   originY: number;
@@ -81,6 +93,8 @@ export type MapObject = {
   floorId: string;
   kind: ObjectKind;
   polygon: Ring | null;
+  /** Cubic Bézier controls; tessellated into `polygon` for hit-test and 3D. */
+  path?: BezierNode[] | null;
   x: number | null;
   y: number | null;
   rotation: number;
