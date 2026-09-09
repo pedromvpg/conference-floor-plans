@@ -4,7 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { ChevronLeft, Search } from "lucide-react";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
-import { ViewModeToggle } from "@/components/map/ViewModeToggle";
+import { FloorSwitcher, GridToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -147,6 +154,7 @@ function floorFromDoc(f: MapDocument["floors"][number], eventId: string): Floor 
       widthPx: f.underlay.widthPx,
       heightPx: f.underlay.heightPx,
     },
+    basemap: f.basemap ?? null,
     createdAt: "",
     updatedAt: "",
   };
@@ -164,17 +172,13 @@ function Detail({
   const next = upcomingOnStage(doc.sessions, selected);
   const speakers = next ? speakersForSession(next.speakerIds, doc.speakers) : [];
   return (
-    <div className="space-y-2 px-3 py-3">
+    <div className="space-y-3">
       {sponsor?.logoUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={sponsor.logoUrl} alt="" className="mx-auto h-12 object-contain" />
+        <div className="mx-auto w-fit bg-white p-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={sponsor.logoUrl} alt="" className="h-14 object-contain" />
+        </div>
       ) : null}
-      <p className="text-[13px] font-medium text-foreground">{sponsor?.name || selected.name || selected.boothNumber}</p>
-      {selected.boothNumber ? (
-        <p className="font-mono text-[11px] text-primary">Booth {selected.boothNumber}</p>
-      ) : null}
-      {sponsor?.tier ? <p className="text-[11px] text-muted-foreground">{sponsor.tier}</p> : null}
-      {selected.amenityType ? <p className="text-[11px]">{amenityLabel(selected.amenityType)}</p> : null}
       {next ? (
         <div className="border-t border-border pt-2">
           <p className="chrome-kicker">Up next</p>
@@ -208,9 +212,11 @@ export function ViewerApp({
   const [frameNonce, setFrameNonce] = useState(0);
   const [units, setUnits] = useUnits();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [locationTab, setLocationTab] = useState<LocationTab>("all");
   const [viewMode, setViewMode] = useState<ViewMode>("plan");
+  const [showGrid, setShowGrid] = useState(false);
 
   useEffect(() => {
     if (window.matchMedia("(min-width: 768px)").matches) setViewMode("hall");
@@ -290,7 +296,13 @@ export function ViewerApp({
 
   function openItem(id: string) {
     setSelectedId(id);
-    setSheetOpen(true);
+    setDetailOpen(true);
+    setSheetOpen(false);
+  }
+
+  function selectFromMap(id: string | null) {
+    setSelectedId(id);
+    setDetailOpen(Boolean(id));
   }
 
   function frameItem(id: string) {
@@ -319,12 +331,6 @@ export function ViewerApp({
           </div>
         ) : null}
       </div>
-      {selected ? (
-        <div className="border-b border-border">
-          <p className="chrome-kicker px-3 pt-3">Selected</p>
-          <Detail selected={selected} sponsor={selectedSponsor} doc={doc} />
-        </div>
-      ) : null}
       <p className="chrome-kicker px-3 pt-3">Locations</p>
       <Tabs
         value={locationTab}
@@ -372,7 +378,7 @@ export function ViewerApp({
                   >
                     {s?.logoUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={s.logoUrl} alt="" className="h-6 w-6 object-contain" />
+                      <img src={s.logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
                     ) : null}
                     <span className="min-w-0 flex-1 truncate">{title}</span>
                     {sub ? <span className="font-mono text-[10px] text-muted-foreground">{sub}</span> : null}
@@ -389,8 +395,8 @@ export function ViewerApp({
   return (
     <div className="relative h-dvh overflow-clip bg-background">
       <main
-        className="absolute inset-y-0 left-0 overflow-clip"
-        style={{ right: sidebarOpen ? 260 : 44 }}
+        className="absolute inset-y-0 right-0 overflow-clip"
+        style={{ left: sidebarOpen ? 260 : 44 }}
       >
         {floor ? (
           viewMode === "hall" ? (
@@ -403,10 +409,8 @@ export function ViewerApp({
               highlightId={highlightId}
               frameNonce={frameNonce}
               units={units}
-              onSelect={(id) => {
-                setSelectedId(id);
-                if (id && window.matchMedia("(max-width: 767px)").matches) setSheetOpen(true);
-              }}
+              showGrid={showGrid}
+              onSelect={selectFromMap}
             />
           ) : (
             <FloorCanvas
@@ -418,10 +422,8 @@ export function ViewerApp({
               frameNonce={frameNonce}
               highlightId={highlightId}
               units={units}
-              onSelect={(id) => {
-                setSelectedId(id);
-                if (id && window.matchMedia("(max-width: 767px)").matches) setSheetOpen(true);
-              }}
+              showGrid={showGrid}
+              onSelect={selectFromMap}
             />
           )
         ) : (
@@ -431,30 +433,24 @@ export function ViewerApp({
         )}
       </main>
 
-      <div className="pointer-events-none absolute top-4 left-4 z-20 font-mono text-[11px] tracking-wide text-muted-foreground">
+      <div className="pointer-events-none absolute top-4 right-4 z-20 font-mono text-[11px] tracking-wide text-muted-foreground">
         <p>
           <span className="text-primary">$</span> <span className="text-muted-foreground">map</span>{" "}
           <span className="text-foreground">{doc.event.name}</span>
         </p>
-        <p className="mt-1 text-muted-foreground">pinch / wheel zoom · drag pan</p>
       </div>
 
       <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 flex-wrap justify-center gap-2.5">
+        <GridToggle value={showGrid} onChange={setShowGrid} />
         <ViewModeToggle value={viewMode} onChange={setViewMode} />
-        {doc.floors.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            className="chrome-pill"
-            data-active={f.id === floorId}
-            onClick={() => {
-              setFloorId(f.id);
-              setSelectedId(null);
-            }}
-          >
-            {f.name}
-          </button>
-        ))}
+        <FloorSwitcher
+          floors={[...doc.floors].sort((a, b) => a.order - b.order)}
+          value={floorId}
+          onChange={(id) => {
+            setFloorId(id);
+            setSelectedId(null);
+          }}
+        />
         <button type="button" className="chrome-pill" data-active={units === "m"} onClick={() => setUnits("m")}>
           m
         </button>
@@ -475,19 +471,19 @@ export function ViewerApp({
       </div>
 
       <aside
-        className="absolute top-0 right-0 bottom-0 z-10 hidden border-l border-border bg-background md:flex md:flex-col"
+        className="absolute top-0 left-0 bottom-0 z-10 hidden border-r border-border bg-background md:flex md:flex-col"
         style={{ width: sidebarOpen ? 260 : 44 }}
       >
         <div className="flex shrink-0 items-center border-b border-border">
+          {sidebarOpen ? <div className="pl-1"><ThemeToggle /></div> : null}
           <button
             type="button"
-            className="flex size-11 shrink-0 items-center justify-center text-foreground hover:text-primary"
+            className="ml-auto flex size-11 shrink-0 items-center justify-center text-foreground hover:text-primary"
             onClick={() => setSidebarOpen((v) => !v)}
             aria-label={sidebarOpen ? "Collapse list" : "Expand list"}
           >
-            <ChevronLeft className={`size-4 transition-transform ${sidebarOpen ? "" : "rotate-180"}`} />
+            <ChevronLeft className={`size-4 transition-transform ${sidebarOpen ? "rotate-180" : ""}`} />
           </button>
-          {sidebarOpen ? <div className="ml-auto pr-1"><ThemeToggle /></div> : null}
         </div>
         {sidebarOpen ? list : (
           <button
@@ -501,23 +497,35 @@ export function ViewerApp({
         )}
       </aside>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent side="bottom" className="max-h-[75dvh] rounded-none border-border bg-background md:hidden">
+      <Dialog modal={false} open={detailOpen && Boolean(selected)} onOpenChange={setDetailOpen}>
+        <DialogContent
+          overlayClassName="bg-transparent backdrop-blur-none supports-backdrop-filter:backdrop-blur-none pointer-events-none"
+          className={`top-4 left-4 w-[min(22rem,calc(100%-2rem))] max-w-sm translate-x-0 translate-y-0 rounded-none sm:max-w-sm ${sidebarOpen ? "md:left-[276px]" : "md:left-[60px]"}`}
+        >
           {selected ? (
             <>
-              <SheetHeader>
-                <SheetTitle className="text-sm">{selectedSponsor?.name || selected.name || selected.boothNumber}</SheetTitle>
-              </SheetHeader>
+              <DialogHeader>
+                <DialogTitle>
+                  {selectedSponsor?.name || selected.name || selected.boothNumber || amenityLabel(selected.amenityType ?? "info")}
+                </DialogTitle>
+                <DialogDescription>
+                  {selected.boothNumber
+                    ? `Booth ${selected.boothNumber}${selectedSponsor?.tier ? ` · ${selectedSponsor.tier}` : ""}`
+                    : selectedSponsor?.tier || (selected.amenityType ? amenityLabel(selected.amenityType) : "Location")}
+                </DialogDescription>
+              </DialogHeader>
               <Detail selected={selected} sponsor={selectedSponsor} doc={doc} />
             </>
-          ) : (
-            <>
-              <SheetHeader>
-                <SheetTitle className="text-sm">Search</SheetTitle>
-              </SheetHeader>
-              <div className="h-72">{list}</div>
-            </>
-          )}
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+        <SheetContent side="bottom" className="max-h-[75dvh] rounded-none border-border bg-background md:hidden">
+          <SheetHeader>
+            <SheetTitle className="text-sm">Search</SheetTitle>
+          </SheetHeader>
+          <div className="h-72">{list}</div>
         </SheetContent>
       </Sheet>
     </div>
