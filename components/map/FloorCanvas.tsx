@@ -1423,7 +1423,7 @@ export function FloorCanvas({
         let nextB = d.startBounds;
         if (d.mode === "resize" && d.handle) {
           const cursor = snapBase(w.x, w.y);
-          nextB = { ...resizeBounds(d.startBounds, d.handle, cursor.x, cursor.y, 0, lock), w: 0, h: 0 };
+          nextB = { ...resizeBounds(d.startBounds, d.handle, cursor.x, cursor.y, snapToUnits ? gridSize(units) : 0, lock), w: 0, h: 0 };
           nextB = {
             minX: nextB.minX,
             minY: nextB.minY,

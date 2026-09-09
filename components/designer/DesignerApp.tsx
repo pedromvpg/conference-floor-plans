@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Box, ChevronDown, Eye, EyeOff, LayoutGrid, MapPin, Maximize2, Pentagon, Plus, Redo2, Square, Theater, Undo2 } from "lucide-react";
+import { useTheme } from "next-themes";
+import { Box, ChevronDown, Eye, EyeOff, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, Square, Theater, Undo2 } from "lucide-react";
 import { ObjectMediaFields } from "@/components/designer/ObjectMediaFields";
 import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
 import { UnderlayPreview } from "@/components/designer/UnderlayPreview";
@@ -14,6 +15,7 @@ import { FloorSwitcher, GridToggle, ViewModeToggle } from "@/components/map/View
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -83,13 +85,12 @@ import {
   ungroupSvgLayer,
   wrapRasterAsSvg,
 } from "@/lib/svg-layers";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { newId, nowIso } from "@/lib/store";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { newId, nowIso } from "@/lib/store";
 import { toast } from "sonner";
 
 const HallCanvas = dynamic(() => import("@/components/hall/HallCanvas"), {
@@ -236,6 +237,7 @@ async function rasterizeIfPdf(file: File): Promise<File> {
 
 export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const router = useRouter();
+  const { resolvedTheme, setTheme } = useTheme();
   const [bundle, setBundle] = useState(initial);
   const [floorId, setFloorId] = useState(initial.floors[0]?.id ?? "");
   const [tool, setTool] = useState<Tool>("select");
@@ -243,6 +245,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [stampAppearance, setStampAppearance] = useState<Appearance | null>(null);
   const [stampModelId, setStampModelId] = useState<string | null>(null);
   const [units, setUnits] = useUnits();
+  const [snapToObjects, setSnapToObjects] = useState(true);
+  const [snapToUnits, setSnapToUnits] = useState(false);
   const [presetId, setPresetId] = useState<string>("none");
   const [amenityStamp, setAmenityStamp] = useState<AmenityType>("bathroom");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -482,6 +486,15 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const objects = localStorage.getItem("conference-maps-snap-objects");
+    const grid = localStorage.getItem("conference-maps-snap-units");
+    if (objects === "0") setSnapToObjects(false);
+    if (objects === "1") setSnapToObjects(true);
+    if (grid === "1") setSnapToUnits(true);
+    if (grid === "0") setSnapToUnits(false);
   }, []);
 
   const refreshVersions = useCallback(async () => {
@@ -1224,10 +1237,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-border px-3 py-0">
         <div className="flex min-w-0 items-center gap-2">
-          <Link href="/events" className="chrome-kicker py-3 hover:text-primary">
-            Maps
-          </Link>
-          <span className="text-border">/</span>
+          <Button size="icon-sm" variant="ghost" asChild>
+            <Link href="/events" aria-label="All events" title="All events">
+              <Menu />
+            </Link>
+          </Button>
           <h1 className="min-w-0">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -1265,6 +1279,43 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   </DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="ft" onSelect={(e) => e.preventDefault()}>
                     Feet
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Snap</DropdownMenuLabel>
+                <DropdownMenuCheckboxItem
+                  checked={snapToObjects}
+                  onCheckedChange={(checked) => {
+                    const next = checked === true;
+                    setSnapToObjects(next);
+                    localStorage.setItem("conference-maps-snap-objects", next ? "1" : "0");
+                  }}
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  Snap to objects
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={snapToUnits}
+                  onCheckedChange={(checked) => {
+                    const next = checked === true;
+                    setSnapToUnits(next);
+                    localStorage.setItem("conference-maps-snap-units", next ? "1" : "0");
+                  }}
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  {units === "ft" ? "Snap to whole feet" : "Snap to whole metres"}
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Appearance</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={resolvedTheme === "light" ? "light" : "dark"}
+                  onValueChange={(value) => setTheme(value)}
+                >
+                  <DropdownMenuRadioItem value="light" onSelect={(e) => e.preventDefault()}>
+                    Light
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="dark" onSelect={(e) => e.preventDefault()}>
+                    Dark
                   </DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
@@ -1365,7 +1416,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               </div>
             </div>
           </div>
-          <ThemeToggle />
         </div>
       </header>
 
@@ -2205,6 +2255,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 knownLengthMeters={toMeters(Number(scaleLength), units)}
                 underlayOpacity={underlayOpacity}
                 showGrid={showGrid}
+                snapToObjects={snapToObjects}
+                snapToUnits={snapToUnits}
                 underlaySvg={venueSvg}
                 showUnderlay={showUnderlay}
                 underlayHoverLayerId={editVenueLayers ? hoverLayerId : null}
