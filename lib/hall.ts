@@ -46,7 +46,17 @@ export function objectUrls(o: MapObject, assets: LibraryAsset[] = []) {
     modelUrl: o.modelUrl || (o.modelAssetId ? byId.get(o.modelAssetId)?.url : "") || "",
     rugTextureUrl: o.rugTextureUrl || (o.rugTextureAssetId ? byId.get(o.rugTextureAssetId)?.url : "") || "",
     wallTextureUrl: o.wallTextureUrl || (o.wallTextureAssetId ? byId.get(o.wallTextureAssetId)?.url : "") || "",
+    logoUrl: o.logoUrl || (o.logoAssetId ? byId.get(o.logoAssetId)?.url : "") || "",
+    fillTextureUrl: o.fillTextureUrl || (o.fillTextureAssetId ? byId.get(o.fillTextureAssetId)?.url : "") || "",
   };
+}
+
+export function displayLogoUrl(
+  o: MapObject,
+  assets: LibraryAsset[] = [],
+  sponsor?: { logoUrl?: string } | null,
+) {
+  return objectUrls(o, assets).logoUrl || sponsor?.logoUrl || "";
 }
 
 export function isometricPose(cx: number, cz: number, span: number) {

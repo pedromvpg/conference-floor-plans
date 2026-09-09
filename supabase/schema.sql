@@ -98,6 +98,8 @@ create table if not exists public.objects (
   model_asset_id uuid references public.library_assets(id) on delete set null,
   rug_texture_asset_id uuid references public.library_assets(id) on delete set null,
   wall_texture_asset_id uuid references public.library_assets(id) on delete set null,
+  logo_asset_id uuid references public.library_assets(id) on delete set null,
+  fill_texture_asset_id uuid references public.library_assets(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

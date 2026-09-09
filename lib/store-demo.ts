@@ -473,6 +473,8 @@ export class DemoStore implements Store {
         modelAssetId: o.modelAssetId === id ? null : o.modelAssetId,
         rugTextureAssetId: o.rugTextureAssetId === id ? null : o.rugTextureAssetId,
         wallTextureAssetId: o.wallTextureAssetId === id ? null : o.wallTextureAssetId,
+        logoAssetId: o.logoAssetId === id ? null : o.logoAssetId,
+        fillTextureAssetId: o.fillTextureAssetId === id ? null : o.fillTextureAssetId,
       }));
     });
   }

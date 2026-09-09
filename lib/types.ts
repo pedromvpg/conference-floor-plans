@@ -108,10 +108,14 @@ export type MapObject = {
   modelAssetId: string | null;
   rugTextureAssetId: string | null;
   wallTextureAssetId: string | null;
+  logoAssetId: string | null;
+  fillTextureAssetId: string | null;
   /** Resolved onto the published snapshot; not stored on draft rows. */
   modelUrl?: string;
   rugTextureUrl?: string;
   wallTextureUrl?: string;
+  logoUrl?: string;
+  fillTextureUrl?: string;
   createdAt: string;
   updatedAt: string;
 };

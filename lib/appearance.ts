@@ -14,13 +14,28 @@ export function resolveAppearance(o: MapObject): Appearance {
   return isStageObject(o) ? "stage" : "booth";
 }
 
-export function hallDefaults(partial?: Partial<Pick<MapObject, "appearance" | "facingDeg" | "modelAssetId" | "rugTextureAssetId" | "wallTextureAssetId">>) {
+export function hallDefaults(
+  partial?: Partial<
+    Pick<
+      MapObject,
+      | "appearance"
+      | "facingDeg"
+      | "modelAssetId"
+      | "rugTextureAssetId"
+      | "wallTextureAssetId"
+      | "logoAssetId"
+      | "fillTextureAssetId"
+    >
+  >,
+) {
   return {
     appearance: partial?.appearance ?? null,
     facingDeg: partial?.facingDeg ?? 0,
     modelAssetId: partial?.modelAssetId ?? null,
     rugTextureAssetId: partial?.rugTextureAssetId ?? null,
     wallTextureAssetId: partial?.wallTextureAssetId ?? null,
+    logoAssetId: partial?.logoAssetId ?? null,
+    fillTextureAssetId: partial?.fillTextureAssetId ?? null,
   };
 }
 
@@ -35,6 +50,8 @@ export function normalizeObject(o: MapObject): MapObject {
     modelAssetId: o.modelAssetId ?? null,
     rugTextureAssetId: o.rugTextureAssetId ?? null,
     wallTextureAssetId: o.wallTextureAssetId ?? null,
+    logoAssetId: o.logoAssetId ?? null,
+    fillTextureAssetId: o.fillTextureAssetId ?? null,
   };
 }
 

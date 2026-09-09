@@ -88,13 +88,15 @@ function objectToFeature(
   const model = o.modelAssetId ? assetById.get(o.modelAssetId) : undefined;
   const rug = o.rugTextureAssetId ? assetById.get(o.rugTextureAssetId) : undefined;
   const wall = o.wallTextureAssetId ? assetById.get(o.wallTextureAssetId) : undefined;
+  const logo = o.logoAssetId ? assetById.get(o.logoAssetId) : undefined;
+  const fill = o.fillTextureAssetId ? assetById.get(o.fillTextureAssetId) : undefined;
   const properties: Record<string, unknown> = {
     kind: o.kind,
     boothNumber: o.boothNumber || sponsor?.boothNumber || "",
     name: o.name || sponsor?.name || o.boothNumber,
     airtableId: sponsor?.airtableId ?? null,
     tier: sponsor?.tier ?? "",
-    logoUrl: sponsor?.logoUrl ?? "",
+    logoUrl: logo?.url || sponsor?.logoUrl || "",
     amenityType: o.amenityType,
     color: o.color,
     rotation: o.rotation,
@@ -103,6 +105,7 @@ function objectToFeature(
     modelUrl: model?.url ?? "",
     rugTextureUrl: rug?.url ?? "",
     wallTextureUrl: wall?.url ?? "",
+    fillTextureUrl: fill?.url ?? "",
   };
 
   if (o.kind === "amenity" && o.x != null && o.y != null) {

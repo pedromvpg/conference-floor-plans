@@ -32,6 +32,8 @@ export function sliceKey(slice: DraftSlice): string {
       modelAssetId: o.modelAssetId,
       rugTextureAssetId: o.rugTextureAssetId,
       wallTextureAssetId: o.wallTextureAssetId,
+      logoAssetId: o.logoAssetId,
+      fillTextureAssetId: o.fillTextureAssetId,
     })),
   });
 }

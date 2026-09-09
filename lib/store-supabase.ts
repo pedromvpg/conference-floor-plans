@@ -69,6 +69,8 @@ type ObjectRow = {
   model_asset_id: string | null;
   rug_texture_asset_id: string | null;
   wall_texture_asset_id: string | null;
+  logo_asset_id: string | null;
+  fill_texture_asset_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -139,6 +141,8 @@ function objectFrom(r: ObjectRow): MapObject {
     modelAssetId: r.model_asset_id,
     rugTextureAssetId: r.rug_texture_asset_id,
     wallTextureAssetId: r.wall_texture_asset_id,
+    logoAssetId: r.logo_asset_id,
+    fillTextureAssetId: r.fill_texture_asset_id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -360,6 +364,8 @@ export class SupabaseStore implements Store {
         model_asset_id: obj.modelAssetId,
         rug_texture_asset_id: obj.rugTextureAssetId,
         wall_texture_asset_id: obj.wallTextureAssetId,
+        logo_asset_id: obj.logoAssetId,
+        fill_texture_asset_id: obj.fillTextureAssetId,
         created_at: obj.createdAt,
         updated_at: nowIso(),
       })
