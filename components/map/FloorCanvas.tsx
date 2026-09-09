@@ -71,6 +71,7 @@ import {
   dragHandle,
   insertNode,
   objectShape,
+  rotateBezier,
   setMirroredHandles,
   svgPathD,
   tessellate,
@@ -272,6 +273,23 @@ function amenityBounds(o: MapObject): { minX: number; minY: number; maxX: number
   const x = o.x ?? 0;
   const y = o.y ?? 0;
   return { minX: x - r, minY: y - r, maxX: x + r, maxY: y + r, w: r * 2, h: r * 2 };
+}
+
+function RotateKnob({
+  box,
+  handleR,
+}: {
+  box: { minX: number; minY: number; maxX: number; maxY: number };
+  handleR: number;
+}) {
+  const rh = rotateHandlePos(box, handleR * 3.2);
+  const mx = (box.minX + box.maxX) / 2;
+  return (
+    <g pointerEvents="none">
+      <line x1={mx} y1={box.minY} x2={rh.hx} y2={rh.hy} stroke="#f97316" strokeWidth={handleR * 0.25} />
+      <circle cx={rh.hx} cy={rh.hy} r={handleR} fill="#fff" stroke="#f97316" strokeWidth={handleR * 0.3} />
+    </g>
+  );
 }
 
 export function FloorCanvas({
@@ -1285,7 +1303,8 @@ export function FloorCanvas({
         lastVenuePreview.current = next;
         onPreviewVenueSvg?.(next);
       } else if (d.mode === "rotate" && d.startAngle != null && d.startRot != null) {
-        let nextDeg = d.startRot + (angleDeg(d.ox, d.oy, w.x, w.y) - d.startAngle);
+        const cur = toWorld(e.clientX, e.clientY);
+        let nextDeg = d.startRot + (angleDeg(d.ox, d.oy, cur.x, cur.y) - d.startAngle);
         if (e.shiftKey) nextDeg = snapDeg(nextDeg, 15);
         const next = setSvgElementRotation(d.startMarkup, d.id, nextDeg);
         lastVenuePreview.current = next;
@@ -1319,26 +1338,41 @@ export function FloorCanvas({
         pendingMove.current = null;
       }
     }
-    if (!drag.current && tool === "select" && selectedSet.size === 1) {
+    if (!drag.current && tool === "select") {
       const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
       const hr = screenPx(HANDLE_HALF_PX, ppm);
-      if (selectedSet.has(VENUE_ID) && venueRect && canEditVenue) {
+      if (editVenueElements && selectedVenueElementId && elFrameRef.current) {
+        const rh = rotateHandlePos(elFrameRef.current, hr * 3.2);
+        setHoverHandle(hypot(w.x - rh.hx, w.y - rh.hy) <= hr * 1.8 ? "rotate" : null);
+      } else if (selectedSet.size === 1 && selectedSet.has(VENUE_ID) && venueRect && canEditVenue) {
         let handle: BoundsHandle | null = null;
         for (const h of HANDLES) {
           const [hx, hy] = handleXY(venueRect, h);
           if (hypot(w.x - hx, w.y - hy) <= hr * 1.6) handle = h;
         }
         setHoverHandle(handle);
-      } else if (canEditObjects) {
+      } else if (canEditObjects && selectedSet.size === 1) {
         const selected = objects.find((o) => selectedSet.has(o.id));
         if (selected?.polygon) {
           const b = ringBounds(selected.polygon);
-          let handle: BoundsHandle | null = null;
-          for (const h of HANDLES) {
-            const [hx, hy] = handleXY(b, h);
-            if (hypot(w.x - hx, w.y - hy) <= hr * 1.6) handle = h;
+          const ppmH = svgUserToScreen(svgRef.current, cam.w, cam.h);
+          const hrH = screenPx(HANDLE_HALF_PX, ppmH);
+          const rh = rotateHandlePos(b, hrH * 3.2);
+          if (hypot(w.x - rh.hx, w.y - rh.hy) <= hrH * 1.8) {
+            setHoverHandle("rotate");
+          } else {
+            let handle: BoundsHandle | null = null;
+            for (const h of HANDLES) {
+              const [hx, hy] = handleXY(b, h);
+              if (hypot(w.x - hx, w.y - hy) <= hr * 1.6) handle = h;
+            }
+            setHoverHandle(handle);
           }
-          setHoverHandle(handle);
+        } else if (selected?.kind === "amenity" && selected.x != null && selected.y != null) {
+          const ppmH = svgUserToScreen(svgRef.current, cam.w, cam.h);
+          const hrH = screenPx(HANDLE_HALF_PX, ppmH);
+          const rh = rotateHandlePos(amenityBounds(selected), hrH * 3.2);
+          setHoverHandle(hypot(w.x - rh.hx, w.y - rh.hy) <= hrH * 1.8 ? "rotate" : null);
         } else {
           setHoverHandle(null);
         }
@@ -1394,6 +1428,24 @@ export function FloorCanvas({
       }
       const obj = objects.find((o) => o.id === d.id);
       if (obj) {
+        if (d.mode === "rotate" && d.startAngle != null && d.startRot != null) {
+          let nextDeg = d.startRot + (angleDeg(d.ox, d.oy, w.x, w.y) - d.startAngle);
+          if (e.shiftKey) nextDeg = snapDeg(nextDeg, 15);
+          if (obj.kind === "amenity") {
+            onChangeObject?.({ ...obj, rotation: nextDeg, facingDeg: nextDeg });
+            return;
+          }
+          const startPath = d.path?.length ? d.path : obj.polygon ? objectShape({ ...obj, polygon: d.polygon, path: d.path }) : [];
+          const rotated = commitShape(rotateBezier(startPath, nextDeg - d.startRot));
+          onChangeObject?.({
+            ...obj,
+            polygon: rotated.polygon,
+            path: rotated.path,
+            facingDeg: nextDeg,
+            rotation: nextDeg,
+          });
+          return;
+        }
         if ((d.mode === "vertex" || d.mode === "handle-in" || d.mode === "handle-out") && d.path && d.vertex != null) {
           const cursor = altSnapOff.current ? w : snapToPixel(w.x, w.y, cal);
           let nextPath = d.path;
@@ -1686,20 +1738,25 @@ export function FloorCanvas({
   const meterGrid = gridSize(units);
   const showPixelGrid = Boolean(cal) && pxPerMeterScreen * px.x >= 6;
   const [elHandles, setElHandles] = useState<{ x: number; y: number; kind: "anchor" | "in" | "out"; i: number }[]>([]);
+  const [elFrame, setElFrame] = useState<{ minX: number; minY: number; maxX: number; maxY: number } | null>(null);
+  const elFrameRef = useRef(elFrame);
+  elFrameRef.current = elFrame;
   useLayoutEffect(() => {
     if (!editVenueElements || !selectedVenueElementId || !underlaySvg) {
       setElHandles([]);
+      setElFrame(null);
       return;
     }
     const live = nestLayerEl(selectedVenueElementId);
     if (live?.getAttribute(LOCK_ATTR) === "1") {
       setElHandles([]);
+      setElFrame(null);
       return;
     }
-    const parsed = svgElementBezier(underlaySvg, selectedVenueElementId);
     const svg = svgRef.current;
-    if (!live || !parsed || !svg) {
+    if (!live || !svg) {
       setElHandles([]);
+      setElFrame(null);
       return;
     }
     const toW = (x: number, y: number) => {
@@ -1711,6 +1768,24 @@ export function FloorCanvas({
       const screen = pt.matrixTransform(ctm);
       return toWorld(screen.x, screen.y);
     };
+    const b = live.getBBox();
+    const corners = [
+      toW(b.x, b.y),
+      toW(b.x + b.width, b.y),
+      toW(b.x + b.width, b.y + b.height),
+      toW(b.x, b.y + b.height),
+    ];
+    setElFrame({
+      minX: Math.min(...corners.map((p) => p.x)),
+      minY: Math.min(...corners.map((p) => p.y)),
+      maxX: Math.max(...corners.map((p) => p.x)),
+      maxY: Math.max(...corners.map((p) => p.y)),
+    });
+    const parsed = svgElementBezier(underlaySvg, selectedVenueElementId);
+    if (!parsed) {
+      setElHandles([]);
+      return;
+    }
     const next: { x: number; y: number; kind: "anchor" | "in" | "out"; i: number }[] = [];
     parsed.nodes.forEach((n, i) => {
       const a = toW(n.x, n.y);
@@ -1947,6 +2022,7 @@ export function FloorCanvas({
             </g>
           ),
         )}
+      {editVenueElements && elFrame ? <RotateKnob box={elFrame} handleR={handleR} /> : null}
       {showGrid && cal ? <rect x={cam.x} y={cam.y} width={cam.w} height={cam.h} fill="url(#grid)" pointerEvents="none" /> : null}
       {showGrid && showPixelGrid ? (
         <rect x={underlayX} y={underlayY} width={underlayW} height={underlayH} fill="url(#pixgrid)" pointerEvents="none" />
@@ -2065,7 +2141,7 @@ export function FloorCanvas({
         const pulsing = o.id === pulseId;
         const color = AMENITY_COLOR[o.amenityType ?? "info"];
         return (
-          <g key={o.id} transform={`translate(${o.x} ${o.y})`} pointerEvents={canEditVenue ? "none" : undefined}>
+          <g key={o.id} transform={`translate(${o.x} ${o.y}) rotate(${o.rotation ?? 0})`} pointerEvents={canEditVenue ? "none" : undefined}>
             {pulsing ? (
               <circle r={2.4} fill="none" stroke="#f97316" strokeWidth={strokeSelected} className="map-frame-pulse" />
             ) : null}
@@ -2195,11 +2271,13 @@ export function FloorCanvas({
                 ? venueRect
                 : canEditObjects && selected?.polygon
                   ? ringBounds(selected.polygon)
-                  : null;
+                  : canEditObjects && selected?.kind === "amenity"
+                    ? amenityBounds(selected)
+                    : null;
             const shape = canEditObjects && selected?.polygon ? objectShape(selected) : [];
             return (
               <g pointerEvents="none">
-                {b
+                {b && selected?.kind !== "amenity"
                   ? HANDLES.map((h) => {
                       const [x, y] = handleXY(b, h);
                       return (
@@ -2217,6 +2295,9 @@ export function FloorCanvas({
                       );
                     })
                   : null}
+                {b && canEditObjects && selected && (selected.polygon || selected.kind === "amenity") ? (
+                  <RotateKnob box={b} handleR={handleR} />
+                ) : null}
                 {shape.map((n, i) => (
                   <g key={`an-${i}`}>
                     {editAnchor === i ? (

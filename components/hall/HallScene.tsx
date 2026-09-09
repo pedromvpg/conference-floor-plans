@@ -8,7 +8,7 @@ import { AMENITY_COLOR, amenityLabel } from "@/lib/amenities";
 import { hallDefaults, resolveAppearance } from "@/lib/appearance";
 import { boothFillHex, HALL_THEME, type MapTone } from "@/lib/colors";
 import { rectFromCenter, rectRing, ringBounds, venueWorldRect } from "@/lib/geometry";
-import { displayLogoUrl, objectUrls, snapWorld } from "@/lib/hall";
+import { displayLogoUrl, objectUrls, snapWorld, yawRad } from "@/lib/hall";
 import { commitShape, objectShape, translateBezier } from "@/lib/bezier";
 import { newMapObject } from "@/lib/new-object";
 import { gridSize } from "@/lib/units";
@@ -506,7 +506,7 @@ function HallPlot({
 }) {
   if (object.kind === "amenity" && object.x != null && object.y != null) {
     return (
-      <AmenityTotem x={object.x} y={object.y} type={object.amenityType ?? "info"} selected={selected} />
+      <AmenityTotem x={object.x} y={object.y} type={object.amenityType ?? "info"} rotation={object.rotation ?? 0} selected={selected} />
     );
   }
   if (!object.polygon?.length) return null;
@@ -567,19 +567,21 @@ function AmenityTotem({
   x,
   y,
   type,
+  rotation = 0,
   selected,
   ghost,
 }: {
   x: number;
   y: number;
   type: AmenityType;
+  rotation?: number;
   selected: boolean;
   ghost?: boolean;
 }) {
   const color = AMENITY_COLOR[type];
   const h = selected ? 1.45 : 1.2;
   return (
-    <group position={[x, 0, y]}>
+    <group position={[x, 0, y]} rotation={[0, yawRad(rotation), 0]}>
       <mesh position={[0, h / 2, 0]}>
         <cylinderGeometry args={[0.28, 0.34, h, 10]} />
         <meshStandardMaterial color={color} roughness={0.45} transparent={ghost} opacity={ghost ? 0.5 : 1} />
