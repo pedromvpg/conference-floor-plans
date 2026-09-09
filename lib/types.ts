@@ -13,13 +13,24 @@ export type AmenityType =
   | "first_aid"
   | "water";
 
-export type ObjectKind = "booth" | "amenity" | "side_event";
+export type ObjectKind = "booth" | "amenity" | "side_event" | "hotel";
 
-export type PinKind = "amenity" | "side_event";
+export type PinKind = "amenity" | "side_event" | "hotel";
+
+export function isMapPinObject<T extends { kind: ObjectKind }>(
+  o: T,
+): o is T & { kind: "side_event" | "hotel" } {
+  return o.kind === "side_event" || o.kind === "hotel";
+}
 
 export function isPinObject(o: { kind: ObjectKind }): boolean {
-  return o.kind === "amenity" || o.kind === "side_event";
+  return o.kind === "amenity" || isMapPinObject(o);
 }
+
+export const MAP_PIN_META = {
+  side_event: { label: "Side event", color: "#ea580c", mark: "E" },
+  hotel: { label: "Hotel", color: "#0f766e", mark: "H" },
+} as const;
 
 export type Appearance = "booth" | "stage" | "custom";
 

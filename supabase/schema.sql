@@ -83,7 +83,7 @@ create table if not exists public.speakers (
 create table if not exists public.objects (
   id uuid primary key default gen_random_uuid(),
   floor_id uuid not null references public.floors(id) on delete cascade,
-  kind text not null check (kind in ('booth', 'amenity', 'side_event')),
+  kind text not null check (kind in ('booth', 'amenity', 'side_event', 'hotel')),
   polygon jsonb,
   x double precision,
   y double precision,

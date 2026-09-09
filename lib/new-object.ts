@@ -1,6 +1,8 @@
 import { hallDefaults } from "./appearance";
+import { amenityLabel } from "./amenities";
 import { nowIso, newId } from "./store";
-import type { AmenityType, Appearance, MapObject, Ring } from "./types";
+import type { AmenityType, Appearance, MapObject, PinKind, Ring } from "./types";
+import { MAP_PIN_META } from "./types";
 
 export function newMapObject(input: {
   floorId: string;
@@ -39,4 +41,35 @@ export function newMapObject(input: {
     createdAt: t,
     updatedAt: t,
   };
+}
+
+export function stampPinObject(input: {
+  floorId: string;
+  pinKind: PinKind;
+  x: number;
+  y: number;
+  amenityType?: AmenityType;
+  appearance?: Appearance | null;
+  modelAssetId?: string | null;
+}): MapObject {
+  if (input.pinKind === "side_event" || input.pinKind === "hotel") {
+    return newMapObject({
+      floorId: input.floorId,
+      kind: input.pinKind,
+      x: input.x,
+      y: input.y,
+      name: MAP_PIN_META[input.pinKind].label,
+    });
+  }
+  const amenityType = input.amenityType ?? "info";
+  return newMapObject({
+    floorId: input.floorId,
+    kind: "amenity",
+    x: input.x,
+    y: input.y,
+    name: amenityLabel(amenityType),
+    amenityType,
+    appearance: input.appearance,
+    modelAssetId: input.modelAssetId,
+  });
 }
