@@ -59,3 +59,30 @@ export function editSnapMeters(units: Units, pxPerMeter: number): number {
   if (pxPerMeter >= 14) return base / 2;
   return base;
 }
+
+function niceNumber(raw: number): number {
+  const mag = 10 ** Math.floor(Math.log10(Math.max(raw, 1e-9)));
+  const n = raw / mag;
+  const mul = n < 1.5 ? 1 : n < 3.5 ? 2 : n < 7.5 ? 5 : 10;
+  return mag * mul;
+}
+
+/** Major ruler spacing in metres so ticks stay readable. */
+export function rulerStepMeters(units: Units, pxPerMeter: number, targetPx = 72): number {
+  const displayPerMeter = units === "ft" ? 1 / METERS_PER_FOOT : 1;
+  const rawDisplay = (displayPerMeter / Math.max(pxPerMeter, 1e-9)) * targetPx;
+  return niceNumber(rawDisplay) / displayPerMeter;
+}
+
+export function rulerStepFromSpan(spanMeters: number, units: Units, targetTicks = 8): number {
+  const displayPerMeter = units === "ft" ? 1 / METERS_PER_FOOT : 1;
+  return niceNumber((spanMeters * displayPerMeter) / Math.max(targetTicks, 1)) / displayPerMeter;
+}
+
+export function rulerTicks(min: number, max: number, step: number): number[] {
+  if (!(step > 0) || max <= min) return [];
+  const start = Math.ceil(min / step) * step;
+  const out: number[] = [];
+  for (let v = start; v <= max + step * 1e-6; v += step) out.push(Number(v.toFixed(8)));
+  return out;
+}

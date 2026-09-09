@@ -10,12 +10,13 @@ import type {
   FloorBasemap,
   LibraryAsset,
   MapObject,
+  PinKind,
   Ring,
   Sponsor,
   Tool,
   Units,
 } from "@/lib/types";
-import { VENUE_ID } from "@/lib/types";
+import { isPinObject, VENUE_ID } from "@/lib/types";
 import { PlanStage } from "@/components/map/PlanStage";
 import { leafletViewFromPlan, floorDeltaToEnu, offsetLatLng, roundBasemapCoord } from "@/lib/basemap";
 
@@ -58,9 +59,11 @@ import {
   type BoundsHandle,
 } from "@/lib/geometry";
 import { formatSize, gridSize, snap } from "@/lib/units";
+import { MapRulers } from "@/components/map/MapRulers";
 import { AMENITY_COLOR, amenityLabel } from "@/lib/amenities";
 import { tierFill } from "@/lib/colors";
 import { newId, nowIso } from "@/lib/store";
+import { newMapObject } from "@/lib/new-object";
 import { hallDefaults } from "@/lib/appearance";
 import { displayLogoUrl, objectUrls } from "@/lib/hall";
 import {
@@ -70,7 +73,9 @@ import {
   corner,
   dragHandle,
   insertNode,
+  isRectangleShape,
   objectShape,
+  resizeRectangleCorner,
   rotateBezier,
   setMirroredHandles,
   svgPathD,
@@ -106,6 +111,7 @@ type Props = {
   tool?: Tool;
   units?: Units;
   amenityStamp?: AmenityType;
+  pinKind?: PinKind;
   presetId?: string | null;
   presetMeters?: { w: number; d: number } | null;
   stampAppearance?: Appearance | null;
@@ -121,6 +127,7 @@ type Props = {
   knownLengthMeters?: number;
   underlayOpacity?: number;
   showGrid?: boolean;
+  showRulers?: boolean;
   snapToObjects?: boolean;
   snapToUnits?: boolean;
   /** Increment to animate the camera so `selectedId` fills the view. */
@@ -183,7 +190,7 @@ function lerpCam(a: Cam, b: Cam, t: number): Cam {
 }
 
 function objectFrameBounds(o: MapObject): { minX: number; minY: number; maxX: number; maxY: number } | null {
-  if (o.kind === "amenity" && o.x != null && o.y != null) {
+  if (isPinObject(o) && o.x != null && o.y != null) {
     const r = 3;
     return { minX: o.x - r, minY: o.y - r, maxX: o.x + r, maxY: o.y + r };
   }
@@ -306,6 +313,7 @@ export function FloorCanvas({
   tool = "select",
   units = "m",
   amenityStamp = "bathroom",
+  pinKind = "amenity",
   presetMeters = null,
   stampAppearance = null,
   stampModelAssetId = null,
@@ -319,6 +327,7 @@ export function FloorCanvas({
   knownLengthMeters = 10,
   underlayOpacity = 1,
   showGrid = mode === "edit",
+  showRulers = mode === "edit",
   snapToObjects = true,
   snapToUnits = false,
   frameNonce = 0,
@@ -455,12 +464,6 @@ export function FloorCanvas({
   }
 
   useEffect(() => {
-    cancelCamAnim();
-    setCam(fitSceneCam(floor.calibration));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [floor.id]);
-
-  useEffect(() => {
     if (!fitNonce) return;
     animateCam(fitSceneCam(floor.calibration));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -573,7 +576,7 @@ export function FloorCanvas({
     for (const s of starts) {
       const obj = objects.find((o) => o.id === s.id);
       if (!obj) continue;
-      if (obj.kind === "amenity" && s.x != null && s.y != null) {
+      if (isPinObject(obj) && s.x != null && s.y != null) {
         next.push({ ...obj, x: s.x + usedDx, y: s.y + usedDy });
       } else if (s.polygon || s.path) {
         const path = s.path?.length ? translateBezier(s.path, usedDx, usedDy) : null;
@@ -698,7 +701,7 @@ export function FloorCanvas({
     (x: number, y: number): MapObject | null => {
       for (let i = objects.length - 1; i >= 0; i--) {
         const o = objects[i];
-        if (o.kind === "amenity" && o.x != null && o.y != null) {
+        if (isPinObject(o) && o.x != null && o.y != null) {
           if (hypot(x - o.x, y - o.y) < 1.6) return o;
         } else if (o.polygon && pointInRing(x, y, o.polygon)) {
           return o;
@@ -1000,6 +1003,7 @@ export function FloorCanvas({
               if (near && near.t > 0.04 && near.t < 0.96) {
                 const worldHit = toW(near.x, near.y);
                 if (hypot(w.x - worldHit.x, w.y - worldHit.y) <= strokeSlop) {
+                  if (isRectangleShape(parsed.nodes) && !e.altKey) return;
                   const nextNodes = insertNode(parsed.nodes, near.index, near.t, parsed.closed);
                   const next = setSvgElementBezier(underlaySvg, selectedVenueElementId, nextNodes, parsed.closed);
                   onCommitVenueSvg?.(next);
@@ -1037,7 +1041,7 @@ export function FloorCanvas({
       if (canEditObjects && tool === "select" && sole) {
         const ppmObj = svgUserToScreen(svgRef.current, cam.w, cam.h);
         const hrV = screenPx(HANDLE_HALF_PX, ppmObj);
-        if (sole.kind === "amenity" && sole.x != null && sole.y != null) {
+        if (isPinObject(sole) && sole.x != null && sole.y != null) {
           const rh = rotateHandlePos(amenityBounds(sole), hrV * 3.2);
           if (hypot(w.x - rh.hx, w.y - rh.hy) <= hrV * 1.8) {
             drag.current = {
@@ -1124,6 +1128,7 @@ export function FloorCanvas({
         if (e.detail !== 2) {
           const near = closestOnPath(shape, w.x, w.y, true);
           if (near && near.t > 0.04 && near.t < 0.96 && near.dist <= strokeSlop) {
+            if (isRectangleShape(shape) && !e.altKey) return;
             const nextPath = insertNode(shape, near.index, near.t, true);
             const next = commitShape(nextPath);
             onChangeObject?.({ ...sole, ...next });
@@ -1217,26 +1222,28 @@ export function FloorCanvas({
 
     if (tool === "icon") {
       if (!canEditObjects) return;
-      const t = nowIso();
       const p = snapPoint(w.x, w.y, null);
       setGuides({ gx: p.gx, gy: p.gy });
-      onCreateObject?.({
-        id: newId(),
-        floorId: floor.id,
-        kind: "amenity",
-        polygon: null,
-        x: p.x,
-        y: p.y,
-        rotation: 0,
-        boothNumber: "",
-        name: amenityLabel(amenityStamp),
-        sponsorId: null,
-        amenityType: amenityStamp,
-        color: null,
-        ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
-        createdAt: t,
-        updatedAt: t,
-      });
+      onCreateObject?.(
+        pinKind === "side_event"
+          ? newMapObject({
+              floorId: floor.id,
+              kind: "side_event",
+              x: p.x,
+              y: p.y,
+              name: "Side event",
+            })
+          : newMapObject({
+              floorId: floor.id,
+              kind: "amenity",
+              x: p.x,
+              y: p.y,
+              name: amenityLabel(amenityStamp),
+              amenityType: amenityStamp,
+              appearance: stampAppearance,
+              modelAssetId: stampModelAssetId,
+            }),
+      );
       return;
     }
 
@@ -1311,7 +1318,16 @@ export function FloorCanvas({
         }
       } else if (d.mode === "vertex" && d.vertex != null && live) {
         const local = clientToSvgEl(live, e.clientX, e.clientY);
-        const next = setSvgElementPoint(d.startMarkup, d.id, d.vertex, local);
+        const lock = e.shiftKey ? !constrainProportions : constrainProportions;
+        const next =
+          d.nodes && isRectangleShape(d.nodes) && !e.altKey
+            ? setSvgElementBezier(
+                d.startMarkup,
+                d.id,
+                resizeRectangleCorner(d.nodes, d.vertex, local.x, local.y, lock),
+                d.closed ?? true,
+              )
+            : setSvgElementPoint(d.startMarkup, d.id, d.vertex, local);
         lastVenuePreview.current = next;
         onPreviewVenueSvg?.(next);
       } else if ((d.mode === "handle-in" || d.mode === "handle-out") && d.vertex != null && live && d.nodes) {
@@ -1393,7 +1409,7 @@ export function FloorCanvas({
             }
             setHoverHandle(handle);
           }
-        } else if (selected?.kind === "amenity" && selected.x != null && selected.y != null) {
+        } else if (selected && isPinObject(selected) && selected.x != null && selected.y != null) {
           const ppmH = svgUserToScreen(svgRef.current, cam.w, cam.h);
           const hrH = screenPx(HANDLE_HALF_PX, ppmH);
           const rh = rotateHandlePos(amenityBounds(selected), hrH * 3.2);
@@ -1456,7 +1472,7 @@ export function FloorCanvas({
         if (d.mode === "rotate" && d.startAngle != null && d.startRot != null) {
           let nextDeg = d.startRot + (angleDeg(d.ox, d.oy, w.x, w.y) - d.startAngle);
           if (e.shiftKey) nextDeg = snapDeg(nextDeg, 15);
-          if (obj.kind === "amenity") {
+          if (isPinObject(obj)) {
             onChangeObject?.({ ...obj, rotation: nextDeg, facingDeg: nextDeg });
             return;
           }
@@ -1474,8 +1490,13 @@ export function FloorCanvas({
         if ((d.mode === "vertex" || d.mode === "handle-in" || d.mode === "handle-out") && d.path && d.vertex != null) {
           const cursor = snapBase(w.x, w.y);
           let nextPath = d.path;
-          if (d.mode === "vertex") nextPath = d.path.map((n, i) => (i === d.vertex ? { ...n, x: cursor.x, y: cursor.y } : n));
-          else {
+          if (d.mode === "vertex") {
+            const lock = e.shiftKey ? !constrainProportions : constrainProportions;
+            nextPath =
+              isRectangleShape(d.path) && !e.altKey
+                ? resizeRectangleCorner(d.path, d.vertex, cursor.x, cursor.y, lock)
+                : d.path.map((n, i) => (i === d.vertex ? { ...n, x: cursor.x, y: cursor.y } : n));
+          } else {
             nextPath = dragHandle(d.path, d.vertex, d.mode === "handle-out" ? "out" : "in", cursor.x, cursor.y, e.altKey);
           }
           const next = commitShape(nextPath);
@@ -1506,7 +1527,7 @@ export function FloorCanvas({
         }
         let dx = w.x - d.ox;
         let dy = w.y - d.oy;
-        if (obj.kind === "amenity") {
+        if (isPinObject(obj)) {
           const rawX = (d.x ?? 0) + dx;
           const rawY = (d.y ?? 0) + dy;
           const p = snapPoint(rawX, rawY, obj.id);
@@ -1615,6 +1636,8 @@ export function FloorCanvas({
       sponsorId: null,
       amenityType: null,
       color: null,
+      description: "",
+      eventDate: "",
       ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
       createdAt: t,
       updatedAt: t,
@@ -1703,6 +1726,8 @@ export function FloorCanvas({
       sponsorId: null,
       amenityType: null,
       color: null,
+      description: "",
+      eventDate: "",
       ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
       createdAt: t,
       updatedAt: t,
@@ -1950,7 +1975,7 @@ export function FloorCanvas({
           </pattern>
         ) : null}
         {objects.map((o) => {
-          if (o.kind === "amenity" || !o.polygon?.length) return null;
+          if (isPinObject(o) || !o.polygon?.length) return null;
           const fillUrl = objectUrls(o, assets).fillTextureUrl;
           if (!fillUrl) return null;
           return (
@@ -2065,7 +2090,7 @@ export function FloorCanvas({
       ) : null}
 
       {objects.map((o) => {
-        if (o.kind === "amenity") return null;
+        if (isPinObject(o)) return null;
         const sponsor = o.sponsorId ? sponsorById.get(o.sponsorId) : undefined;
         const selected = selectedSet.has(o.id);
         const highlighted = o.id === highlightId;
@@ -2078,7 +2103,7 @@ export function FloorCanvas({
         const media = objectUrls(o, assets);
         const logoUrl = displayLogoUrl(o, assets, sponsor);
         const fillUrl = media.fillTextureUrl;
-        const showLogo = Boolean(logoUrl) && screenW > 56 && screenH > 32;
+        const showLogo = Boolean(logoUrl) && !fillUrl && screenW > 56 && screenH > 32;
         const label = o.boothNumber || sponsor?.name || o.name;
         const sizeLabel = formatSize(b.w, b.h, units);
         const showSize = screenW > 44 && screenH > 22;
@@ -2171,26 +2196,37 @@ export function FloorCanvas({
         );
       })}
       {objects.map((o) => {
-        if (o.kind !== "amenity" || o.x == null || o.y == null) return null;
+        if (!isPinObject(o) || o.x == null || o.y == null) return null;
         const selected = selectedSet.has(o.id);
         const highlighted = o.id === highlightId;
         const pulsing = o.id === pulseId;
-        const color = AMENITY_COLOR[o.amenityType ?? "info"];
+        const side = o.kind === "side_event";
+        const color = side ? "#ea580c" : AMENITY_COLOR[o.amenityType ?? "info"];
+        const mark = side ? "E" : (o.amenityType ?? "info").slice(0, 1).toUpperCase();
         return (
           <g key={o.id} transform={`translate(${o.x} ${o.y}) rotate(${o.rotation ?? 0})`} pointerEvents={canEditVenue ? "none" : undefined}>
             {pulsing ? (
               <circle r={2.4} fill="none" stroke="#f97316" strokeWidth={strokeSelected} className="map-frame-pulse" />
             ) : null}
-            <circle r={1.15} fill={color} stroke={selected || highlighted ? "#fff" : "var(--map-icon-ring)"} strokeWidth={selected ? strokeSelected : strokeDefault} />
+            {side ? (
+              <path
+                d="M0 -1.85 C1.15 -1.85 1.7 -0.85 1.7 0.05 C1.7 0.95 0 2.15 0 2.15 C0 2.15 -1.7 0.95 -1.7 0.05 C-1.7 -0.85 -1.15 -1.85 0 -1.85 Z"
+                fill={color}
+                stroke={selected || highlighted ? "#fff" : "var(--map-icon-ring)"}
+                strokeWidth={selected ? strokeSelected : strokeDefault}
+              />
+            ) : (
+              <circle r={1.15} fill={color} stroke={selected || highlighted ? "#fff" : "var(--map-icon-ring)"} strokeWidth={selected ? strokeSelected : strokeDefault} />
+            )}
             <text
               textAnchor="middle"
-              y={0.32}
+              y={side ? -0.15 : 0.32}
               fontSize={0.7}
               fill="#fff"
               fontFamily="var(--font-sans), system-ui, sans-serif"
               fontWeight={700}
             >
-              {(o.amenityType ?? "info").slice(0, 1).toUpperCase()}
+              {mark}
             </text>
           </g>
         );
@@ -2307,13 +2343,13 @@ export function FloorCanvas({
                 ? venueRect
                 : canEditObjects && selected?.polygon
                   ? ringBounds(selected.polygon)
-                  : canEditObjects && selected?.kind === "amenity"
+                  : canEditObjects && selected && isPinObject(selected)
                     ? amenityBounds(selected)
                     : null;
             const shape = canEditObjects && selected?.polygon ? objectShape(selected) : [];
             return (
               <g pointerEvents="none">
-                {b && selected?.kind !== "amenity"
+                {b && selected && !isPinObject(selected)
                   ? HANDLES.map((h) => {
                       const [x, y] = handleXY(b, h);
                       return (
@@ -2331,7 +2367,7 @@ export function FloorCanvas({
                       );
                     })
                   : null}
-                {b && canEditObjects && selected && (selected.polygon || selected.kind === "amenity") ? (
+                {b && canEditObjects && selected && (selected.polygon || isPinObject(selected)) ? (
                   <RotateKnob box={b} handleR={handleR} />
                 ) : null}
                 {shape.map((n, i) => (
@@ -2359,6 +2395,7 @@ export function FloorCanvas({
             );
           })()
         : null}
+      {showRulers ? <MapRulers cam={cam} units={units} pxPerMeter={pxPerMeterScreen} /> : null}
     </svg>
     </PlanStage>
   );

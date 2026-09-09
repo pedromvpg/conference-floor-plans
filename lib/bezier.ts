@@ -139,6 +139,89 @@ export function moveNode(nodes: BezierNode[], index: number, x: number, y: numbe
   return nodes.map((n, i) => (i === index ? { ...n, x, y } : n));
 }
 
+function dropClosingDuplicate(nodes: BezierNode[]): BezierNode[] {
+  if (nodes.length < 2) return nodes;
+  const a = nodes[0];
+  const b = nodes[nodes.length - 1];
+  if (Math.hypot(a.x - b.x, a.y - b.y) < 1e-6) return nodes.slice(0, -1);
+  return nodes;
+}
+
+/** Four-corner closed path with right angles and no curves. */
+export function rectangleCorners(nodes: BezierNode[]): BezierNode[] | null {
+  const loop = dropClosingDuplicate(nodes);
+  if (loop.length !== 4) return null;
+  if (pathHasCurves(loop)) return null;
+  for (let i = 0; i < 4; i++) {
+    const p = loop[i];
+    const prev = loop[(i + 3) % 4];
+    const next = loop[(i + 1) % 4];
+    const ax = prev.x - p.x;
+    const ay = prev.y - p.y;
+    const bx = next.x - p.x;
+    const by = next.y - p.y;
+    const al = Math.hypot(ax, ay);
+    const bl = Math.hypot(bx, by);
+    if (al < EPS || bl < EPS) return null;
+    if (Math.abs((ax * bx + ay * by) / (al * bl)) > 0.04) return null;
+  }
+  return loop;
+}
+
+export function isRectangleShape(nodes: BezierNode[]): boolean {
+  return rectangleCorners(nodes) != null;
+}
+
+/** Move a rectangle corner and keep opposite corner + right angles. */
+export function resizeRectangleCorner(
+  nodes: BezierNode[],
+  index: number,
+  x: number,
+  y: number,
+  constrain = false,
+): BezierNode[] {
+  const loop = rectangleCorners(nodes);
+  if (!loop) return moveNode(nodes, index, x, y);
+  let i = index;
+  if (nodes.length === loop.length + 1 && index === nodes.length - 1) i = 0;
+  if (i < 0 || i > 3) return moveNode(nodes, index, x, y);
+
+  const opp = loop[(i + 2) % 4];
+  const nxt = loop[(i + 1) % 4];
+  const prv = loop[(i + 3) % 4];
+  let ux = nxt.x - opp.x;
+  let uy = nxt.y - opp.y;
+  let vx = prv.x - opp.x;
+  let vy = prv.y - opp.y;
+  const ul = Math.hypot(ux, uy);
+  const vl = Math.hypot(vx, vy);
+  if (ul < EPS || vl < EPS) return moveNode(nodes, index, x, y);
+  ux /= ul;
+  uy /= ul;
+  vx /= vl;
+  vy /= vl;
+  let su = (x - opp.x) * ux + (y - opp.y) * uy;
+  let sv = (x - opp.x) * vx + (y - opp.y) * vy;
+  const min = 0.3;
+  if (Math.abs(su) < min) su = su < 0 ? -min : min;
+  if (Math.abs(sv) < min) sv = sv < 0 ? -min : min;
+  if (constrain && vl > EPS) {
+    const aspect = ul / vl;
+    sv = (sv < 0 ? -1 : 1) * (Math.abs(su) / aspect);
+  }
+  const pI = { x: opp.x + su * ux + sv * vx, y: opp.y + su * uy + sv * vy };
+  const pNext = { x: opp.x + su * ux, y: opp.y + su * uy };
+  const pPrev = { x: opp.x + sv * vx, y: opp.y + sv * vy };
+  const out = loop.map((node, k) => {
+    if (k === i) return { ...node, x: pI.x, y: pI.y };
+    if (k === (i + 1) % 4) return { ...node, x: pNext.x, y: pNext.y };
+    if (k === (i + 3) % 4) return { ...node, x: pPrev.x, y: pPrev.y };
+    return { ...node };
+  });
+  if (nodes.length === out.length + 1) return [...out, { ...out[0] }];
+  return out;
+}
+
 export function dragHandle(
   nodes: BezierNode[],
   index: number,

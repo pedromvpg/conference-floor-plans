@@ -1,8 +1,10 @@
 import {
   corner,
   fromRing,
+  isRectangleShape,
   moveNode,
   parseSvgPath,
+  resizeRectangleCorner,
   svgPathD,
   type BezierNode,
 } from "./bezier";
@@ -895,8 +897,11 @@ export function setSvgElementPoint(markup: string, id: string, index: number, po
   if (kind === "polygon" || kind === "polyline") {
     const pts = parsePoints(el.getAttribute("points") || "");
     if (!pts[index]) return markup;
-    pts[index] = point;
-    el.setAttribute("points", formatPoints(pts));
+    const nodes = fromRing(pts.map((p): [number, number] => [p.x, p.y]));
+    const next = isRectangleShape(nodes)
+      ? resizeRectangleCorner(nodes, index, point.x, point.y)
+      : moveNode(nodes, index, point.x, point.y);
+    el.setAttribute("points", formatPoints(next.map((n) => ({ x: n.x, y: n.y }))));
   } else if (kind === "rect") {
     const next = applyRectHandle(rectBox(el), index, point);
     el.setAttribute("x", String(next.x));
@@ -907,7 +912,9 @@ export function setSvgElementPoint(markup: string, id: string, index: number, po
     const parsed = parseSvgPath(el.getAttribute("d") || "") ?? polylineFromPath(el.getAttribute("d") || "");
     if (!parsed) return markup;
     if ("nodes" in parsed) {
-      const next = moveNode(parsed.nodes, index, point.x, point.y);
+      const next = isRectangleShape(parsed.nodes)
+        ? resizeRectangleCorner(parsed.nodes, index, point.x, point.y)
+        : moveNode(parsed.nodes, index, point.x, point.y);
       el.setAttribute("d", svgPathD(next, parsed.closed));
     } else if (parsed.pts[index]) {
       parsed.pts[index] = point;

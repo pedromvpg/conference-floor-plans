@@ -13,6 +13,7 @@ import type {
   Floor,
   LibraryAsset,
   MapObject,
+  PinKind,
   Sponsor,
   Tool,
   Units,
@@ -30,6 +31,7 @@ export type HallCanvasProps = {
   tool?: Tool;
   units?: Units;
   amenityStamp?: AmenityType;
+  pinKind?: PinKind;
   presetMeters?: { w: number; d: number } | null;
   stampAppearance?: Appearance | null;
   stampModelAssetId?: string | null;
@@ -52,6 +54,7 @@ export function HallCanvas({
   tool = "select",
   units = "m",
   amenityStamp = "info",
+  pinKind = "amenity",
   presetMeters = null,
   stampAppearance = null,
   stampModelAssetId = null,
@@ -76,8 +79,8 @@ export function HallCanvas({
 
   useEffect(() => {
     setFocusId(highlightId ?? null);
-    setCamNonce((n) => n + 1);
-  }, [floor.id, highlightId]);
+    if (highlightId) setCamNonce((n) => n + 1);
+  }, [highlightId]);
 
   useEffect(() => {
     setFocusId(selectedId);
@@ -138,6 +141,7 @@ export function HallCanvas({
     tool,
     units,
     amenityStamp,
+    pinKind,
     presetMeters,
     stampAppearance,
     stampModelAssetId,
