@@ -4,13 +4,13 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Grid, useTexture } from "@react-three/drei";
 import { useThree, type ThreeEvent } from "@react-three/fiber";
-import { AMENITY_COLOR, amenityLabel } from "@/lib/amenities";
+import { AMENITY_COLOR } from "@/lib/amenities";
 import { hallDefaults, resolveAppearance } from "@/lib/appearance";
 import { boothFillHex, HALL_THEME, type MapTone } from "@/lib/colors";
 import { rectFromCenter, rectRing, ringBounds, venueWorldRect } from "@/lib/geometry";
 import { displayLogoUrl, objectUrls, snapWorld, yawRad } from "@/lib/hall";
 import { commitShape, objectShape, translateBezier } from "@/lib/bezier";
-import { newMapObject } from "@/lib/new-object";
+import { stampPinObject, newMapObject } from "@/lib/new-object";
 import { gridSize } from "@/lib/units";
 import type {
   AmenityType,
@@ -24,7 +24,7 @@ import type {
   Tool,
   Units,
 } from "@/lib/types";
-import { isPinObject } from "@/lib/types";
+import { isPinObject, isMapPinObject, MAP_PIN_META } from "@/lib/types";
 import { BoothKit } from "./BoothKit";
 import { CustomModel } from "./CustomModel";
 import { HallRulers } from "./HallRulers";
@@ -186,22 +186,13 @@ export function HallScene({
     if (!canEdit) return;
     if (tool === "icon") {
       onCreateRef.current?.(
-        pinKind === "side_event"
-          ? newMapObject({
-              floorId: floor.id,
-              kind: "side_event",
-              x,
-              y,
-              name: "Side event",
-            })
-          : newMapObject({
-              floorId: floor.id,
-              kind: "amenity",
-              x,
-              y,
-              name: amenityLabel(amenityStamp),
-              amenityType: amenityStamp,
-            }),
+        stampPinObject({
+          floorId: floor.id,
+          pinKind,
+          x,
+          y,
+          amenityType: amenityStamp,
+        }),
       );
       return;
     }
@@ -412,7 +403,7 @@ export function HallScene({
           );
         })}
       {objects
-        .filter((o) => isPinObject(o))
+        .filter((o) => isPinObject(o) && !isMapPinObject(o))
         .map((o) => {
           const selected = o.id === selectedId || o.id === highlightId;
           return (
@@ -463,8 +454,8 @@ export function HallScene({
         />
       ) : null}
       {placing && hover && tool === "icon" ? (
-        pinKind === "side_event" ? (
-          <AmenityTotem x={hover.x} y={hover.y} color="#ea580c" selected={false} ghost />
+        pinKind === "side_event" || pinKind === "hotel" ? (
+          <AmenityTotem x={hover.x} y={hover.y} color={MAP_PIN_META[pinKind].color} selected={false} ghost />
         ) : (
           <AmenityTotem x={hover.x} y={hover.y} type={amenityStamp} selected={false} ghost />
         )
@@ -534,7 +525,7 @@ function HallPlot({
         x={object.x}
         y={object.y}
         type={object.amenityType ?? "info"}
-        color={object.kind === "side_event" ? "#ea580c" : undefined}
+        color={isMapPinObject(object) ? MAP_PIN_META[object.kind].color : undefined}
         rotation={object.rotation ?? 0}
         selected={selected}
       />
