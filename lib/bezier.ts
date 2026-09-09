@@ -224,12 +224,29 @@ function splitCubic(
   return { a: [p0, p01, p012, p0123], b: [p0123, p123, p23, p3] };
 }
 
+function closestOnStraight(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  x: number,
+  y: number,
+): { t: number; x: number; y: number; dist: number } {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 < EPS ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len2));
+  const px = ax + t * dx;
+  const py = ay + t * dy;
+  return { t, x: px, y: py, dist: Math.hypot(x - px, y - py) };
+}
+
 export function closestOnPath(
   nodes: BezierNode[],
   x: number,
   y: number,
   closed: boolean,
-  samples = 24,
+  samples = 48,
 ): { index: number; t: number; x: number; y: number; dist: number } | null {
   if (nodes.length < 2) return null;
   const n = nodes.length;
@@ -238,7 +255,12 @@ export function closestOnPath(
   for (let i = 0; i < count; i++) {
     const a = nodes[i];
     const b = nodes[(i + 1) % n];
-    const { c1, c2 } = segmentControls(a, b);
+    const { c1, c2, straight } = segmentControls(a, b);
+    if (straight) {
+      const hit = closestOnStraight(a.x, a.y, b.x, b.y, x, y);
+      if (!best || hit.dist < best.dist) best = { index: i, ...hit };
+      continue;
+    }
     for (let s = 1; s < samples; s++) {
       const t = s / samples;
       const [px, py] = cubic([a.x, a.y], c1, c2, [b.x, b.y], t);
