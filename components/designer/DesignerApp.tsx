@@ -1402,7 +1402,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           <span className="h-5 w-px bg-border" aria-hidden />
           <div className="flex items-center">
             <GridToggle value={showGrid} onChange={setShowGrid} />
-            <RulersToggle value={showRulers} onChange={setShowRulers} />
             <ViewModeToggle
               value={viewMode}
               onChange={(mode) => {
@@ -1410,6 +1409,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 if (mode === "hall" && tool === "calibrate") setTool("select");
               }}
             />
+            <RulersToggle value={showRulers} onChange={setShowRulers} />
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
