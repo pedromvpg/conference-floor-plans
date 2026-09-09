@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AmenityType,
   Appearance,
   Calibration,
   Floor,
+  FloorBasemap,
   MapObject,
   Ring,
   Sponsor,
@@ -13,6 +14,8 @@ import type {
   Units,
 } from "@/lib/types";
 import { VENUE_ID } from "@/lib/types";
+import { PlanStage } from "@/components/map/PlanStage";
+import { leafletViewFromPlan, floorDeltaToEnu, offsetLatLng, roundBasemapCoord } from "@/lib/basemap";
 
 function calibrationNearlyEqual(a: Calibration, b: Calibration): boolean {
   const ay = a.metersPerPixelY ?? a.metersPerPixel;
@@ -53,6 +56,18 @@ import { AMENITY_COLOR, amenityLabel } from "@/lib/amenities";
 import { tierFill } from "@/lib/colors";
 import { newId, nowIso } from "@/lib/store";
 import { hallDefaults } from "@/lib/appearance";
+import {
+  LAYER_ATTR,
+  appendSvgPolygon,
+  appendSvgRect,
+  lastSvgLayerId,
+  layerAttrSelector,
+  setSvgElementPoint,
+  svgElementPoints,
+  svgInnerMarkup,
+  svgViewBox,
+  translateSvgElement,
+} from "@/lib/svg-layers";
 
 type Props = {
   mode: "edit" | "view";
@@ -69,21 +84,59 @@ type Props = {
   stampAppearance?: Appearance | null;
   stampModelAssetId?: string | null;
   constrainProportions?: boolean;
+  selectedIds?: string[];
   onSelect?: (id: string | null) => void;
+  onSelectIds?: (ids: string[]) => void;
   onChangeObject?: (obj: MapObject) => void;
+  onChangeObjects?: (objs: MapObject[]) => void;
   onCreateObject?: (obj: MapObject) => void;
   onCalibrated?: (cal: Calibration, previous: Calibration | null) => void;
   knownLengthMeters?: number;
   underlayOpacity?: number;
+  showGrid?: boolean;
   /** Increment to animate the camera so `selectedId` fills the view. */
   frameNonce?: number;
   /** Increment to frame the drawing and all objects. */
   fitNonce?: number;
   /** Venue tab edits the drawing; objects tab edits booths and icons. */
   editLayer?: "objects" | "venue";
+  canvasInteractive?: boolean;
+  basemapInteractive?: boolean;
+  /** Slide the hall on Earth (lat/lng) instead of panning the shared camera. */
+  basemapAlignMode?: boolean;
+  onBasemapAnchorChange?: (next: Pick<FloorBasemap, "lat" | "lng">) => void;
+  onBasemapDerivedZoom?: (zoom: number) => void;
+  basemapZoomTo?: { zoom: number; nonce: number } | null;
+  /** Inline SVG markup so venue layers can be hidden/reordered live. */
+  underlaySvg?: string | null;
+  underlayHoverLayerId?: string | null;
+  editVenueElements?: boolean;
+  selectedVenueElementId?: string | null;
+  onHoverVenueElement?: (id: string | null) => void;
+  onSelectVenueElement?: (id: string | null) => void;
+  onPreviewVenueSvg?: (svg: string) => void;
+  onCommitVenueSvg?: (svg: string) => void;
+  showUnderlay?: boolean;
 };
 
 type Cam = { x: number; y: number; w: number; h: number };
+
+const HANDLE_HALF_PX = 5;
+const STROKE_SELECTED_PX = 2;
+const STROKE_DEFAULT_PX = 1;
+
+function svgUserToScreen(svg: SVGSVGElement | null, camW: number, camH: number): number {
+  if (svg) {
+    const w = svg.clientWidth;
+    const h = svg.clientHeight;
+    if (w > 0 && h > 0) return Math.min(w / Math.max(camW, 1e-6), h / Math.max(camH, 1e-6));
+  }
+  return 10;
+}
+
+function screenPx(px: number, ppm: number): number {
+  return px / Math.max(ppm, 1e-6);
+}
 
 function easeOutCubic(t: number): number {
   return 1 - (1 - t) ** 3;
@@ -108,6 +161,22 @@ function objectFrameBounds(o: MapObject): { minX: number; minY: number; maxX: nu
     return { minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY };
   }
   return null;
+}
+
+function boundsOverlap(
+  a: { minX: number; minY: number; maxX: number; maxY: number },
+  b: { minX: number; minY: number; maxX: number; maxY: number },
+): boolean {
+  return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
+}
+
+function marqueeBounds(x0: number, y0: number, x1: number, y1: number) {
+  return {
+    minX: Math.min(x0, x1),
+    minY: Math.min(y0, y1),
+    maxX: Math.max(x0, x1),
+    maxY: Math.max(y0, y1),
+  };
 }
 
 function expandBounds(
@@ -176,6 +245,7 @@ export function FloorCanvas({
   objects,
   sponsors,
   selectedId,
+  selectedIds,
   highlightId,
   tool = "select",
   units = "m",
@@ -185,16 +255,52 @@ export function FloorCanvas({
   stampModelAssetId = null,
   constrainProportions = true,
   onSelect,
+  onSelectIds,
   onChangeObject,
+  onChangeObjects,
   onCreateObject,
   onCalibrated,
   knownLengthMeters = 10,
   underlayOpacity = 1,
+  showGrid = mode === "edit",
   frameNonce = 0,
   fitNonce = 0,
   editLayer = "objects",
+  canvasInteractive = true,
+  basemapInteractive = false,
+  basemapAlignMode = false,
+  onBasemapAnchorChange,
+  onBasemapDerivedZoom,
+  basemapZoomTo = null,
+  underlaySvg,
+  underlayHoverLayerId,
+  editVenueElements = false,
+  selectedVenueElementId = null,
+  onHoverVenueElement,
+  onSelectVenueElement,
+  onPreviewVenueSvg,
+  onCommitVenueSvg,
+  showUnderlay = true,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const nestRef = useRef<SVGSVGElement>(null);
+  const lastVenuePreview = useRef<string | null>(null);
+  const svgElDrag = useRef<{
+    id: string;
+    mode: "move" | "vertex";
+    vertex?: number;
+    startMarkup: string;
+    ox: number;
+    oy: number;
+  } | null>(null);
+  const svgElPending = useRef<{
+    id: string;
+    startMarkup: string;
+    ox: number;
+    oy: number;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
   const cal = floor.calibration;
   const [imgNat, setImgNat] = useState<{ w: number; h: number } | null>(null);
   const size = cal
@@ -205,6 +311,8 @@ export function FloorCanvas({
   const [cam, setCam] = useState<Cam>({ x: -4, y: -4, w: size.w + 8, h: size.h + 8 });
   const camRef = useRef(cam);
   camRef.current = cam;
+  const basemapRef = useRef(floor.basemap);
+  basemapRef.current = floor.basemap;
   const camAnim = useRef<number | null>(null);
   const [pulseId, setPulseId] = useState<string | null>(null);
   const [draftRect, setDraftRect] = useState<Ring | null>(null);
@@ -213,9 +321,12 @@ export function FloorCanvas({
   const [calCursor, setCalCursor] = useState<{ x: number; y: number } | null>(null);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const panLast = useRef<{ x: number; y: number } | null>(null);
+  const viewPress = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const pinch = useRef<{ dist: number; mid: { x: number; y: number } } | null>(null);
   const drag = useRef<{
     id: string;
+    ids?: string[];
+    starts?: { id: string; polygon: Ring | null; x: number | null; y: number | null }[];
     mode: "move" | "resize";
     handle?: BoundsHandle;
     ox: number;
@@ -225,6 +336,17 @@ export function FloorCanvas({
     y: number | null;
     startBounds?: ReturnType<typeof ringBounds>;
   } | null>(null);
+  const pendingMove = useRef<{
+    clientX: number;
+    clientY: number;
+    ox: number;
+    oy: number;
+    ids: string[];
+  } | null>(null);
+  const marquee = useRef<{ x0: number; y0: number; additive: boolean } | null>(null);
+  const [marqueeNow, setMarqueeNow] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const spaceHeld = useRef(false);
+  const [spacePan, setSpacePan] = useState(false);
   const drawing = useRef<{ x: number; y: number } | null>(null);
   const calPress = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const altSnapOff = useRef(false);
@@ -296,13 +418,24 @@ export function FloorCanvas({
   useEffect(() => () => cancelCamAnim(), []);
 
   useEffect(() => {
+    if (underlaySvg) {
+      try {
+        const vb = svgViewBox(underlaySvg);
+        if (vb) {
+          setImgNat({ w: vb.w, h: vb.h });
+          return;
+        }
+      } catch {
+        /* fall through to image probe */
+      }
+    }
     setImgNat(null);
     const href = floor.underlayUrl;
     if (!href || typeof Image === "undefined") return;
     const probe = new Image();
     probe.onload = () => setImgNat({ w: probe.naturalWidth, h: probe.naturalHeight });
     probe.src = href;
-  }, [floor.underlayUrl]);
+  }, [floor.underlayUrl, underlaySvg]);
 
   useEffect(() => {
     if (tool !== "calibrate") {
@@ -317,10 +450,99 @@ export function FloorCanvas({
   const venueRect = liveCal ? venueWorldRect(liveCal) : null;
   const canEditVenue = mode === "edit" && editLayer === "venue";
   const canEditObjects = mode === "edit" && editLayer === "objects";
+  const drawVenueShapes = canEditVenue && Boolean(underlaySvg);
+  const activeIds = selectedIds?.length ? selectedIds : selectedId ? [selectedId] : [];
+  const selectedSet = useMemo(() => new Set(activeIds), [activeIds.join("|")]);
+
+  function emitSelect(ids: string[]) {
+    if (onSelectIds) {
+      onSelectIds(ids);
+      return;
+    }
+    onSelect?.(ids.length ? ids[ids.length - 1] : null);
+  }
+
+  function objectsInMarquee(box: { minX: number; minY: number; maxX: number; maxY: number }) {
+    return objects.filter((o) => {
+      const b = objectFrameBounds(o);
+      return b ? boundsOverlap(b, box) : false;
+    });
+  }
+
+  function commitGroupMove(
+    starts: { id: string; polygon: Ring | null; x: number | null; y: number | null }[],
+    dx: number,
+    dy: number,
+  ) {
+    let usedDx = dx;
+    let usedDy = dy;
+    const primary = starts[0];
+    if (primary?.polygon && !altSnapOff.current) {
+      const pix = snapToPixel((primary.polygon[0]?.[0] ?? 0) + dx, (primary.polygon[0]?.[1] ?? 0) + dy, cal);
+      usedDx = pix.x - (primary.polygon[0]?.[0] ?? 0);
+      usedDy = pix.y - (primary.polygon[0]?.[1] ?? 0);
+      const b = ringBounds(primary.polygon);
+      const { xs, ys } = alignmentTargets(objects, primary.id, underlayW, underlayH, underlayX, underlayY);
+      const mag = snapTranslation(b, usedDx, usedDy, xs, ys, snapThreshNow());
+      usedDx = mag.dx;
+      usedDy = mag.dy;
+      setGuides({ gx: mag.gx, gy: mag.gy });
+    } else if (primary && primary.x != null && primary.y != null) {
+      const p = snapPoint(primary.x + dx, primary.y + dy, primary.id);
+      usedDx = p.x - primary.x;
+      usedDy = p.y - primary.y;
+      setGuides({ gx: p.gx, gy: p.gy });
+    } else {
+      setGuides({ gx: [], gy: [] });
+    }
+    const next: MapObject[] = [];
+    for (const s of starts) {
+      const obj = objects.find((o) => o.id === s.id);
+      if (!obj) continue;
+      if (obj.kind === "amenity" && s.x != null && s.y != null) {
+        next.push({ ...obj, x: s.x + usedDx, y: s.y + usedDy });
+      } else if (s.polygon) {
+        next.push({ ...obj, polygon: translateRing(s.polygon, usedDx, usedDy) });
+      }
+    }
+    if (!next.length) return;
+    if (onChangeObjects) onChangeObjects(next);
+    else next.forEach((o) => onChangeObject?.(o));
+  }
   const underlayW = venueRect?.w ?? (imgNat?.w ?? 0);
   const underlayH = venueRect?.h ?? (imgNat?.h ?? 0);
   const underlayX = venueRect?.minX ?? 0;
   const underlayY = venueRect?.minY ?? 0;
+
+  function worldToSvgPt(wx: number, wy: number): { x: number; y: number } | null {
+    if (!underlaySvg || underlayW <= 0 || underlayH <= 0) return null;
+    const vb = svgViewBox(underlaySvg);
+    if (!vb) return null;
+    return {
+      x: vb.x + ((wx - underlayX) / underlayW) * vb.w,
+      y: vb.y + ((wy - underlayY) / underlayH) * vb.h,
+    };
+  }
+
+  function commitVenueRing(ring: Ring, kind: "rect" | "polygon") {
+    if (!underlaySvg) return false;
+    const pts = ring.map(([x, y]) => worldToSvgPt(x, y)).filter((p): p is { x: number; y: number } => Boolean(p));
+    if (pts.length < 3) return false;
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const maxX = Math.max(...xs);
+    const maxY = Math.max(...ys);
+    if (maxX - minX < 1 && maxY - minY < 1) return false;
+    const next =
+      kind === "rect"
+        ? appendSvgRect(underlaySvg, minX, minY, maxX - minX, maxY - minY)
+        : appendSvgPolygon(underlaySvg, pts);
+    onCommitVenueSvg?.(next);
+    onSelectVenueElement?.(lastSvgLayerId(next));
+    return true;
+  }
 
   const toWorld = useCallback((clientX: number, clientY: number) => {
     const svg = svgRef.current;
@@ -333,6 +555,30 @@ export function FloorCanvas({
     const p = pt.matrixTransform(ctm.inverse());
     return { x: p.x, y: p.y };
   }, []);
+
+  function clientToSvgEl(el: SVGGraphicsElement, clientX: number, clientY: number) {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = el.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const p = pt.matrixTransform(ctm.inverse());
+    return { x: p.x, y: p.y };
+  }
+
+  function venueElFromEvent(e: React.PointerEvent): string | null {
+    const t = e.target;
+    if (!(t instanceof Element)) return null;
+    const hit = t.closest(`[${LAYER_ATTR}]`);
+    return hit?.getAttribute(LAYER_ATTR) ?? null;
+  }
+
+  function nestLayerEl(id: string): SVGGraphicsElement | null {
+    const el = nestRef.current?.querySelector(layerAttrSelector(id));
+    return el instanceof SVGGraphicsElement ? el : null;
+  }
 
   const hitTest = useCallback(
     (x: number, y: number): MapObject | null => {
@@ -349,10 +595,55 @@ export function FloorCanvas({
     [objects],
   );
 
+  useEffect(() => {
+    function typing(el: EventTarget | null) {
+      return (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        (el instanceof HTMLElement && el.isContentEditable)
+      );
+    }
+    function clearSpace() {
+      spaceHeld.current = false;
+      setSpacePan(false);
+    }
+    function onDown(e: KeyboardEvent) {
+      if (e.code !== "Space" || e.repeat) return;
+      if (typing(e.target)) return;
+      e.preventDefault();
+      spaceHeld.current = true;
+      setSpacePan(true);
+    }
+    function onUp(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      clearSpace();
+    }
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    window.addEventListener("blur", clearSpace);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", clearSpace);
+    };
+  }, []);
+
+  function snapshotsFor(ids: string[]) {
+    return ids
+      .map((id) => objects.find((o) => o.id === id))
+      .filter((o): o is MapObject => Boolean(o))
+      .map((o) => ({
+        id: o.id,
+        polygon: o.polygon ? o.polygon.map((p) => [...p] as [number, number]) : null,
+        x: o.x,
+        y: o.y,
+      }));
+  }
+
   function snapThreshNow() {
     const svg = svgRef.current;
-    const ppm = svg ? svg.clientWidth / cam.w : 10;
-    return 10 / Math.max(ppm, 0.001);
+    const ppm = svgUserToScreen(svg, cam.w, cam.h);
+    return screenPx(10, ppm);
   }
 
   function snapPoint(x: number, y: number, skipId: string | null) {
@@ -370,8 +661,12 @@ export function FloorCanvas({
   }
 
   function zoomAt(wx: number, wy: number, factor: number) {
+    if (!Number.isFinite(factor) || factor === 1) return;
     cancelCamAnim();
     setCam((c) => {
+      const svg = svgRef.current;
+      const aspect =
+        svg && svg.clientHeight > 0 ? svg.clientWidth / svg.clientHeight : c.w / Math.max(c.h, 1e-9);
       const scene = sceneBounds(liveCal, objects);
       const span = Math.max(
         size.w,
@@ -381,7 +676,8 @@ export function FloorCanvas({
         50,
       );
       const nw = Math.max(8, Math.min(span * 8, c.w * factor));
-      const nh = nw * (c.h / c.w);
+      const nh = nw / aspect;
+      if (Math.abs(nw - c.w) < 1e-9 && Math.abs(nh - c.h) < 1e-9) return c;
       const sx = (wx - c.x) / c.w;
       const sy = (wy - c.y) / c.h;
       return { x: wx - sx * nw, y: wy - sy * nh, w: nw, h: nh };
@@ -442,10 +738,19 @@ export function FloorCanvas({
       return;
     }
 
-    if (mode === "view" || tool === "select") {
-      const ppm = svgRef.current ? svgRef.current.clientWidth / cam.w : 10;
-      const hr = 7 / Math.max(ppm, 0.001);
-      const venueSelected = selectedId === VENUE_ID;
+    const panNow = mode === "view" || spaceHeld.current || e.button === 1 || basemapInteractive;
+    if (panNow) {
+      panLast.current = { x: e.clientX, y: e.clientY };
+      if (mode === "view" && e.button === 0 && !spaceHeld.current) {
+        viewPress.current = { x: e.clientX, y: e.clientY, moved: false };
+      }
+      return;
+    }
+
+    if (tool === "select") {
+      const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
+      const hr = screenPx(HANDLE_HALF_PX, ppm);
+      const venueSelected = selectedSet.has(VENUE_ID) && selectedSet.size === 1;
       if (canEditVenue && tool === "select" && venueSelected && venueRect && liveCal) {
         let handle: BoundsHandle | null = null;
         for (const h of HANDLES) {
@@ -470,9 +775,63 @@ export function FloorCanvas({
           return;
         }
       }
-      const selected = objects.find((o) => o.id === selectedId);
-      if (canEditObjects && tool === "select" && selected?.polygon) {
-        const b = ringBounds(selected.polygon);
+      if (canEditVenue && editVenueElements && tool === "select" && underlaySvg && !e.shiftKey) {
+        const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
+        const hrEl = screenPx(HANDLE_HALF_PX, ppm);
+        if (selectedVenueElementId) {
+          const live = nestLayerEl(selectedVenueElementId);
+          const pts = svgElementPoints(underlaySvg, selectedVenueElementId);
+          if (live && pts) {
+            for (let i = 0; i < pts.length; i++) {
+              const svg = svgRef.current;
+              if (!svg) break;
+              const pt = svg.createSVGPoint();
+              pt.x = pts[i].x;
+              pt.y = pts[i].y;
+              const ctm = live.getScreenCTM();
+              if (!ctm) continue;
+              const screen = pt.matrixTransform(ctm);
+              const world = toWorld(screen.x, screen.y);
+              if (hypot(w.x - world.x, w.y - world.y) <= hrEl * 1.8) {
+                const local = clientToSvgEl(live, e.clientX, e.clientY);
+                svgElDrag.current = {
+                  id: selectedVenueElementId,
+                  mode: "vertex",
+                  vertex: i,
+                  startMarkup: underlaySvg,
+                  ox: local.x,
+                  oy: local.y,
+                };
+                lastVenuePreview.current = underlaySvg;
+                return;
+              }
+            }
+          }
+        }
+        const elId = venueElFromEvent(e);
+        if (elId) {
+          onSelectVenueElement?.(elId);
+          const live = nestLayerEl(elId);
+          const parent =
+            live?.parentNode instanceof SVGGraphicsElement ? live.parentNode : nestRef.current;
+          const origin = parent ? clientToSvgEl(parent, e.clientX, e.clientY) : { x: 0, y: 0 };
+          svgElPending.current = {
+            id: elId,
+            startMarkup: underlaySvg,
+            ox: origin.x,
+            oy: origin.y,
+            clientX: e.clientX,
+            clientY: e.clientY,
+          };
+          lastVenuePreview.current = underlaySvg;
+          return;
+        }
+        onSelectVenueElement?.(null);
+      }
+      const sole =
+        selectedSet.size === 1 ? objects.find((o) => selectedSet.has(o.id)) : undefined;
+      if (canEditObjects && tool === "select" && sole?.polygon) {
+        const b = ringBounds(sole.polygon);
         let handle: BoundsHandle | null = null;
         for (const h of HANDLES) {
           const [hx, hy] = handleXY(b, h);
@@ -483,31 +842,35 @@ export function FloorCanvas({
         }
         if (handle) {
           drag.current = {
-            id: selected.id,
+            id: sole.id,
             mode: "resize",
             handle,
             ox: w.x,
             oy: w.y,
-            polygon: selected.polygon.map((p) => [...p] as [number, number]),
-            x: selected.x,
-            y: selected.y,
+            polygon: sole.polygon.map((p) => [...p] as [number, number]),
+            x: sole.x,
+            y: sole.y,
             startBounds: b,
           };
           return;
         }
       }
-      const hit = canEditObjects || mode === "view" ? hitTest(w.x, w.y) : null;
+      const hit = canEditObjects ? hitTest(w.x, w.y) : null;
       if (hit) {
-        onSelect?.(hit.id);
-        if (canEditObjects && tool === "select") {
-          drag.current = {
-            id: hit.id,
-            mode: "move",
+        let ids = [...selectedSet].filter((id) => id !== VENUE_ID);
+        if (e.shiftKey) {
+          ids = ids.includes(hit.id) ? ids.filter((id) => id !== hit.id) : [...ids, hit.id];
+        } else if (!ids.includes(hit.id)) {
+          ids = [hit.id];
+        }
+        emitSelect(ids);
+        if (canEditObjects && tool === "select" && ids.includes(hit.id)) {
+          pendingMove.current = {
+            clientX: e.clientX,
+            clientY: e.clientY,
             ox: w.x,
             oy: w.y,
-            polygon: hit.polygon ? hit.polygon.map((p) => [...p] as [number, number]) : null,
-            x: hit.x,
-            y: hit.y,
+            ids,
           };
         }
         return;
@@ -519,7 +882,7 @@ export function FloorCanvas({
         w.y >= venueRect.minY &&
         w.y <= venueRect.maxY;
       if (canEditVenue && tool === "select" && onVenue && liveCal) {
-        onSelect?.(VENUE_ID);
+        emitSelect([VENUE_ID]);
         if (e.shiftKey) {
           drag.current = {
             id: VENUE_ID,
@@ -531,31 +894,28 @@ export function FloorCanvas({
             y: null,
             startBounds: venueRect,
           };
-          return;
         }
-        panLast.current = { x: e.clientX, y: e.clientY };
         return;
       }
-      onSelect?.(canEditVenue ? VENUE_ID : null);
-      panLast.current = { x: e.clientX, y: e.clientY };
+      if (canEditObjects && tool === "select") {
+        marquee.current = { x0: w.x, y0: w.y, additive: e.shiftKey };
+        setMarqueeNow({ x0: w.x, y0: w.y, x1: w.x, y1: w.y });
+        if (!e.shiftKey) emitSelect([]);
+        return;
+      }
+      emitSelect(canEditVenue ? [VENUE_ID] : []);
       return;
     }
 
     if (tool === "calibrate") {
-      if (!canEditVenue) {
-        panLast.current = { x: e.clientX, y: e.clientY };
-        return;
-      }
+      if (!canEditVenue) return;
       calPress.current = { x: e.clientX, y: e.clientY, moved: false };
       setCalCursor(w);
       return;
     }
 
     if (tool === "icon") {
-      if (!canEditObjects) {
-        panLast.current = { x: e.clientX, y: e.clientY };
-        return;
-      }
+      if (!canEditObjects) return;
       const t = nowIso();
       const p = snapPoint(w.x, w.y, null);
       setGuides({ gx: p.gx, gy: p.gy });
@@ -580,13 +940,10 @@ export function FloorCanvas({
     }
 
     if (tool === "rect") {
-      if (!canEditObjects) {
-        panLast.current = { x: e.clientX, y: e.clientY };
-        return;
-      }
+      if (!canEditObjects && !drawVenueShapes) return;
       const p = snapPoint(w.x, w.y, null);
       setGuides({ gx: p.gx, gy: p.gy });
-      if (presetMeters && e.detail === 1) {
+      if (!drawVenueShapes && presetMeters && e.detail === 1) {
         drawing.current = { x: p.x, y: p.y };
         setDraftRect(rectFromCenter(p.x, p.y, presetMeters.w, presetMeters.d, 0));
         return;
@@ -597,10 +954,7 @@ export function FloorCanvas({
     }
 
     if (tool === "polygon") {
-      if (!canEditObjects) {
-        panLast.current = { x: e.clientX, y: e.clientY };
-        return;
-      }
+      if (!canEditObjects && !drawVenueShapes) return;
       const p = snapPoint(w.x, w.y, null);
       setGuides({ gx: p.gx, gy: p.gy });
       setDraftPoly((prev) => [...prev, [p.x, p.y]]);
@@ -619,12 +973,69 @@ export function FloorCanvas({
       pinch.current = { dist, mid: pinch.current.mid };
       return;
     }
+    if (svgElPending.current && !svgElDrag.current) {
+      const p = svgElPending.current;
+      if (hypot(e.clientX - p.clientX, e.clientY - p.clientY) > 4) {
+        svgElDrag.current = {
+          id: p.id,
+          mode: "move",
+          startMarkup: p.startMarkup,
+          ox: p.ox,
+          oy: p.oy,
+        };
+        svgElPending.current = null;
+      }
+    }
+    if (svgElDrag.current) {
+      const d = svgElDrag.current;
+      const live = nestLayerEl(d.id);
+      if (d.mode === "move") {
+        const parent =
+          live?.parentNode instanceof SVGGraphicsElement ? live.parentNode : nestRef.current;
+        if (parent) {
+          const cur = clientToSvgEl(parent, e.clientX, e.clientY);
+          const next = translateSvgElement(d.startMarkup, d.id, cur.x - d.ox, cur.y - d.oy);
+          lastVenuePreview.current = next;
+          onPreviewVenueSvg?.(next);
+        }
+      } else if (d.mode === "vertex" && d.vertex != null && live) {
+        const local = clientToSvgEl(live, e.clientX, e.clientY);
+        const next = setSvgElementPoint(d.startMarkup, d.id, d.vertex, local);
+        lastVenuePreview.current = next;
+        onPreviewVenueSvg?.(next);
+      }
+      return;
+    }
+    if (editVenueElements && canEditVenue) {
+      onHoverVenueElement?.(venueElFromEvent(e));
+    }
     const w = toWorld(e.clientX, e.clientY);
     altSnapOff.current = e.altKey;
-    if (!drag.current && tool === "select" && selectedId) {
-      const ppm = svgRef.current ? svgRef.current.clientWidth / cam.w : 10;
-      const hr = 7 / Math.max(ppm, 0.001);
-      if (selectedId === VENUE_ID && venueRect && canEditVenue) {
+    if (marquee.current) {
+      setMarqueeNow({ x0: marquee.current.x0, y0: marquee.current.y0, x1: w.x, y1: w.y });
+      return;
+    }
+    if (pendingMove.current && !drag.current) {
+      const p = pendingMove.current;
+      if (hypot(e.clientX - p.clientX, e.clientY - p.clientY) > 4) {
+        drag.current = {
+          id: p.ids[0],
+          ids: p.ids,
+          starts: snapshotsFor(p.ids),
+          mode: "move",
+          ox: p.ox,
+          oy: p.oy,
+          polygon: null,
+          x: null,
+          y: null,
+        };
+        pendingMove.current = null;
+      }
+    }
+    if (!drag.current && tool === "select" && selectedSet.size === 1) {
+      const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
+      const hr = screenPx(HANDLE_HALF_PX, ppm);
+      if (selectedSet.has(VENUE_ID) && venueRect && canEditVenue) {
         let handle: BoundsHandle | null = null;
         for (const h of HANDLES) {
           const [hx, hy] = handleXY(venueRect, h);
@@ -632,7 +1043,7 @@ export function FloorCanvas({
         }
         setHoverHandle(handle);
       } else if (canEditObjects) {
-        const selected = objects.find((o) => o.id === selectedId);
+        const selected = objects.find((o) => selectedSet.has(o.id));
         if (selected?.polygon) {
           const b = ringBounds(selected.polygon);
           let handle: BoundsHandle | null = null;
@@ -652,14 +1063,15 @@ export function FloorCanvas({
       setCalCursor(w);
       if (calPress.current && pointers.current.size === 1) {
         const dist = hypot(e.clientX - calPress.current.x, e.clientY - calPress.current.y);
-        if (!calPress.current.moved && dist > 8) {
-          calPress.current.moved = true;
-          panLast.current = { x: e.clientX, y: e.clientY };
-        }
+        if (!calPress.current.moved && dist > 8) calPress.current.moved = true;
       }
     }
     if (drag.current) {
       const d = drag.current;
+      if (d.starts?.length && d.mode === "move") {
+        commitGroupMove(d.starts, w.x - d.ox, w.y - d.oy);
+        return;
+      }
       if (d.id === VENUE_ID && d.startBounds && liveCal) {
         const lock = e.shiftKey ? !constrainProportions : constrainProportions;
         let nextB = d.startBounds;
@@ -733,7 +1145,7 @@ export function FloorCanvas({
     if (drawing.current && tool === "rect") {
       const p = snapPoint(w.x, w.y, null);
       setGuides({ gx: p.gx, gy: p.gy });
-      if (presetMeters) {
+      if (!drawVenueShapes && presetMeters) {
         setDraftRect(rectFromCenter(p.x, p.y, presetMeters.w, presetMeters.d, 0));
       } else if (constrainProportions) {
         setDraftRect(squareRectRing(drawing.current.x, drawing.current.y, p.x, p.y, 0));
@@ -747,14 +1159,34 @@ export function FloorCanvas({
       if (!svg) return;
       const dx = e.clientX - panLast.current.x;
       const dy = e.clientY - panLast.current.y;
+      if (viewPress.current && hypot(e.clientX - viewPress.current.x, e.clientY - viewPress.current.y) > 6) {
+        viewPress.current.moved = true;
+      }
       panLast.current = { x: e.clientX, y: e.clientY };
-      const k = cam.w / svg.clientWidth;
+      const ppm = svgUserToScreen(svg, cam.w, cam.h);
       cancelCamAnim();
-      setCam((c) => ({ ...c, x: c.x - dx * k, y: c.y - dy * k }));
+      if (basemapAlignMode && onBasemapAnchorChange) {
+        const bm = basemapRef.current;
+        if (!bm?.enabled) return;
+        const dxm = dx / ppm;
+        const dym = dy / ppm;
+        const { east, north } = floorDeltaToEnu(dxm, dym, bm.bearing ?? 0);
+        const next = offsetLatLng(bm.lat, bm.lng, east, north);
+        const lat = roundBasemapCoord(next.lat);
+        const lng = roundBasemapCoord(next.lng);
+        basemapRef.current = { ...bm, lat, lng };
+        onBasemapAnchorChange({ lat, lng });
+        return;
+      }
+      setCam((c) => ({ ...c, x: c.x - dx / ppm, y: c.y - dy / ppm }));
     }
   }
 
   function commitRect(ring: Ring) {
+    if (drawVenueShapes) {
+      commitVenueRing(ring, "rect");
+      return;
+    }
     const b = ringBounds(ring);
     if (b.w < 0.3 || b.h < 0.3) return;
     const t = nowIso();
@@ -781,6 +1213,29 @@ export function FloorCanvas({
     const remaining = pointers.current.size - (pointers.current.has(e.pointerId) ? 1 : 0);
     pointers.current.delete(e.pointerId);
     pinch.current = null;
+    if (svgElDrag.current) {
+      const d = svgElDrag.current;
+      if (lastVenuePreview.current && lastVenuePreview.current !== d.startMarkup) {
+        onCommitVenueSvg?.(lastVenuePreview.current);
+      }
+      svgElDrag.current = null;
+    }
+    svgElPending.current = null;
+    if (marquee.current && remaining === 0) {
+      const w = toWorld(e.clientX, e.clientY);
+      const box = marqueeBounds(marquee.current.x0, marquee.current.y0, w.x, w.y);
+      const tiny = hypot(w.x - marquee.current.x0, w.y - marquee.current.y0) < screenPx(4, svgUserToScreen(svgRef.current, cam.w, cam.h));
+      if (!tiny) {
+        const hits = objectsInMarquee(box).map((o) => o.id);
+        const ids = marquee.current.additive
+          ? [...new Set([...selectedSet, ...hits].filter((id) => id !== VENUE_ID))]
+          : hits;
+        emitSelect(ids);
+      }
+      marquee.current = null;
+      setMarqueeNow(null);
+    }
+    pendingMove.current = null;
     if (tool === "calibrate" && calPress.current && !calPress.current.moved && remaining === 0) {
       placeCalibratePoint(toWorld(e.clientX, e.clientY));
     }
@@ -798,11 +1253,22 @@ export function FloorCanvas({
     setDraftRect(null);
     drag.current = null;
     panLast.current = null;
+    if (mode === "view" && viewPress.current && !viewPress.current.moved && remaining === 0) {
+      const w = toWorld(e.clientX, e.clientY);
+      const hit = hitTest(w.x, w.y);
+      emitSelect(hit ? [hit.id] : []);
+    }
+    viewPress.current = null;
     setGuides({ gx: [], gy: [] });
   }
 
   function closePolygon() {
     if (draftPoly.length < 3) {
+      setDraftPoly([]);
+      return;
+    }
+    if (drawVenueShapes) {
+      commitVenueRing(draftPoly, "polygon");
       setDraftPoly([]);
       return;
     }
@@ -835,14 +1301,15 @@ export function FloorCanvas({
         setDraftPoly([]);
         setDraftRect(null);
         setCalPts([]);
-        onSelect?.(null);
+        emitSelect([]);
       }
-      if (mode === "edit" && selectedId && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+      const arrows = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key);
+      if (mode === "edit" && arrows) {
         e.preventDefault();
         const step = e.shiftKey ? 10 : 1;
         const dx = (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0) * px.x;
         const dy = (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0) * px.y;
-        if (selectedId === VENUE_ID && liveCal && venueRect) {
+        if (selectedSet.has(VENUE_ID) && selectedSet.size === 1 && liveCal && venueRect) {
           if (!canEditVenue) return;
           const next = {
             minX: venueRect.minX + dx,
@@ -856,49 +1323,156 @@ export function FloorCanvas({
           );
           return;
         }
-        const obj = objects.find((o) => o.id === selectedId);
-        if (!obj || !canEditObjects) return;
-        if (obj.kind === "amenity" && obj.x != null && obj.y != null) {
-          const p = snapToPixel(obj.x + dx, obj.y + dy, cal);
-          onChangeObject?.({ ...obj, x: p.x, y: p.y });
-        } else if (obj.polygon) {
-          onChangeObject?.({ ...obj, polygon: translateRing(obj.polygon, dx, dy) });
-        }
+        const moveIds = [...selectedSet].filter((id) => id !== VENUE_ID);
+        if (!moveIds.length || !canEditObjects) return;
+        commitGroupMove(snapshotsFor(moveIds), dx, dy);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const [pxPerMeterScreen, setPxPerMeterScreen] = useState(10);
-
+  const [viewportTick, setViewportTick] = useState(0);
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
-    const update = () => setPxPerMeterScreen(svg.clientWidth / cam.w);
-    update();
-    const ro = new ResizeObserver(update);
+    const bump = () => setViewportTick((n) => n + 1);
+    bump();
+    const ro = new ResizeObserver(bump);
     ro.observe(svg);
     return () => ro.disconnect();
-  }, [cam.w]);
-
-  const handleR = 7 / Math.max(pxPerMeterScreen, 0.001);
+  }, []);
+  const pxPerMeterScreen = svgUserToScreen(svgRef.current, cam.w, cam.h);
+  void viewportTick;
+  const handleR = screenPx(HANDLE_HALF_PX, pxPerMeterScreen);
+  const strokeSelected = screenPx(STROKE_SELECTED_PX, pxPerMeterScreen);
+  const strokeDefault = screenPx(STROKE_DEFAULT_PX, pxPerMeterScreen);
   const meterGrid = gridSize(units);
   const showPixelGrid = Boolean(cal) && pxPerMeterScreen * px.x >= 6;
+  const [elHandles, setElHandles] = useState<{ x: number; y: number }[]>([]);
+  useLayoutEffect(() => {
+    if (!editVenueElements || !selectedVenueElementId || !underlaySvg) {
+      setElHandles([]);
+      return;
+    }
+    const live = nestLayerEl(selectedVenueElementId);
+    const pts = svgElementPoints(underlaySvg, selectedVenueElementId);
+    const svg = svgRef.current;
+    if (!live || !pts || !svg) {
+      setElHandles([]);
+      return;
+    }
+    setElHandles(
+      pts.map((p) => {
+        const pt = svg.createSVGPoint();
+        pt.x = p.x;
+        pt.y = p.y;
+        const ctm = live.getScreenCTM();
+        if (!ctm) return { x: 0, y: 0 };
+        const screen = pt.matrixTransform(ctm);
+        return toWorld(screen.x, screen.y);
+      }),
+    );
+  }, [editVenueElements, selectedVenueElementId, underlaySvg, cam, underlayW, underlayH, viewportTick]);
+
+  const hallX = underlayX + (underlayW || size.w) / 2;
+  const hallY = underlayY + (underlayH || size.h) / 2;
+  const leafletCam = useMemo(() => {
+    const bm = floor.basemap;
+    if (!bm?.enabled) return null;
+    return leafletViewFromPlan({
+      anchorLat: bm.lat,
+      anchorLng: bm.lng,
+      anchorX: hallX,
+      anchorY: hallY,
+      cam,
+      metersPerPx: 1 / Math.max(pxPerMeterScreen, 1e-9),
+      bearingDeg: bm.bearing ?? 0,
+    });
+  }, [
+    floor.basemap,
+    cam,
+    hallX,
+    hallY,
+    pxPerMeterScreen,
+  ]);
+  const leafletCamRef = useRef(leafletCam);
+  leafletCamRef.current = leafletCam;
+  const onBasemapDerivedZoomRef = useRef(onBasemapDerivedZoom);
+  onBasemapDerivedZoomRef.current = onBasemapDerivedZoom;
+  const lastDerivedZoom = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!leafletCam || !Number.isFinite(leafletCam.zoom)) return;
+    const z = Math.round(leafletCam.zoom * 100) / 100;
+    if (lastDerivedZoom.current === z) return;
+    lastDerivedZoom.current = z;
+    onBasemapDerivedZoomRef.current?.(z);
+  }, [leafletCam]);
+
+  const zoomToNonce = useRef(0);
+  useEffect(() => {
+    if (!basemapZoomTo || basemapZoomTo.nonce === zoomToNonce.current) return;
+    zoomToNonce.current = basemapZoomTo.nonce;
+    const currentZ = leafletCamRef.current?.zoom;
+    if (currentZ == null || !Number.isFinite(basemapZoomTo.zoom)) return;
+    const factor = 2 ** (currentZ - basemapZoomTo.zoom);
+    if (!Number.isFinite(factor) || Math.abs(factor - 1) < 1e-6) return;
+    const c = camRef.current;
+    zoomAt(c.x + c.w / 2, c.y + c.h / 2, factor);
+  }, [basemapZoomTo]);
 
   const underlayHref = floor.underlayUrl;
+  let underlayVb: { x: number; y: number; w: number; h: number } | null = null;
+  let underlayInner: string | null = null;
+  if (underlaySvg) {
+    try {
+      underlayVb = svgViewBox(underlaySvg);
+      underlayInner = svgInnerMarkup(underlaySvg, {
+        hoverId: underlayHoverLayerId,
+        selectedId: selectedVenueElementId,
+      });
+    } catch {
+      underlayInner = null;
+    }
+  }
 
   function points(ring: Ring) {
     return ring.map((p) => p.join(",")).join(" ");
   }
 
+  const osmOn = Boolean(floor.basemap?.enabled);
+  const hallLock = {
+    x: hallX,
+    y: hallY,
+    lat: floor.basemap?.lat ?? 0,
+    lng: floor.basemap?.lng ?? 0,
+  };
+
   return (
+    <PlanStage
+      basemap={floor.basemap}
+      leafletCam={leafletCam}
+      svgRef={svgRef}
+      hall={hallLock}
+      onWheel={onWheel}
+    >
     <svg
       ref={svgRef}
-      className={`h-full w-full touch-none bg-[var(--map-bg)] select-none ${tool === "calibrate" ? "cursor-crosshair" : ""}`}
-      style={hoverHandle ? { cursor: handleCursor(hoverHandle) } : undefined}
+      className={`h-full w-full touch-none select-none ${osmOn ? "bg-transparent" : "bg-[var(--map-bg)]"} ${
+        !canvasInteractive && !basemapInteractive ? "pointer-events-none" : ""
+      } ${
+        tool === "calibrate" ? "cursor-crosshair" : spacePan || basemapInteractive ? "cursor-grab" : marqueeNow ? "cursor-crosshair" : ""
+      }`}
+      style={
+        hoverHandle
+          ? { cursor: handleCursor(hoverHandle) }
+          : panLast.current || spacePan
+            ? { cursor: spacePan || panLast.current ? "grabbing" : undefined }
+            : undefined
+      }
+      preserveAspectRatio="xMidYMid meet"
       viewBox={`${cam.x} ${cam.y} ${cam.w} ${cam.h}`}
-      onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -917,28 +1491,53 @@ export function FloorCanvas({
           </pattern>
         ) : null}
       </defs>
-      {underlayHref ? (
-        <image
-          href={underlayHref}
-          x={underlayX}
-          y={underlayY}
-          width={underlayW || size.w}
-          height={underlayH || size.h}
-          opacity={underlayOpacity}
-          preserveAspectRatio="none"
+      {showUnderlay && underlayInner && underlayVb ? (
+        <g
           className="map-underlay"
-          onLoad={(ev) => {
-            const img = ev.currentTarget as unknown as SVGImageElement;
-            const w = (img as SVGImageElement).getBBox?.();
-            if (!imgNat && typeof Image !== "undefined") {
-              const probe = new Image();
-              probe.onload = () => setImgNat({ w: probe.naturalWidth, h: probe.naturalHeight });
-              probe.src = underlayHref;
-            }
-            void w;
-          }}
-        />
-      ) : (
+          opacity={underlayOpacity}
+          pointerEvents={editVenueElements && canEditVenue && tool === "select" ? "auto" : "none"}
+        >
+          <svg
+            ref={nestRef}
+            x={underlayX}
+            y={underlayY}
+            width={underlayW || size.w}
+            height={underlayH || size.h}
+            viewBox={`${underlayVb.x} ${underlayVb.y} ${underlayVb.w} ${underlayVb.h}`}
+            preserveAspectRatio="none"
+            overflow="visible"
+            pointerEvents={editVenueElements && canEditVenue && tool === "select" ? "all" : "none"}
+          >
+            <style>{`
+            [data-cm-hover="1"] { outline: 3px solid #ff6a00; outline-offset: 2px; }
+            [data-cm-selected="1"] { outline: 2px solid #ff6a00; outline-offset: 1px; }
+          `}</style>
+            <g dangerouslySetInnerHTML={{ __html: underlayInner }} />
+          </svg>
+        </g>
+      ) : showUnderlay && underlayHref ? (
+        <g className="map-underlay" opacity={underlayOpacity} pointerEvents="none">
+          <image
+            href={underlayHref}
+            x={underlayX}
+            y={underlayY}
+            width={underlayW || size.w}
+            height={underlayH || size.h}
+            preserveAspectRatio="none"
+            pointerEvents="none"
+            onLoad={(ev) => {
+              const img = ev.currentTarget as unknown as SVGImageElement;
+              const w = (img as SVGImageElement).getBBox?.();
+              if (!imgNat && typeof Image !== "undefined") {
+                const probe = new Image();
+                probe.onload = () => setImgNat({ w: probe.naturalWidth, h: probe.naturalHeight });
+                probe.src = underlayHref;
+              }
+              void w;
+            }}
+          />
+        </g>
+      ) : osmOn ? null : (
         <rect
           x={underlayX}
           y={underlayY}
@@ -953,42 +1552,40 @@ export function FloorCanvas({
         width={underlayW || size.w}
         height={underlayH || size.h}
         fill="none"
-        stroke={canEditVenue && selectedId === VENUE_ID ? "#f97316" : "var(--map-venue-stroke)"}
-        strokeWidth={Math.max(size.w, size.h) * (canEditVenue && selectedId === VENUE_ID ? 0.0035 : 0.002)}
-        strokeDasharray={canEditVenue && selectedId === VENUE_ID ? undefined : `${Math.max(size.w, size.h) * 0.012} ${Math.max(size.w, size.h) * 0.008}`}
+        stroke={canEditVenue && selectedSet.has(VENUE_ID) ? "#f97316" : "var(--map-venue-stroke)"}
+        strokeWidth={canEditVenue && selectedSet.has(VENUE_ID) ? strokeSelected : strokeDefault}
+        strokeDasharray={
+          canEditVenue && selectedSet.has(VENUE_ID)
+            ? undefined
+            : `${screenPx(8, pxPerMeterScreen)} ${screenPx(6, pxPerMeterScreen)}`
+        }
         pointerEvents="none"
       />
-      {mode === "edit" && cal ? <rect x={cam.x} y={cam.y} width={cam.w} height={cam.h} fill="url(#grid)" pointerEvents="none" /> : null}
-      {mode === "edit" && showPixelGrid ? (
+      {editVenueElements &&
+        elHandles.map((p, i) => (
+          <rect
+            key={`vh-${i}`}
+            x={p.x - handleR}
+            y={p.y - handleR}
+            width={handleR * 2}
+            height={handleR * 2}
+            fill="#fff"
+            stroke="#f97316"
+            strokeWidth={handleR * 0.35}
+            pointerEvents="none"
+          />
+        ))}
+      {showGrid && cal ? <rect x={cam.x} y={cam.y} width={cam.w} height={cam.h} fill="url(#grid)" pointerEvents="none" /> : null}
+      {showGrid && showPixelGrid ? (
         <rect x={underlayX} y={underlayY} width={underlayW} height={underlayH} fill="url(#pixgrid)" pointerEvents="none" />
       ) : null}
 
       {objects.map((o) => {
+        if (o.kind === "amenity") return null;
         const sponsor = o.sponsorId ? sponsorById.get(o.sponsorId) : undefined;
-        const selected = canEditObjects && o.id === selectedId;
+        const selected = selectedSet.has(o.id);
         const highlighted = o.id === highlightId;
         const pulsing = o.id === pulseId;
-        if (o.kind === "amenity" && o.x != null && o.y != null) {
-          const color = AMENITY_COLOR[o.amenityType ?? "info"];
-          return (
-            <g key={o.id} transform={`translate(${o.x} ${o.y})`}>
-              {pulsing ? (
-                <circle r={2.4} fill="none" stroke="#f97316" strokeWidth={0.22} className="map-frame-pulse" />
-              ) : null}
-              <circle r={1.15} fill={color} stroke={selected || highlighted ? "#fff" : "var(--map-icon-ring)"} strokeWidth={selected ? 0.18 : 0.08} />
-              <text
-                textAnchor="middle"
-                y={0.32}
-                fontSize={0.7}
-                fill="#fff"
-                fontFamily="var(--font-sans), system-ui, sans-serif"
-                fontWeight={700}
-              >
-                {(o.amenityType ?? "info").slice(0, 1).toUpperCase()}
-              </text>
-            </g>
-          );
-        }
         if (!o.polygon?.length) return null;
         const b = ringBounds(o.polygon);
         const c = ringCentroid(o.polygon);
@@ -999,7 +1596,7 @@ export function FloorCanvas({
         const sizeLabel = formatSize(b.w, b.h, units);
         const showSize = screenW > 44 && screenH > 22;
         return (
-          <g key={o.id}>
+          <g key={o.id} pointerEvents={canEditVenue ? "none" : undefined}>
             <polygon
               points={points(o.polygon)}
               fill={
@@ -1009,19 +1606,29 @@ export function FloorCanvas({
               }
               fillOpacity={mode === "edit" ? 0.36 : 0.9}
               stroke={selected || pulsing ? "#f97316" : highlighted ? "#f97316" : "var(--map-stroke)"}
-              strokeWidth={selected || pulsing ? 0.22 : 0.08}
+              strokeWidth={selected || pulsing ? strokeSelected : strokeDefault}
               className={pulsing ? "map-frame-pulse" : undefined}
             />
             {showLogo ? (
-              <image
-                href={sponsor!.logoUrl}
-                x={b.minX + b.w * 0.12}
-                y={b.minY + b.h * 0.12}
-                width={b.w * 0.76}
-                height={b.h * 0.5}
-                preserveAspectRatio="xMidYMid meet"
-                pointerEvents="none"
-              />
+              <>
+                <rect
+                  x={b.minX + b.w * 0.12}
+                  y={b.minY + b.h * 0.12}
+                  width={b.w * 0.76}
+                  height={b.h * 0.5}
+                  fill="#ffffff"
+                  pointerEvents="none"
+                />
+                <image
+                  href={sponsor!.logoUrl}
+                  x={b.minX + b.w * 0.12}
+                  y={b.minY + b.h * 0.12}
+                  width={b.w * 0.76}
+                  height={b.h * 0.5}
+                  preserveAspectRatio="xMidYMid meet"
+                  pointerEvents="none"
+                />
+              </>
             ) : null}
             {label && (mode === "view" || selected) ? (
               <text
@@ -1055,10 +1662,35 @@ export function FloorCanvas({
           </g>
         );
       })}
+      {objects.map((o) => {
+        if (o.kind !== "amenity" || o.x == null || o.y == null) return null;
+        const selected = selectedSet.has(o.id);
+        const highlighted = o.id === highlightId;
+        const pulsing = o.id === pulseId;
+        const color = AMENITY_COLOR[o.amenityType ?? "info"];
+        return (
+          <g key={o.id} transform={`translate(${o.x} ${o.y})`} pointerEvents={canEditVenue ? "none" : undefined}>
+            {pulsing ? (
+              <circle r={2.4} fill="none" stroke="#f97316" strokeWidth={strokeSelected} className="map-frame-pulse" />
+            ) : null}
+            <circle r={1.15} fill={color} stroke={selected || highlighted ? "#fff" : "var(--map-icon-ring)"} strokeWidth={selected ? strokeSelected : strokeDefault} />
+            <text
+              textAnchor="middle"
+              y={0.32}
+              fontSize={0.7}
+              fill="#fff"
+              fontFamily="var(--font-sans), system-ui, sans-serif"
+              fontWeight={700}
+            >
+              {(o.amenityType ?? "info").slice(0, 1).toUpperCase()}
+            </text>
+          </g>
+        );
+      })}
 
       {draftRect ? (
         <g>
-          <polygon points={points(draftRect)} fill="rgba(249,115,22,0.2)" stroke="#f97316" strokeWidth={0.12} strokeDasharray="0.4 0.2" />
+          <polygon points={points(draftRect)} fill="rgba(249,115,22,0.2)" stroke="#f97316" strokeWidth={strokeSelected} strokeDasharray={`${screenPx(8, pxPerMeterScreen)} ${screenPx(4, pxPerMeterScreen)}`} />
           {(() => {
             const b = ringBounds(draftRect);
             const c = ringCentroid(draftRect);
@@ -1084,7 +1716,20 @@ export function FloorCanvas({
           points={points(draftPoly)}
           fill="none"
           stroke="#f97316"
-          strokeWidth={0.12}
+          strokeWidth={strokeSelected}
+        />
+      ) : null}
+      {marqueeNow ? (
+        <rect
+          x={Math.min(marqueeNow.x0, marqueeNow.x1)}
+          y={Math.min(marqueeNow.y0, marqueeNow.y1)}
+          width={Math.abs(marqueeNow.x1 - marqueeNow.x0)}
+          height={Math.abs(marqueeNow.y1 - marqueeNow.y0)}
+          fill="rgba(249,115,22,0.12)"
+          stroke="#f97316"
+          strokeWidth={strokeSelected}
+          strokeDasharray={`${screenPx(8, pxPerMeterScreen)} ${screenPx(4, pxPerMeterScreen)}`}
+          pointerEvents="none"
         />
       ) : null}
       {calPts[0] && calCursor ? (
@@ -1109,7 +1754,7 @@ export function FloorCanvas({
           x2={x}
           y2={cam.y + cam.h}
           stroke="#f97316"
-          strokeWidth={2 / Math.max(pxPerMeterScreen, 0.001)}
+          strokeWidth={strokeSelected}
           strokeOpacity={0.85}
           pointerEvents="none"
         />
@@ -1122,19 +1767,20 @@ export function FloorCanvas({
           x2={cam.x + cam.w}
           y2={y}
           stroke="#f97316"
-          strokeWidth={2 / Math.max(pxPerMeterScreen, 0.001)}
+          strokeWidth={strokeSelected}
           strokeOpacity={0.85}
           pointerEvents="none"
         />
       ))}
       {mode === "edit" && tool === "select"
         ? (() => {
+            if (selectedSet.size !== 1) return null;
             const b =
-              canEditVenue && selectedId === VENUE_ID && venueRect
+              canEditVenue && selectedSet.has(VENUE_ID) && venueRect
                 ? venueRect
                 : canEditObjects
                   ? (() => {
-                      const selected = objects.find((o) => o.id === selectedId);
+                      const selected = objects.find((o) => selectedSet.has(o.id));
                       return selected?.polygon ? ringBounds(selected.polygon) : null;
                     })()
                   : null;
@@ -1150,7 +1796,7 @@ export function FloorCanvas({
                   height={handleR * 2}
                   fill="#fff"
                   stroke="#f97316"
-                  strokeWidth={handleR * 0.22}
+                  strokeWidth={screenPx(1.5, pxPerMeterScreen)}
                   style={{ cursor: handleCursor(h) }}
                 />
               );
@@ -1158,5 +1804,6 @@ export function FloorCanvas({
           })()
         : null}
     </svg>
+    </PlanStage>
   );
 }
