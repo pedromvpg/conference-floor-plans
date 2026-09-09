@@ -44,7 +44,9 @@ export type HallSceneProps = {
   onChangeObject?: (obj: MapObject) => void;
   onCreateObject?: (obj: MapObject) => void;
   onNavLock?: (locked: boolean) => void;
+  spacePan?: boolean;
   tone?: MapTone;
+  showGrid?: boolean;
 };
 
 export type HallExtent = {
@@ -137,7 +139,9 @@ export function HallScene({
   onChangeObject,
   onCreateObject,
   onNavLock,
+  spacePan = false,
   tone = "dark",
+  showGrid = true,
 }: HallSceneProps) {
   const hall = HALL_THEME[tone];
   const canEdit = mode === "edit";
@@ -155,6 +159,7 @@ export function HallScene({
     y: number | null;
   } | null>(null);
   const pendingDrag = useRef<typeof drag.current>(null);
+  const passThroughNav = useRef(false);
   const lastPtr = useRef({ x: Number.NaN, y: Number.NaN });
   const draw = useRef<{ x: number; y: number } | null>(null);
   const draftRef = useRef<Ring | null>(null);
@@ -260,6 +265,7 @@ export function HallScene({
       draftRef.current = null;
       setDraft(null);
       pendingDrag.current = null;
+      passThroughNav.current = false;
       if (drag.current) {
         drag.current = null;
         onNavLockRef.current?.(false);
@@ -282,10 +288,14 @@ export function HallScene({
 
   function onGroundDown(e: ThreeEvent<PointerEvent>) {
     if (e.button !== 0) return;
+    if (passThroughNav.current) {
+      passThroughNav.current = false;
+      return;
+    }
     const p = hitToWorld(e.point, grid);
     setHover(p);
     if (!placing) {
-      if (canEdit) onSelect?.(null);
+      if (canEdit && !spacePan) onSelect?.(null);
       return;
     }
     e.stopPropagation();
@@ -337,37 +347,71 @@ export function HallScene({
           />
         </Suspense>
       ) : null}
-      <Grid
-        position={[extent.cx, 0.005, extent.cy]}
-        args={[Math.max(extent.w, 20), Math.max(extent.h, 20)]}
-        cellSize={1}
-        cellThickness={0.6}
-        cellColor={hall.grid}
-        sectionSize={5}
-        sectionThickness={1}
-        sectionColor="#c2410c"
-        fadeDistance={Math.max(80, Math.max(extent.w, extent.h) * 2)}
-        fadeStrength={1.2}
-        infiniteGrid
-      />
+      {showGrid ? (
+        <Grid
+          position={[extent.cx, 0.005, extent.cy]}
+          args={[Math.max(extent.w, 20), Math.max(extent.h, 20)]}
+          cellSize={1}
+          cellThickness={0.6}
+          cellColor={hall.grid}
+          sectionSize={5}
+          sectionThickness={1}
+          sectionColor="#c2410c"
+          fadeDistance={Math.max(80, Math.max(extent.w, extent.h) * 2)}
+          fadeStrength={1.2}
+          infiniteGrid
+        />
+      ) : null}
 
-      {objects.map((o) => {
-        const sponsor = o.sponsorId ? sponsors.find((s) => s.id === o.sponsorId) : undefined;
-        const selected = o.id === selectedId || o.id === highlightId;
-        return (
-          <group
-            key={o.id}
-            onPointerDown={(e) => {
-              if (e.button !== 0) return;
-              e.stopPropagation();
-              onSelect?.(o.id);
-              startDrag(o, e);
-            }}
-          >
-            <HallPlot object={o} sponsor={sponsor} assets={assets} selected={selected} tone={tone} />
-          </group>
-        );
-      })}
+      {objects
+        .filter((o) => o.kind !== "amenity")
+        .map((o) => {
+          const sponsor = o.sponsorId ? sponsors.find((s) => s.id === o.sponsorId) : undefined;
+          const selected = o.id === selectedId || o.id === highlightId;
+          return (
+            <group
+              key={o.id}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                if (spacePan) return;
+                const alreadySelected = o.id === selectedId;
+                e.stopPropagation();
+                onSelect?.(o.id);
+                if (alreadySelected && canEdit && tool === "select") {
+                  startDrag(o, e);
+                  return;
+                }
+                passThroughNav.current = true;
+              }}
+            >
+              <HallPlot object={o} sponsor={sponsor} assets={assets} selected={selected} tone={tone} />
+            </group>
+          );
+        })}
+      {objects
+        .filter((o) => o.kind === "amenity")
+        .map((o) => {
+          const selected = o.id === selectedId || o.id === highlightId;
+          return (
+            <group
+              key={o.id}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                if (spacePan) return;
+                const alreadySelected = o.id === selectedId;
+                e.stopPropagation();
+                onSelect?.(o.id);
+                if (alreadySelected && canEdit && tool === "select") {
+                  startDrag(o, e);
+                  return;
+                }
+                passThroughNav.current = true;
+              }}
+            >
+              <HallPlot object={o} selected={selected} tone={tone} />
+            </group>
+          );
+        })}
 
       {ghostRing ? (
         <HallPlot

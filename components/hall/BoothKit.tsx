@@ -57,10 +57,17 @@ export function BoothKit({
 }
 
 function LogoDecal({ url, width, z, y }: { url: string; width: number; z: number; y: number }) {
+  const h = width * 0.45;
   return (
-    <mesh position={[0, y, z]}>
-      <planeGeometry args={[width, width * 0.45]} />
-      <ColorOrMap color="#ffffff" url={url} roughness={0.55} />
-    </mesh>
+    <group position={[0, y, z]}>
+      <mesh>
+        <planeGeometry args={[width, h]} />
+        <meshStandardMaterial color="#ffffff" roughness={0.9} />
+      </mesh>
+      <mesh position={[0, 0, 0.008]}>
+        <planeGeometry args={[width * 0.92, h * 0.88]} />
+        <ColorOrMap color="#ffffff" url={url} roughness={0.55} />
+      </mesh>
+    </group>
   );
 }

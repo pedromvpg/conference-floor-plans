@@ -38,6 +38,7 @@ export type HallCanvasProps = {
   onCreateObject?: (obj: MapObject) => void;
   frameNonce?: number;
   fitNonce?: number;
+  showGrid?: boolean;
 };
 
 export function HallCanvas({
@@ -59,10 +60,12 @@ export function HallCanvas({
   onCreateObject,
   frameNonce = 0,
   fitNonce = 0,
+  showGrid = mode === "edit",
 }: HallCanvasProps) {
   const { resolvedTheme } = useTheme();
   const tone: MapTone = resolvedTheme === "light" ? "light" : "dark";
   const hall = HALL_THEME[tone];
+  const [spacePan, setSpacePan] = useState(false);
   const [navLocked, setNavLocked] = useState(false);
   const placing = mode === "edit" && tool !== "select" && tool !== "calibrate";
   const extent = useMemo(() => hallExtent(floor, objects), [floor, objects]);
@@ -97,6 +100,33 @@ export function HallCanvas({
     [objects, focusId, extent],
   );
 
+  useEffect(() => {
+    if (mode === "view") return;
+    function typing(el: EventTarget | null) {
+      return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
+    }
+    function clearSpace() {
+      setSpacePan(false);
+    }
+    function onDown(e: KeyboardEvent) {
+      if (e.code !== "Space" || e.repeat || typing(e.target)) return;
+      e.preventDefault();
+      setSpacePan(true);
+    }
+    function onUp(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      clearSpace();
+    }
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    window.addEventListener("blur", clearSpace);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", clearSpace);
+    };
+  }, [mode]);
+
   const sceneProps: HallSceneProps = {
     mode,
     floor,
@@ -115,7 +145,9 @@ export function HallCanvas({
     onChangeObject,
     onCreateObject,
     onNavLock: setNavLocked,
+    spacePan,
     tone,
+    showGrid,
   };
 
   return (
@@ -124,7 +156,7 @@ export function HallCanvas({
         gl={{ antialias: true }}
         camera={{ fov: 42, near: 0.08, far: 800, position: isometricPose(extent.cx, extent.cy, Math.max(extent.w, extent.h)).position }}
         onPointerMissed={() => {
-          if (!placing) onSelect?.(null);
+          if (!placing && !spacePan) onSelect?.(null);
         }}
       >
         <color attach="background" args={[hall.bg]} />
@@ -139,6 +171,7 @@ export function HallCanvas({
           enableDamping
           dampingFactor={0.12}
           screenSpacePanning
+          enablePan={mode === "view" || spacePan}
           minPolarAngle={0.12}
           maxPolarAngle={Math.PI / 2 - 0.08}
           minDistance={6}
