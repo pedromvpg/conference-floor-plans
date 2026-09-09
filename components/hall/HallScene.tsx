@@ -382,7 +382,9 @@ export function HallScene({
           infiniteGrid
         />
       ) : null}
-      {showRulers ? <HallRulers extent={extent} units={units} color={hall.grid} /> : null}
+      {showRulers ? (
+        <HallRulers extent={extent} units={units} color={tone === "light" ? "#6a6a64" : "#a8a8a0"} />
+      ) : null}
 
       {objects
         .filter((o) => !isPinObject(o))
