@@ -690,9 +690,14 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     return "custom";
   }
 
-  function applyBoothRotation(nextDeg: number) {
-    if (!selected?.polygon) return;
+  function applyObjectRotation(nextDeg: number) {
+    if (!selected) return;
     if (!Number.isFinite(nextDeg)) return;
+    if (selected.kind === "amenity") {
+      void patchObject({ ...selected, rotation: nextDeg, facingDeg: nextDeg });
+      return;
+    }
+    if (!selected.polygon) return;
     const delta = nextDeg - (selected.facingDeg ?? 0);
     const rotated = commitShape(rotateBezier(objectShape(selected), delta));
     void patchObject({
@@ -1157,7 +1162,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
             polygon: rotated.polygon,
             path: rotated.path,
             facingDeg: (selected.facingDeg ?? 0) + 45,
-            rotation: selected.rotation + 45,
+            rotation: (selected.rotation ?? 0) + 45,
           });
           return;
         }
@@ -2293,7 +2298,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <Input
                       id="insp-venue-rot"
                       type="number"
-                      step="1"
+                      step="any"
                       value={Number(svgElementRotation(venueSvg, selectedVenueLayer.id).toFixed(2))}
                       onChange={(e) => {
                         const deg = Number(e.target.value);
@@ -2359,7 +2364,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   Locked (not selectable on the drawing)
                 </label>
                 <p className="text-xs text-muted-foreground">
-                  Drag to move. Rectangles resize from handles; polygons from vertices. Delete or Backspace removes the
+                  Drag to move or rotate from the top handle. Hold Shift while rotating to snap to 15°. Delete or Backspace removes the
                   element.
                 </p>
                 <Button size="sm" variant="destructive" onClick={deleteSelectedVenueElement}>
@@ -2573,7 +2578,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     }
                   />
                 ) : null}
-                {selected.kind === "booth" && selected.polygon ? (
+                {selected ? (
                   <div>
                     <Label htmlFor="insp-object-rot" className="text-[10px] text-muted-foreground">
                       Rotation
@@ -2582,9 +2587,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       <Input
                         id="insp-object-rot"
                         type="number"
-                        step="1"
-                        value={Number((selected.facingDeg ?? 0).toFixed(2))}
-                        onChange={(e) => applyBoothRotation(Number(e.target.value))}
+                        step="any"
+                        value={Number(((selected.kind === "amenity" ? selected.rotation : selected.facingDeg) ?? 0).toFixed(2))}
+                        onChange={(e) => applyObjectRotation(Number(e.target.value))}
                       />
                       <span className="shrink-0 text-[10px] text-muted-foreground">°</span>
                     </div>
@@ -2592,18 +2597,21 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => applyBoothRotation((selected.facingDeg ?? 0) - 45)}
+                      onClick={() => applyObjectRotation(((selected.kind === "amenity" ? selected.rotation : selected.facingDeg) ?? 0) - 45)}
                     >
-                      Rotate −45°
+                      −45°
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => applyBoothRotation((selected.facingDeg ?? 0) + 45)}
+                      onClick={() => applyObjectRotation(((selected.kind === "amenity" ? selected.rotation : selected.facingDeg) ?? 0) + 45)}
                     >
-                      Rotate +45°
+                      +45°
                     </Button>
                     </div>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      Drag the top handle on the plan for any angle. Hold Shift to snap to 15°.
+                    </p>
                   </div>
                 ) : null}
                 <Button size="sm" variant="destructive" onClick={() => void deleteSelected()}>
