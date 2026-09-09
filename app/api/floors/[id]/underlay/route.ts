@@ -2,6 +2,7 @@ import sharp from "sharp";
 import { getStore } from "@/lib/get-store";
 import { requireEditor } from "@/lib/auth";
 import { newId } from "@/lib/store";
+import { calibrationFromPrimary, primaryFloor } from "@/lib/floor-settings";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -65,19 +66,14 @@ export async function POST(req: Request, ctx: Ctx) {
 
     const existing = await store.getFloor(id);
     if (!existing) return Response.json({ error: "Floor not found" }, { status: 404 });
+    const siblings = await store.listFloors(existing.eventId);
+    const primary = primaryFloor(siblings);
     const floor = await store.updateFloor(id, {
       underlayUrl,
       originalUrl,
       calibration: existing.calibration
         ? { ...existing.calibration, widthPx, heightPx }
-        : {
-            originX: 0,
-            originY: 0,
-            metersPerPixel: 0.1,
-            rotationDeg: 0,
-            widthPx,
-            heightPx,
-          },
+        : calibrationFromPrimary(primary?.id === existing.id ? null : primary?.calibration, widthPx, heightPx),
     });
     return Response.json(floor);
   } catch (err) {
@@ -99,8 +95,11 @@ export async function PUT(req: Request, ctx: Ctx) {
     const existing = await store.getFloor(id);
     if (!existing) return Response.json({ error: "Floor not found" }, { status: 404 });
     const size = svgSize(svg);
-    const widthPx = size?.w ?? existing.calibration?.widthPx ?? 1000;
-    const heightPx = size?.h ?? existing.calibration?.heightPx ?? 1000;
+    const siblings = await store.listFloors(existing.eventId);
+    const primary = primaryFloor(siblings);
+    const inherited = primary && primary.id !== existing.id ? primary.calibration : null;
+    const widthPx = size?.w ?? existing.calibration?.widthPx ?? inherited?.widthPx ?? 1000;
+    const heightPx = size?.h ?? existing.calibration?.heightPx ?? inherited?.heightPx ?? 1000;
     const underlayUrl = await store.putFile(
       `underlays/${id}/${newId()}.svg`,
       Buffer.from(svg, "utf8"),
@@ -111,14 +110,7 @@ export async function PUT(req: Request, ctx: Ctx) {
       underlayUrl,
       calibration: cal
         ? { ...cal, widthPx, heightPx }
-        : {
-            originX: 0,
-            originY: 0,
-            metersPerPixel: 0.1,
-            rotationDeg: 0,
-            widthPx,
-            heightPx,
-          },
+        : calibrationFromPrimary(inherited, widthPx, heightPx),
     });
     return Response.json(floor);
   } catch (err) {
