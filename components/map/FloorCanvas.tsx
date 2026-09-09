@@ -867,6 +867,26 @@ export function FloorCanvas({
       if (canEditVenue && editVenueElements && tool === "select" && underlaySvg && !e.shiftKey) {
         const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
         const hrEl = screenPx(HANDLE_HALF_PX, ppm);
+        if (selectedVenueElementId && elFrameRef.current) {
+          const live = nestLayerEl(selectedVenueElementId);
+          const selectedLocked = live?.getAttribute(LOCK_ATTR) === "1";
+          if (!selectedLocked) {
+            const rh = rotateHandlePos(elFrameRef.current, hrEl * 3.2);
+            if (hypot(w.x - rh.hx, w.y - rh.hy) <= hrEl * 1.8) {
+              svgElDrag.current = {
+                id: selectedVenueElementId,
+                mode: "rotate",
+                startMarkup: underlaySvg,
+                ox: rh.cx,
+                oy: rh.cy,
+                startAngle: angleDeg(rh.cx, rh.cy, w.x, w.y),
+                startRot: svgElementRotation(underlaySvg, selectedVenueElementId),
+              };
+              lastVenuePreview.current = underlaySvg;
+              return;
+            }
+          }
+        }
         if (selectedVenueElementId) {
           const live = nestLayerEl(selectedVenueElementId);
           const selectedLocked = live?.getAttribute(LOCK_ATTR) === "1";
@@ -971,12 +991,50 @@ export function FloorCanvas({
       }
       const sole =
         selectedSet.size === 1 ? objects.find((o) => selectedSet.has(o.id)) : undefined;
+      if (canEditObjects && tool === "select" && sole) {
+        const ppmObj = svgUserToScreen(svgRef.current, cam.w, cam.h);
+        const hrV = screenPx(HANDLE_HALF_PX, ppmObj);
+        if (sole.kind === "amenity" && sole.x != null && sole.y != null) {
+          const rh = rotateHandlePos(amenityBounds(sole), hrV * 3.2);
+          if (hypot(w.x - rh.hx, w.y - rh.hy) <= hrV * 1.8) {
+            drag.current = {
+              id: sole.id,
+              mode: "rotate",
+              ox: rh.cx,
+              oy: rh.cy,
+              polygon: null,
+              x: sole.x,
+              y: sole.y,
+              startAngle: angleDeg(rh.cx, rh.cy, w.x, w.y),
+              startRot: sole.rotation ?? sole.facingDeg ?? 0,
+            };
+            return;
+          }
+        }
+      }
       if (canEditObjects && tool === "select" && sole?.polygon) {
         const shape = objectShape(sole);
         const ppmObj = svgUserToScreen(svgRef.current, cam.w, cam.h);
         const hrV = screenPx(HANDLE_HALF_PX, ppmObj);
         const vertexSlop = screenPx(VERTEX_HIT_PX, ppmObj);
         const strokeSlop = screenPx(STROKE_HIT_PX, ppmObj);
+        const rb = ringBounds(sole.polygon);
+        const rh = rotateHandlePos(rb, hrV * 3.2);
+        if (hypot(w.x - rh.hx, w.y - rh.hy) <= hrV * 1.8) {
+          drag.current = {
+            id: sole.id,
+            mode: "rotate",
+            ox: rh.cx,
+            oy: rh.cy,
+            polygon: sole.polygon.map((p) => [...p] as [number, number]),
+            path: shape.map((node) => ({ ...node })),
+            x: sole.x,
+            y: sole.y,
+            startAngle: angleDeg(rh.cx, rh.cy, w.x, w.y),
+            startRot: sole.facingDeg ?? sole.rotation ?? 0,
+          };
+          return;
+        }
         if (editAnchor != null && shape[editAnchor] && e.detail !== 2) {
           const n = shape[editAnchor];
           for (const which of ["out", "in"] as const) {
@@ -1224,6 +1282,12 @@ export function FloorCanvas({
           e.altKey,
         );
         const next = setSvgElementBezier(d.startMarkup, d.id, nextNodes, d.closed ?? true);
+        lastVenuePreview.current = next;
+        onPreviewVenueSvg?.(next);
+      } else if (d.mode === "rotate" && d.startAngle != null && d.startRot != null) {
+        let nextDeg = d.startRot + (angleDeg(d.ox, d.oy, w.x, w.y) - d.startAngle);
+        if (e.shiftKey) nextDeg = snapDeg(nextDeg, 15);
+        const next = setSvgElementRotation(d.startMarkup, d.id, nextDeg);
         lastVenuePreview.current = next;
         onPreviewVenueSvg?.(next);
       }

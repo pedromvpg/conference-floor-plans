@@ -82,11 +82,30 @@ export function scaleRingToSize(ring: Ring, width: number, height: number): Ring
 
 export type BoundsHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
-export function handleCursor(handle: BoundsHandle): string {
+export function handleCursor(handle: BoundsHandle | "rotate"): string {
+  if (handle === "rotate") return "grab";
   if (handle === "n" || handle === "s") return "ns-resize";
   if (handle === "e" || handle === "w") return "ew-resize";
   if (handle === "nw" || handle === "se") return "nwse-resize";
   return "nesw-resize";
+}
+
+export function angleDeg(cx: number, cy: number, x: number, y: number): number {
+  return (Math.atan2(y - cy, x - cx) * 180) / Math.PI;
+}
+
+export function snapDeg(deg: number, step: number): number {
+  if (step <= 0) return deg;
+  return Math.round(deg / step) * step;
+}
+
+export function rotateHandlePos(
+  b: { minX: number; minY: number; maxX: number; maxY: number },
+  offset: number,
+): { hx: number; hy: number; cx: number; cy: number } {
+  const cx = (b.minX + b.maxX) / 2;
+  const cy = (b.minY + b.maxY) / 2;
+  return { hx: cx, hy: b.minY - offset, cx, cy };
 }
 
 export function resizeBounds(
