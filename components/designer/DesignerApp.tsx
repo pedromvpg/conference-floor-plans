@@ -3,9 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { Box, ChevronDown, LayoutGrid, MapPin, Maximize2, Pentagon, Plus, Redo2, Settings, Square, Theater, Undo2 } from "lucide-react";
+import { Box, ChevronDown, Eye, EyeOff, LayoutGrid, MapPin, Maximize2, Pentagon, Plus, Redo2, Settings, Square, Theater, Undo2 } from "lucide-react";
+import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
+import { UnderlayPreview } from "@/components/designer/UnderlayPreview";
+import { VenueLayersEditor } from "@/components/designer/VenueLayersEditor";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
-import { ViewModeToggle } from "@/components/map/ViewModeToggle";
+import { FloorSwitcher, GridToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
 import { UnitsToggle } from "@/components/units-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +37,7 @@ import {
 } from "@/components/ui/select";
 import { AMENITIES, amenityLabel } from "@/lib/amenities";
 import { STAGE_PRESET_METERS, resolveAppearance } from "@/lib/appearance";
+import { DEFAULT_FLOOR_BASEMAP, BASEMAP_COORD_STEP, bearingSliderValue, roundBasemapCoord, wrapBearingDeg } from "@/lib/basemap";
 import { calibrationFromBounds, floorSizeMeters, ringBounds, scaleRingToSize } from "@/lib/geometry";
 import { rotatePlot } from "@/lib/hall";
 import { PRESETS, presetMeters as presetSize, formatSize, fromMeters, toMeters } from "@/lib/units";
@@ -46,6 +50,7 @@ import type {
   DraftSlice,
   DraftVersionMeta,
   Floor,
+  FloorBasemap,
   MapObject,
   Sponsor,
   Tool,
@@ -53,12 +58,27 @@ import type {
   ViewMode,
 } from "@/lib/types";
 import { VENUE_ID } from "@/lib/types";
+import {
+  blankVenueSvg,
+  deleteSvgLayer,
+  findSvgLayer,
+  isSvgUnderlay,
+  listSvgLayers,
+  reorderSvgSiblings,
+  serializeSvg,
+  setSvgElementPaint,
+  setSvgLayerHidden,
+  setSvgLayerText,
+  svgElementPaint,
+  wrapRasterAsSvg,
+} from "@/lib/svg-layers";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { newId, nowIso } from "@/lib/store";
 import { toast } from "sonner";
 
 const HallCanvas = dynamic(() => import("@/components/hall/HallCanvas"), {
@@ -101,6 +121,52 @@ function objectArea(o: MapObject): number {
   if (!o.polygon?.length) return 0;
   const b = ringBounds(o.polygon);
   return b.w * b.h;
+}
+
+const CLIP_PREFIX = "conference-maps-objects:v1:";
+const PASTE_NUDGE_M = 1;
+
+function isTypingTarget(el: EventTarget | null) {
+  return (
+    el instanceof HTMLInputElement ||
+    el instanceof HTMLTextAreaElement ||
+    el instanceof HTMLSelectElement ||
+    (el instanceof HTMLElement && el.isContentEditable)
+  );
+}
+
+function paintToHex(value: string, fallback: string): string {
+  const v = value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(v)) return v;
+  if (/^#[0-9a-fA-F]{3}$/.test(v)) {
+    return `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`;
+  }
+  return fallback;
+}
+
+function parseCopiedObjects(text: string): MapObject[] | null {
+  if (!text.startsWith(CLIP_PREFIX)) return null;
+  try {
+    const data = JSON.parse(text.slice(CLIP_PREFIX.length)) as unknown;
+    if (!Array.isArray(data) || data.length === 0) return null;
+    return data as MapObject[];
+  } catch {
+    return null;
+  }
+}
+
+function cloneObjectAt(src: MapObject, floorId: string, dx: number, dy: number): MapObject {
+  const t = nowIso();
+  return {
+    ...src,
+    id: newId(),
+    floorId,
+    polygon: src.polygon?.map(([x, y]) => [x + dx, y + dy] as [number, number]) ?? null,
+    x: src.x != null ? src.x + dx : null,
+    y: src.y != null ? src.y + dy : null,
+    createdAt: t,
+    updatedAt: t,
+  };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -160,13 +226,21 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [units, setUnits] = useUnits();
   const [presetId, setPresetId] = useState<string>("none");
   const [amenityStamp, setAmenityStamp] = useState<AmenityType>("bathroom");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const selectedId = selectedIds[0] ?? null;
   const [frameNonce, setFrameNonce] = useState(0);
   const [fitNonce, setFitNonce] = useState(0);
   const [sponsorQuery, setSponsorQuery] = useState("");
-  const [newFloorName, setNewFloorName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"objects" | "venue">("objects");
+  const [sidebarTab, setSidebarTab] = useState<"objects" | "venue" | "map">("objects");
+  const [derivedMapZoom, setDerivedMapZoom] = useState<number | null>(null);
+  const [mapZoomTo, setMapZoomTo] = useState<{ zoom: number; nonce: number } | null>(null);
+  const [alignDrawingToMap, setAlignDrawingToMap] = useState(false);
+  const onBasemapDerivedZoom = useCallback((z: number) => {
+    if (!Number.isFinite(z)) return;
+    const next = Math.round(z * 100) / 100;
+    setDerivedMapZoom((prev) => (prev === next ? prev : next));
+  }, []);
   const [objectFilter, setObjectFilter] = useState<ObjectFilter>("all");
   const [objectSort, setObjectSort] = useState<ObjectSort>("name");
   const [objectSortDir, setObjectSortDir] = useState<SortDir>("asc");
@@ -183,6 +257,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [venueWidth, setVenueWidth] = useState("");
   const [venueHeight, setVenueHeight] = useState("");
   const [underlayOpacity, setUnderlayOpacity] = useState(1);
+  const [showUnderlay, setShowUnderlay] = useState(true);
+  const [showGrid, setShowGrid] = useState(true);
+  const [editVenueLayers, setEditVenueLayers] = useState(false);
+  const [venueSvg, setVenueSvg] = useState<string | null>(null);
+  const [hoverLayerId, setHoverLayerId] = useState<string | null>(null);
+  const [selectedVenueEl, setSelectedVenueEl] = useState<string | null>(null);
 
   const bundleRef = useRef(bundle);
   bundleRef.current = bundle;
@@ -190,11 +270,24 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const futureRef = useRef<DraftSlice[]>([]);
   const coalesceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const versionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipSvgFetchUrl = useRef<string | null>(null);
+  const venueSvgSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const objectClipboardRef = useRef<MapObject[] | null>(null);
+  const pasteGenRef = useRef(1);
+  const venueEditRef = useRef({ el: null as string | null, svg: null as string | null, tab: "objects" as string });
 
-  const floor = bundle.floors.find((f) => f.id === floorId) ?? bundle.floors[0];
+  const floorsSorted = useMemo(
+    () => [...bundle.floors].sort((a, b) => a.sortOrder - b.sortOrder),
+    [bundle.floors],
+  );
+  const floor = floorsSorted.find((f) => f.id === floorId) ?? floorsSorted[0];
   const objects = bundle.objects.filter((o) => o.floorId === floor?.id);
-  const selected = objects.find((o) => o.id === selectedId) ?? null;
-  const venueSelected = selectedId === VENUE_ID;
+  const venueSelected = selectedIds.length === 1 && selectedIds[0] === VENUE_ID;
+  const multiSelected = selectedIds.filter((id) => id !== VENUE_ID).length > 1;
+  const selected =
+    !venueSelected && selectedIds.length === 1
+      ? (objects.find((o) => o.id === selectedIds[0]) ?? null)
+      : null;
   const preset =
     presetId === "stage" ? STAGE_PRESET_METERS : presetId ? presetSize(presetId) : null;
   const listedObjects = useMemo(() => {
@@ -216,6 +309,26 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       return objectSortDir === "asc" ? cmp : -cmp;
     });
   }, [objects, objectFilter, objectSort, objectSortDir, bundle.sponsors]);
+
+  const selectedVenueLayer = useMemo(() => {
+    if (!venueSvg || !selectedVenueEl) return null;
+    try {
+      return findSvgLayer(listSvgLayers(venueSvg), selectedVenueEl);
+    } catch {
+      return null;
+    }
+  }, [venueSvg, selectedVenueEl]);
+
+  const selectedVenuePaint = useMemo(() => {
+    if (!venueSvg || !selectedVenueEl) return null;
+    try {
+      return svgElementPaint(venueSvg, selectedVenueEl);
+    } catch {
+      return null;
+    }
+  }, [venueSvg, selectedVenueEl]);
+
+  venueEditRef.current = { el: selectedVenueEl, svg: venueSvg, tab: sidebarTab };
 
   const slug = bundle.event.slug;
 
@@ -250,6 +363,33 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     setVenueWidth(fmtDim(size.w, units));
     setVenueHeight(fmtDim(size.h, units));
   }, [floor?.id, calKey, units]);
+
+  useEffect(() => {
+    const url = floor?.underlayUrl;
+    if (!url) {
+      setVenueSvg(null);
+      setEditVenueLayers(false);
+      return;
+    }
+    if (skipSvgFetchUrl.current === url) return;
+    let cancelled = false;
+    void fetch(url)
+      .then((res) => (res.ok ? res.text() : Promise.reject(new Error("Could not load drawing"))))
+      .then((text) => {
+        if (cancelled || !text.includes("<svg")) return;
+        try {
+          setVenueSvg(serializeSvg(text));
+        } catch {
+          setVenueSvg(text);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setVenueSvg(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [floor?.id, floor?.underlayUrl]);
 
   useEffect(() => {
     if (!selected?.polygon) {
@@ -354,6 +494,28 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     return saved;
   }
 
+  const basemapSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function patchBasemap(next: FloorBasemap, immediate = false) {
+    if (!floor) return;
+    const nextFloors = bundleRef.current.floors.map((f) => (f.id === floor.id ? { ...f, basemap: next } : f));
+    const objects = bundleRef.current.objects;
+    bundleRef.current = { ...bundleRef.current, floors: nextFloors };
+    setBundle((b) => ({ ...b, floors: nextFloors }));
+    if (basemapSaveTimer.current) clearTimeout(basemapSaveTimer.current);
+    const save = () => {
+      basemapSaveTimer.current = null;
+      void persistSlice({ floors: bundleRef.current.floors, objects: bundleRef.current.objects }).catch(() =>
+        toast.error("Could not save map"),
+      );
+    };
+    if (immediate) {
+      void persistSlice({ floors: nextFloors, objects }).catch(() => toast.error("Could not save map"));
+    } else {
+      basemapSaveTimer.current = setTimeout(save, 280);
+    }
+  }
+
   async function undo() {
     if (coalesceRef.current) {
       clearTimeout(coalesceRef.current);
@@ -363,7 +525,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     if (!prev) return;
     futureRef.current = [...futureRef.current, cloneSlice()].slice(-80);
     syncUndoFlags();
-    setSelectedId(null);
+    setSelectedIds([]);
     try {
       await persistSlice(prev);
     } catch {
@@ -376,7 +538,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     if (!next) return;
     pastRef.current = [...pastRef.current, cloneSlice()].slice(-80);
     syncUndoFlags();
-    setSelectedId(null);
+    setSelectedIds([]);
     try {
       await persistSlice(next);
     } catch {
@@ -398,7 +560,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     if (saved.floors[0] && !saved.floors.some((f) => f.id === floorId)) {
       setFloorId(saved.floors[0].id);
     }
-    setSelectedId(null);
+    setSelectedIds([]);
     markSaved();
     toast.success("Restored last saved version");
   }
@@ -431,6 +593,27 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(obj),
     });
+    markSaved();
+  }, [snapshotVersion]);
+
+  const patchObjects = useCallback(async (objs: MapObject[]) => {
+    if (!objs.length) return;
+    markHistory();
+    setSaveLabel("Saving…");
+    const byId = new Map(objs.map((o) => [o.id, o]));
+    setBundle((b) => ({
+      ...b,
+      objects: b.objects.map((o) => byId.get(o.id) ?? o),
+    }));
+    await Promise.all(
+      objs.map((obj) =>
+        fetch("/api/objects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(obj),
+        }),
+      ),
+    );
     markSaved();
   }, [snapshotVersion]);
 
@@ -488,18 +671,31 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     setVenueHeight(v);
   }
 
-  const createObject = useCallback(async (obj: MapObject) => {
+  const createObjects = useCallback(async (objs: MapObject[]) => {
+    if (!objs.length) return;
     markHistory();
     setSaveLabel("Saving…");
-    setBundle((b) => ({ ...b, objects: [...b.objects, obj] }));
-    setSelectedId(obj.id);
-    await fetch("/api/objects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(obj),
-    });
+    setBundle((b) => ({ ...b, objects: [...b.objects, ...objs] }));
+    setSelectedIds(objs.map((o) => o.id));
+    setSidebarTab("objects");
+    await Promise.all(
+      objs.map((obj) =>
+        fetch("/api/objects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(obj),
+        }),
+      ),
+    );
     markSaved();
   }, [snapshotVersion]);
+
+  const createObject = useCallback(
+    async (obj: MapObject) => {
+      await createObjects([obj]);
+    },
+    [createObjects],
+  );
 
   async function onCalibrated(next: Calibration, _previous: Calibration | null) {
     if (!floor) return;
@@ -541,8 +737,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     );
   }
 
-  async function uploadUnderlay(file: File) {
-    if (!floor) return;
+  async function uploadUnderlay(file: File, targetFloorId?: string) {
+    const id = targetFloorId ?? floor?.id;
+    if (!id) return;
     markHistory();
     setBusy(true);
     setSaveLabel("Saving…");
@@ -550,13 +747,14 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       const ready = await rasterizeIfPdf(file);
       const fd = new FormData();
       fd.set("file", ready);
-      const res = await fetch(`/api/floors/${floor.id}/underlay`, { method: "POST", body: fd });
+      const res = await fetch(`/api/floors/${id}/underlay`, { method: "POST", body: fd });
       if (!res.ok) throw new Error(await res.text());
       const updated = (await res.json()) as Floor;
       setBundle((b) => ({
         ...b,
         floors: b.floors.map((f) => (f.id === updated.id ? updated : f)),
       }));
+      setFloorId(updated.id);
       setSidebarTab("venue");
       setTool("calibrate");
       toast.success("Drawing imported. Enter a known length, then click its two ends.");
@@ -568,24 +766,147 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     }
   }
 
-  async function addFloor() {
-    const name = newFloorName.trim() || `Level ${bundle.floors.length + 1}`;
+  async function persistVenueSvg(svg: string, targetFloorId: string) {
+    const res = await fetch(`/api/floors/${targetFloorId}/underlay`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ svg }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const updated = (await res.json()) as Floor;
+    skipSvgFetchUrl.current = updated.underlayUrl;
+    setBundle((b) => ({
+      ...b,
+      floors: b.floors.map((f) => (f.id === updated.id ? updated : f)),
+    }));
+    markSaved();
+  }
+
+  function commitVenueSvg(next: string) {
+    const id = floor?.id;
+    if (!id) return;
+    markHistory();
+    setVenueSvg(next);
+    setSaveLabel("Saving…");
+    if (venueSvgSaveTimer.current) clearTimeout(venueSvgSaveTimer.current);
+    venueSvgSaveTimer.current = setTimeout(() => {
+      void persistVenueSvg(next, id).catch((err) => {
+        toast.error(err instanceof Error ? err.message : "Could not save layers");
+        setSaveLabel("Saved");
+      });
+    }, 450);
+  }
+
+  function deleteSelectedVenueElement() {
+    if (!venueSvg || !selectedVenueEl) return;
+    commitVenueSvg(deleteSvgLayer(venueSvg, selectedVenueEl));
+    setSelectedVenueEl(null);
+  }
+
+  function ensureVenueDrawing(): string | null {
+    if (venueSvg) return venueSvg;
+    if (!floor) return null;
+    if (floor.underlayUrl && isSvgUnderlay(floor.underlayUrl)) {
+      toast.error("Still loading the drawing…");
+      return null;
+    }
+    const w = floor.calibration?.widthPx || 1000;
+    const h = floor.calibration?.heightPx || 1000;
+    const next = serializeSvg(
+      floor.underlayUrl ? wrapRasterAsSvg(floor.underlayUrl, w, h) : blankVenueSvg(w, h),
+    );
+    setVenueSvg(next);
+    commitVenueSvg(next);
+    return next;
+  }
+
+  function beginVenueDraw(nextTool: Tool) {
+    if (!ensureVenueDrawing()) return;
+    setEditVenueLayers(true);
+    setPresetId("none");
+    setStampAppearance(null);
+    setStampModelId(null);
+    setTool(nextTool);
+  }
+
+  async function renameFloor(id: string, name: string) {
+    const trimmed = name.trim() || "Level";
     markHistory();
     setSaveLabel("Saving…");
-    const res = await fetch(`/api/events/${bundle.event.slug}/floors`, {
-      method: "POST",
+    const res = await fetch(`/api/floors/${id}`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name: trimmed }),
     });
     if (!res.ok) {
-      toast.error("Could not add floor");
+      toast.error("Could not rename floor");
+      setSaveLabel("Saved");
       return;
     }
-    const floorRow = (await res.json()) as Floor;
-    setBundle((b) => ({ ...b, floors: [...b.floors, floorRow] }));
-    setFloorId(floorRow.id);
-    setNewFloorName("");
+    const updated = (await res.json()) as Floor;
+    setBundle((b) => ({
+      ...b,
+      floors: b.floors.map((f) => (f.id === updated.id ? { ...f, name: updated.name } : f)),
+    }));
     markSaved();
+  }
+
+  async function applyFloorCount(raw: string) {
+    const n = Math.max(1, Math.min(4, Math.round(Number(raw)) || 1));
+    const current = floorsSorted;
+    if (n === current.length) return;
+
+    if (n < current.length) {
+      const removed = current.slice(n);
+      const hasWork = removed.some(
+        (f) => f.underlayUrl || bundle.objects.some((o) => o.floorId === f.id),
+      );
+      if (hasWork) {
+        const ok = window.confirm(
+          `Remove ${removed.length} level${removed.length === 1 ? "" : "s"}? Drawings and objects on those levels will be deleted.`,
+        );
+        if (!ok) return;
+      }
+    }
+
+    markHistory();
+    setBusy(true);
+    setSaveLabel("Saving…");
+    try {
+      if (n > current.length) {
+        const created: Floor[] = [];
+        for (let i = current.length; i < n; i++) {
+          const res = await fetch(`/api/events/${bundle.event.slug}/floors`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: `Level ${i + 1}` }),
+          });
+          if (!res.ok) throw new Error("Could not add floor");
+          created.push((await res.json()) as Floor);
+        }
+        setBundle((b) => ({ ...b, floors: [...b.floors, ...created] }));
+        setFloorId(created[created.length - 1].id);
+      } else {
+        const keep = current.slice(0, n);
+        const dropIds = new Set(current.slice(n).map((f) => f.id));
+        for (const id of dropIds) {
+          const res = await fetch(`/api/floors/${id}`, { method: "DELETE" });
+          if (!res.ok) throw new Error("Could not remove floor");
+        }
+        setBundle((b) => ({
+          ...b,
+          floors: keep,
+          objects: b.objects.filter((o) => !dropIds.has(o.floorId)),
+        }));
+        if (floorId && dropIds.has(floorId)) setFloorId(keep[keep.length - 1]?.id ?? "");
+      }
+      markSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not update floors");
+      setSaveLabel("Saved");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function publish() {
@@ -603,40 +924,117 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     }
   }
 
-  async function bindSponsor(s: Sponsor) {
+  async function bindSponsor(s: Sponsor | null) {
     if (!selected || selected.kind !== "booth") return;
     await patchObject({
       ...selected,
-      sponsorId: s.id,
-      name: selected.name || s.name,
-      boothNumber: selected.boothNumber || s.boothNumber,
+      sponsorId: s?.id ?? null,
+      name: s ? selected.name || s.name : selected.name,
+      boothNumber: s ? selected.boothNumber || s.boothNumber : selected.boothNumber,
     });
   }
 
   async function deleteSelected() {
-    if (!selected) return;
+    const ids = selectedIds.filter((id) => id !== VENUE_ID);
+    if (!ids.length) return;
     markHistory();
     setSaveLabel("Saving…");
-    setBundle((b) => ({ ...b, objects: b.objects.filter((o) => o.id !== selected.id) }));
-    setSelectedId(null);
-    await fetch(`/api/objects/${selected.id}`, { method: "DELETE" });
+    setBundle((b) => ({ ...b, objects: b.objects.filter((o) => !ids.includes(o.id)) }));
+    setSelectedIds([]);
+    await Promise.all(ids.map((id) => fetch(`/api/objects/${id}`, { method: "DELETE" })));
     markSaved();
   }
 
   useEffect(() => {
+    function inPalette(el: EventTarget | null) {
+      return (
+        el instanceof HTMLElement &&
+        Boolean(el.closest("[data-slot='command'], [data-slot='popover-content']"))
+      );
+    }
+
+    function selectedForClipboard() {
+      const ids = new Set(selectedIds.filter((id) => id !== VENUE_ID));
+      if (!ids.size) return [];
+      return objects.filter((o) => ids.has(o.id));
+    }
+
+    function copySelected(e: ClipboardEvent | KeyboardEvent) {
+      const items = selectedForClipboard();
+      if (!items.length) return false;
+      e.preventDefault();
+      objectClipboardRef.current = items;
+      pasteGenRef.current = 1;
+      const payload = CLIP_PREFIX + JSON.stringify(items);
+      if (e instanceof ClipboardEvent) {
+        e.clipboardData?.setData("text/plain", payload);
+      } else {
+        void navigator.clipboard.writeText(payload).catch(() => {});
+      }
+      return true;
+    }
+
+    function pasteObjects(sources: MapObject[]) {
+      if (!floor || !sources.length) return;
+      const n = pasteGenRef.current++;
+      const dx = n * PASTE_NUDGE_M;
+      const copies = sources.map((o) => cloneObjectAt(o, floor.id, dx, dx));
+      void createObjects(copies);
+    }
+
+    function onCopy(e: ClipboardEvent) {
+      if (isTypingTarget(e.target) || inPalette(e.target)) return;
+      copySelected(e);
+    }
+
+    function onPaste(e: ClipboardEvent) {
+      if (isTypingTarget(e.target) || inPalette(e.target)) return;
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      const parsed = parseCopiedObjects(text);
+      const sources = parsed ?? (text.trim() ? null : objectClipboardRef.current);
+      if (!sources?.length) return;
+      e.preventDefault();
+      pasteObjects(sources);
+    }
+
+    function onCut(e: ClipboardEvent) {
+      if (isTypingTarget(e.target) || inPalette(e.target)) return;
+      if (!copySelected(e)) return;
+      void deleteSelected();
+    }
+
     function onKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+      if (isTypingTarget(e.target) || inPalette(e.target)) return;
+      const chord = e.metaKey || e.ctrlKey;
+      if (chord && e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) void redo();
         else void undo();
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "y") {
+      if (chord && e.key.toLowerCase() === "y") {
         e.preventDefault();
         void redo();
         return;
       }
+      if (chord && e.key.toLowerCase() === "d") {
+        if (e.repeat) return;
+        const items = selectedForClipboard();
+        if (!items.length) return;
+        e.preventDefault();
+        pasteGenRef.current = 1;
+        pasteObjects(items);
+        return;
+      }
+      if (chord && e.key.toLowerCase() === "c") {
+        copySelected(e);
+        return;
+      }
+      if (chord && e.key.toLowerCase() === "x") {
+        if (copySelected(e)) void deleteSelected();
+        return;
+      }
+      if (chord) return;
       if (e.key === "Escape") {
         setTool("select");
         setPresetId("none");
@@ -646,7 +1044,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       }
       if (e.key === "v" || e.key === "V") {
         setSidebarTab("objects");
-        if (selectedId === VENUE_ID) setSelectedId(null);
+        if (selectedId === VENUE_ID) setSelectedIds([]);
         setTool("select");
       }
       if (e.key === "r" || e.key === "R") {
@@ -666,6 +1064,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           });
           return;
         }
+        if (sidebarTab === "venue") {
+          beginVenueDraw("rect");
+          return;
+        }
         setSidebarTab("objects");
         setStampAppearance(null);
         setStampModelId(null);
@@ -673,6 +1075,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
         setTool("rect");
       }
       if (e.key === "p" || e.key === "P") {
+        if (sidebarTab === "venue") {
+          beginVenueDraw("polygon");
+          return;
+        }
         setSidebarTab("objects");
         setTool("polygon");
       }
@@ -681,11 +1087,26 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
         setTool("icon");
       }
       if (e.key === "Delete" || e.key === "Backspace") {
+        const venue = venueEditRef.current;
+        if (venue.tab === "venue" && venue.el && venue.svg) {
+          e.preventDefault();
+          commitVenueSvg(deleteSvgLayer(venue.svg, venue.el));
+          setSelectedVenueEl(null);
+          return;
+        }
         if (sidebarTab === "objects") void deleteSelected();
       }
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("copy", onCopy);
+    window.addEventListener("paste", onPaste);
+    window.addEventListener("cut", onCut);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("copy", onCopy);
+      window.removeEventListener("paste", onPaste);
+      window.removeEventListener("cut", onCut);
+    };
   });
 
   const viewerUrl = `/e/${bundle.event.slug}`;
@@ -765,6 +1186,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <GridToggle value={showGrid} onChange={setShowGrid} />
           <ViewModeToggle
             value={viewMode}
             onChange={(mode) => {
@@ -796,18 +1218,19 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-[260px] shrink-0 flex-col border-r border-border bg-background md:flex">
+        <aside className="hidden w-[260px] min-h-0 shrink-0 flex-col overflow-hidden border-r border-border bg-background md:flex">
           <div className="flex border-b border-border">
             {(
               [
                 ["objects", "Objects"],
                 ["venue", "Venue"],
+                ["map", "Map"],
               ] as const
             ).map(([id, label]) => (
               <button
                 key={id}
                 type="button"
-                className={`flex-1 px-3 py-2 text-xs font-medium ${
+                className={`flex-1 px-2 py-2 text-xs font-medium ${
                   sidebarTab === id
                     ? "border-b-2 border-primary text-foreground"
                     : "text-muted-foreground hover:text-foreground"
@@ -815,11 +1238,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 onClick={() => {
                   setSidebarTab(id);
                   if (id === "venue") {
-                    setSelectedId(VENUE_ID);
+                    setSelectedIds([VENUE_ID]);
                     setTool("select");
                     setPresetId("none");
                   } else {
-                    if (selectedId === VENUE_ID) setSelectedId(null);
+                    if (selectedId === VENUE_ID) setSelectedIds([]);
                     if (tool === "calibrate") setTool("select");
                   }
                 }}
@@ -835,6 +1258,26 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 <p className="text-xs text-muted-foreground">
                   Booths and icons. Switch to Venue to resize the drawing.
                 </p>
+                {floorsSorted.length > 1 ? (
+                  <Select
+                    value={floor?.id}
+                    onValueChange={(id) => {
+                      setFloorId(id);
+                      setSelectedIds([]);
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select floor" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {floorsSorted.map((f, i) => (
+                        <SelectItem key={f.id} value={f.id}>
+                          {f.name || `Level ${i + 1}`}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : null}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -1060,13 +1503,19 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       <button
                         key={o.id}
                         type="button"
-                        data-active={o.id === selectedId}
-                        onClick={() => {
-                          setSelectedId(o.id);
+                        data-active={selectedIds.includes(o.id)}
+                        onClick={(e) => {
+                          if (e.shiftKey) {
+                            setSelectedIds((ids) =>
+                              ids.includes(o.id) ? ids.filter((id) => id !== o.id) : [...ids.filter((id) => id !== VENUE_ID), o.id],
+                            );
+                          } else {
+                            setSelectedIds([o.id]);
+                          }
                           setTool("select");
                         }}
                         onDoubleClick={() => {
-                          setSelectedId(o.id);
+                          setSelectedIds([o.id]);
                           setTool("select");
                           setFrameNonce((n) => n + 1);
                         }}
@@ -1074,7 +1523,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       >
                         {s?.logoUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={s.logoUrl} alt="" className="h-6 w-6 object-contain" />
+                          <img src={s.logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
                         ) : null}
                         <span className="min-w-0 flex-1 truncate">{title}</span>
                         <span className="font-mono text-[10px] text-muted-foreground">{sub}</span>
@@ -1089,6 +1538,149 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 </div>
               </ScrollArea>
             </div>
+          ) : sidebarTab === "map" ? (
+            <div className="min-h-0 overflow-auto p-3">
+              <div className="space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  Pan and zoom move the drawing and the map together. Turn on align to drag the hall onto the streets. Lat/lng arrows move about 1 m.
+                </p>
+                <label className="flex items-center justify-between gap-2 text-sm">
+                  <span>Show OpenStreetMap</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(floor?.basemap?.enabled)}
+                    onChange={(e) => {
+                      const prev = floor?.basemap ?? DEFAULT_FLOOR_BASEMAP;
+                      void patchBasemap({ ...prev, enabled: e.target.checked }, true);
+                    }}
+                    className="accent-primary"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-sm">
+                  <span>Align drawing to map</span>
+                  <input
+                    type="checkbox"
+                    checked={alignDrawingToMap}
+                    disabled={!floor?.basemap?.enabled}
+                    onChange={(e) => setAlignDrawingToMap(e.target.checked)}
+                    className="accent-primary"
+                  />
+                </label>
+                <div>
+                  <Label className="chrome-kicker" htmlFor="basemap-opacity">
+                    Map strength
+                  </Label>
+                  <input
+                    id="basemap-opacity"
+                    type="range"
+                    min="0.15"
+                    max="1"
+                    step="0.05"
+                    disabled={!floor?.basemap?.enabled}
+                    value={floor?.basemap?.opacity ?? DEFAULT_FLOOR_BASEMAP.opacity}
+                    onChange={(e) => {
+                      const prev = floor?.basemap ?? DEFAULT_FLOOR_BASEMAP;
+                      void patchBasemap({ ...prev, enabled: true, opacity: Number(e.target.value) });
+                    }}
+                    className="mt-1 w-full accent-primary"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  <div>
+                    <Label htmlFor="basemap-lat" className="text-[10px] text-muted-foreground">
+                      Latitude
+                    </Label>
+                    <Input
+                      id="basemap-lat"
+                      type="number"
+                      step={BASEMAP_COORD_STEP}
+                      disabled={!floor?.basemap?.enabled}
+                      value={floor?.basemap?.lat ?? ""}
+                      onChange={(e) => {
+                        const prev = floor?.basemap ?? DEFAULT_FLOOR_BASEMAP;
+                        const lat = Number(e.target.value);
+                        if (!Number.isFinite(lat)) return;
+                        void patchBasemap({ ...prev, enabled: true, lat: roundBasemapCoord(lat) });
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="basemap-lng" className="text-[10px] text-muted-foreground">
+                      Longitude
+                    </Label>
+                    <Input
+                      id="basemap-lng"
+                      type="number"
+                      step={BASEMAP_COORD_STEP}
+                      disabled={!floor?.basemap?.enabled}
+                      value={floor?.basemap?.lng ?? ""}
+                      onChange={(e) => {
+                        const prev = floor?.basemap ?? DEFAULT_FLOOR_BASEMAP;
+                        const lng = Number(e.target.value);
+                        if (!Number.isFinite(lng)) return;
+                        void patchBasemap({ ...prev, enabled: true, lng: roundBasemapCoord(lng) });
+                      }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label className="chrome-kicker" htmlFor="basemap-bearing">
+                      Rotation
+                    </Label>
+                    <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                      {wrapBearingDeg(floor?.basemap?.bearing ?? 0)}°
+                    </span>
+                  </div>
+                  <input
+                    id="basemap-bearing"
+                    type="range"
+                    min="-180"
+                    max="180"
+                    step="0.5"
+                    disabled={!floor?.basemap?.enabled}
+                    value={bearingSliderValue(floor?.basemap?.bearing ?? 0)}
+                    onChange={(e) => {
+                      const prev = floor?.basemap ?? DEFAULT_FLOOR_BASEMAP;
+                      const bearing = wrapBearingDeg(Number(e.target.value));
+                      void patchBasemap({ ...prev, enabled: true, bearing });
+                    }}
+                    className="mt-1 w-full accent-primary"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="basemap-zoom" className="text-[10px] text-muted-foreground">
+                    Zoom
+                  </Label>
+                  <Input
+                    id="basemap-zoom"
+                    type="number"
+                    min="1"
+                    max="22"
+                    step="0.1"
+                    className="tabular-nums"
+                    disabled={!floor?.basemap?.enabled}
+                    value={derivedMapZoom ?? floor?.basemap?.zoom ?? ""}
+                    onChange={(e) => {
+                      const zoom = Number(e.target.value);
+                      if (!Number.isFinite(zoom)) return;
+                      setDerivedMapZoom(zoom);
+                    }}
+                    onBlur={(e) => {
+                      const zoom = Number(e.target.value);
+                      if (!Number.isFinite(zoom)) return;
+                      setMapZoomTo((n) => ({ zoom: Math.min(22, Math.max(1, zoom)), nonce: (n?.nonce ?? 0) + 1 }));
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      const zoom = Number((e.target as HTMLInputElement).value);
+                      if (!Number.isFinite(zoom)) return;
+                      setMapZoomTo((n) => ({ zoom: Math.min(22, Math.max(1, zoom)), nonce: (n?.nonce ?? 0) + 1 }));
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="min-h-0 overflow-auto p-3">
               <div className="space-y-3">
@@ -1096,64 +1688,130 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   Edit the drawing, underlay, and scale. Booths stay on the Objects tab.
                 </p>
                 <div>
-                  <Label className="chrome-kicker">Plan</Label>
-                  <Select value={floor?.id} onValueChange={setFloorId}>
-                    <SelectTrigger className="mt-1">
-                      <SelectValue placeholder="Select plan" />
+                  <Label className="chrome-kicker">Floors / levels</Label>
+                  <Select
+                    value={String(Math.min(4, Math.max(1, floorsSorted.length)))}
+                    onValueChange={(value) => void applyFloorCount(value)}
+                    disabled={busy}
+                  >
+                    <SelectTrigger className="mt-1" aria-label="Floors / levels">
+                      <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {bundle.floors.map((f) => (
-                        <SelectItem key={f.id} value={f.id}>
-                          {f.name}
+                      {["1", "2", "3", "4"].map((n) => (
+                        <SelectItem key={n} value={n}>
+                          {n}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                  <div className="mt-2 flex gap-1">
-                    <Input
-                      value={newFloorName}
-                      onChange={(e) => setNewFloorName(e.target.value)}
-                      placeholder="New plan name"
-                    />
-                    <Button size="sm" variant="outline" onClick={() => void addFloor()}>
-                      Add
-                    </Button>
-                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    More than one level gets its own drawing. Booths stay on the active level.
+                  </p>
                 </div>
 
-                <div>
+                {floorsSorted.length > 1 ? (
+                  <div className="space-y-2">
+                    <Label className="chrome-kicker">Level names</Label>
+                    {floorsSorted.map((f, i) => (
+                      <Input
+                        key={f.id}
+                        defaultValue={f.name}
+                        placeholder={`Level ${i + 1}`}
+                        onBlur={(e) => {
+                          if (e.target.value.trim() !== f.name) void renameFloor(f.id, e.target.value);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.currentTarget.blur();
+                          }
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="space-y-3">
                   <Label className="chrome-kicker">Underlay</Label>
-                  <Input
-                    className="mt-1"
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp,image/svg+xml,application/pdf"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void uploadUnderlay(f);
-                    }}
-                  />
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    PDF, PNG, JPG, or SVG. Then enter the hall width and height.
+                  <p className="text-xs text-muted-foreground">
+                    PDF, PNG, JPG, or SVG. Then enter the hall width and height
+                    {floorsSorted.length > 1 ? " for the active level" : ""}.
                   </p>
-                  <Label className="mt-2 chrome-kicker" htmlFor="underlay-opacity">
+                  {(floorsSorted.length > 1 ? floorsSorted : floorsSorted.slice(0, 1)).map((f, i) => (
+                    <div key={f.id} className={floorsSorted.length > 1 ? "space-y-1 border border-border p-2" : "space-y-1"}>
+                      {floorsSorted.length > 1 ? (
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-medium">{f.name || `Level ${i + 1}`}</p>
+                          <button
+                            type="button"
+                            className="text-[10px] text-muted-foreground hover:text-primary"
+                            onClick={() => {
+                              setFloorId(f.id);
+                              setSelectedIds([]);
+                            }}
+                          >
+                            {f.id === floor?.id ? "Editing" : "Edit"}
+                          </button>
+                        </div>
+                      ) : null}
+                      <Input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/svg+xml,application/pdf"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) void uploadUnderlay(file, f.id);
+                          e.target.value = "";
+                        }}
+                      />
+                      {f.underlayUrl || f.originalUrl ? (
+                        <div className="relative">
+                          <UnderlayPreview
+                            floor={f}
+                            svgMarkup={f.id === floor?.id ? venueSvg : null}
+                            faded={f.id === floor?.id && !showUnderlay}
+                          />
+                          {f.id === floor?.id ? (
+                            <Button
+                              type="button"
+                              size="icon-xs"
+                              variant="outline"
+                              className="absolute top-1 right-1 bg-background/90"
+                              aria-label={showUnderlay ? "Hide drawing" : "Show drawing"}
+                              title={showUnderlay ? "Hide drawing" : "Show drawing"}
+                              onClick={() => setShowUnderlay((v) => !v)}
+                            >
+                              {showUnderlay ? <Eye /> : <EyeOff />}
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <p className="font-mono text-[10px] text-muted-foreground">
+                        {f.underlayUrl ? "Drawing attached" : "No drawing yet"}
+                        {f.id === floor?.id && f.underlayUrl && !showUnderlay ? " · hidden" : ""}
+                      </p>
+                    </div>
+                  ))}
+                  <Label className="chrome-kicker" htmlFor="underlay-opacity">
                     Drawing strength
                   </Label>
                   <input
                     id="underlay-opacity"
                     type="range"
-                    min="0.2"
+                    min="0"
                     max="1"
                     step="0.05"
                     value={underlayOpacity}
                     onChange={(e) => setUnderlayOpacity(Number(e.target.value))}
-                    className="mt-1 w-full accent-primary"
+                    className="w-full accent-primary"
                   />
                 </div>
 
                 <div>
                   <Label className="chrome-kicker">Venue size</Label>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Overall width and height of the drawing’s bounding box. Booths keep their real size.
+                    Overall width and height of{" "}
+                    {floorsSorted.length > 1 ? `${floor?.name || "this level"}’s` : "the drawing’s"} bounding box.
+                    Booths keep their real size.
                   </p>
                   <div className="mt-2 grid grid-cols-[1fr_1fr_auto] items-end gap-1">
                     <div>
@@ -1202,6 +1860,70 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   <Button size="sm" className="mt-2" variant="outline" onClick={() => void applyVenueBounds()}>
                     Apply size
                   </Button>
+                </div>
+
+                <div>
+                  <Label className="chrome-kicker">Drawing layers</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Draw walls on top of an attached plan, or click existing shapes to hide, delete, and reorder.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <Button
+                      size="sm"
+                      variant={editVenueLayers ? "default" : "outline"}
+                      onClick={() => {
+                        if (editVenueLayers) {
+                          setEditVenueLayers(false);
+                          setSelectedVenueEl(null);
+                          setTool("select");
+                          return;
+                        }
+                        if (!ensureVenueDrawing()) return;
+                        setEditVenueLayers(true);
+                        setSelectedVenueEl(null);
+                      }}
+                    >
+                      {editVenueLayers ? "Done" : "Edit venue"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={editVenueLayers && tool === "rect" ? "default" : "outline"}
+                      onClick={() => beginVenueDraw("rect")}
+                    >
+                      <Square />
+                      Rect
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={editVenueLayers && tool === "polygon" ? "default" : "outline"}
+                      onClick={() => beginVenueDraw("polygon")}
+                    >
+                      <Pentagon />
+                      Polygon
+                    </Button>
+                  </div>
+                  {editVenueLayers && venueSvg ? (
+                    <VenueLayersEditor
+                      layers={(() => {
+                        try {
+                          return listSvgLayers(venueSvg);
+                        } catch {
+                          return [];
+                        }
+                      })()}
+                      hoverId={hoverLayerId}
+                      selectedId={selectedVenueEl}
+                      onHover={setHoverLayerId}
+                      onSelect={setSelectedVenueEl}
+                      onToggleHidden={(id, hidden) => commitVenueSvg(setSvgLayerHidden(venueSvg, id, hidden))}
+                      onDelete={(id) => {
+                        commitVenueSvg(deleteSvgLayer(venueSvg, id));
+                        if (selectedVenueEl === id) setSelectedVenueEl(null);
+                      }}
+                      onReorder={(parentId, ids) => commitVenueSvg(reorderSvgSiblings(venueSvg, parentId, ids))}
+                      onRenameText={(id, text) => commitVenueSvg(setSvgLayerText(venueSvg, id, text))}
+                    />
+                  ) : null}
                 </div>
 
                 <div>
@@ -1263,7 +1985,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 presetMeters={presetId && presetId !== "none" ? preset : null}
                 stampAppearance={stampAppearance}
                 stampModelAssetId={stampModelId}
-                onSelect={setSelectedId}
+                showGrid={showGrid}
+                onSelect={(id) => setSelectedIds(id ? [id] : [])}
                 onChangeObject={(o) => void patchObject(o)}
                 onCreateObject={(o) => {
                   void createObject(o);
@@ -1280,6 +2003,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 objects={objects}
                 sponsors={bundle.sponsors}
                 selectedId={selectedId}
+                selectedIds={selectedIds}
                 frameNonce={frameNonce}
                 fitNonce={fitNonce}
                 tool={tool}
@@ -1289,9 +2013,20 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 stampAppearance={stampAppearance}
                 stampModelAssetId={stampModelId}
                 constrainProportions={constrainProportions}
-                editLayer={sidebarTab}
-                onSelect={setSelectedId}
+                editLayer={sidebarTab === "venue" ? "venue" : "objects"}
+                canvasInteractive={sidebarTab !== "map"}
+                basemapInteractive={sidebarTab === "map"}
+                basemapAlignMode={sidebarTab === "map" && alignDrawingToMap}
+                onBasemapAnchorChange={(next) => {
+                  const prev = floor.basemap ?? DEFAULT_FLOOR_BASEMAP;
+                  void patchBasemap({ ...prev, enabled: true, ...next });
+                }}
+                onBasemapDerivedZoom={onBasemapDerivedZoom}
+                basemapZoomTo={mapZoomTo}
+                onSelect={(id) => setSelectedIds(id ? [id] : [])}
+                onSelectIds={setSelectedIds}
                 onChangeObject={(o) => void patchObject(o)}
+                onChangeObjects={(objs) => void patchObjects(objs)}
                 onCreateObject={(o) => {
                   void createObject(o);
                   setTool("select");
@@ -1302,35 +2037,153 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 onCalibrated={(n, p) => void onCalibrated(n, p)}
                 knownLengthMeters={toMeters(Number(scaleLength), units)}
                 underlayOpacity={underlayOpacity}
+                showGrid={showGrid}
+                underlaySvg={venueSvg}
+                showUnderlay={showUnderlay}
+                underlayHoverLayerId={editVenueLayers ? hoverLayerId : null}
+                editVenueElements={editVenueLayers}
+                selectedVenueElementId={editVenueLayers ? selectedVenueEl : null}
+                onHoverVenueElement={setHoverLayerId}
+                onSelectVenueElement={setSelectedVenueEl}
+                onPreviewVenueSvg={setVenueSvg}
+                onCommitVenueSvg={(svg) => commitVenueSvg(svg)}
               />
             )
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-              Add a named plan to start.
+              Set the number of floors to start.
             </div>
           )}
+          <div className="pointer-events-none absolute top-3 left-3 z-20">
+            <div className="pointer-events-auto">
+              <FloorSwitcher
+                floors={floorsSorted}
+                value={floor?.id ?? ""}
+                onChange={(id) => {
+                  setFloorId(id);
+                  setSelectedIds([]);
+                  setFitNonce((n) => n + 1);
+                }}
+              />
+            </div>
+          </div>
           {tool === "calibrate" ? (
             <div className="pointer-events-none absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-md border border-primary/40 bg-background/80 px-3 py-1.5 text-xs text-foreground">
               {Number(scaleLength) > 0
-                ? `Click two ends of ${scaleLength} ${units}. Drag to pan.`
+                ? `Click two ends of ${scaleLength} ${units}. Hold Space to pan.`
                 : "Enter a known length in the Venue panel, then click two ends."}
             </div>
+          ) : sidebarTab === "venue" && (tool === "rect" || tool === "polygon") ? (
+            <div className="pointer-events-none absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-md border border-primary/40 bg-background/80 px-3 py-1.5 text-xs text-foreground">
+              {tool === "polygon"
+                ? "Click corners of the venue. Enter closes. Hold Space to pan."
+                : "Drag a rectangle on the venue. Hold Space to pan."}
+            </div>
           ) : null}
-          <div className="pointer-events-none absolute bottom-4 left-4 font-mono text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
-            {viewMode === "hall"
-              ? "pinch / wheel zoom · 0 fits view · left-drag pan · right-drag orbit"
-              : "pinch / wheel zoom · 0 fits view · handles resize · shift-drag slides drawing"}
-          </div>
         </main>
 
-        <aside className="hidden w-[260px] shrink-0 flex-col border-l border-border bg-background lg:flex">
+        <aside className="hidden w-[260px] min-h-0 shrink-0 flex-col overflow-hidden border-l border-border bg-background lg:flex">
+          <ScrollArea className="min-h-0 flex-1">
           <div className="border-b border-border p-3">
             <p className="chrome-kicker">Inspector</p>
-            {venueSelected && floor?.calibration ? (
+            {selectedVenueLayer && venueSvg ? (
+              <div className="mt-2 space-y-2">
+                <p className="text-sm font-medium">{selectedVenueLayer.name}</p>
+                <p className="font-mono text-[10px] text-muted-foreground uppercase">{selectedVenueLayer.kind}</p>
+                {selectedVenueLayer.text != null ? (
+                  <div>
+                    <Label htmlFor="insp-venue-label" className="text-[10px] text-muted-foreground">
+                      Label
+                    </Label>
+                    <Input
+                      id="insp-venue-label"
+                      value={selectedVenueLayer.text}
+                      onChange={(e) => commitVenueSvg(setSvgLayerText(venueSvg, selectedVenueLayer.id, e.target.value))}
+                    />
+                  </div>
+                ) : null}
+                {selectedVenueLayer.kind !== "image" && selectedVenuePaint ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Label className="w-12 text-[10px] font-normal text-muted-foreground">Fill</Label>
+                      <input
+                        type="color"
+                        aria-label="Fill color"
+                        value={paintToHex(selectedVenuePaint.fill, "#f4f0e6")}
+                        onChange={(e) =>
+                          commitVenueSvg(setSvgElementPaint(venueSvg, selectedVenueLayer.id, { fill: e.target.value }))
+                        }
+                        className="size-8 shrink-0 cursor-pointer border border-input bg-background p-0.5"
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          commitVenueSvg(setSvgElementPaint(venueSvg, selectedVenueLayer.id, { fill: "none" }))
+                        }
+                      >
+                        None
+                      </Button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="w-12 text-[10px] font-normal text-muted-foreground">Stroke</Label>
+                      <input
+                        type="color"
+                        aria-label="Stroke color"
+                        value={paintToHex(selectedVenuePaint.stroke, "#1a1a1a")}
+                        onChange={(e) =>
+                          commitVenueSvg(
+                            setSvgElementPaint(venueSvg, selectedVenueLayer.id, { stroke: e.target.value }),
+                          )
+                        }
+                        className="size-8 shrink-0 cursor-pointer border border-input bg-background p-0.5"
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          commitVenueSvg(setSvgElementPaint(venueSvg, selectedVenueLayer.id, { stroke: "none" }))
+                        }
+                      >
+                        None
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+                <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="size-3.5 accent-primary"
+                    checked={selectedVenueLayer.hidden}
+                    onChange={(e) =>
+                      commitVenueSvg(setSvgLayerHidden(venueSvg, selectedVenueLayer.id, e.target.checked))
+                    }
+                  />
+                  Hidden
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Drag to move. Rectangles resize from handles; polygons from vertices. Delete or Backspace removes the
+                  element.
+                </p>
+                <Button size="sm" variant="destructive" onClick={deleteSelectedVenueElement}>
+                  Delete
+                </Button>
+              </div>
+            ) : multiSelected ? (
+              <div className="mt-2 space-y-2">
+                <p className="text-sm font-medium">{selectedIds.filter((id) => id !== VENUE_ID).length} objects selected</p>
+                <p className="text-xs text-muted-foreground">
+                  Drag to move the group. Shift-click or shift-drag to add. Delete removes all.
+                </p>
+                <Button size="sm" variant="destructive" onClick={() => void deleteSelected()}>
+                  Delete
+                </Button>
+              </div>
+            ) : venueSelected && floor?.calibration ? (
               <div className="mt-2 space-y-2">
                 <p className="text-sm font-medium">Venue drawing</p>
                 <p className="text-xs text-muted-foreground">
-                  Drag empty space to pan. Drag orange handles to stretch. Shift-drag the hall to slide the drawing.
+                  Hold Space and drag to pan. Drag orange handles to stretch. Shift-drag the hall to slide the drawing.
                 </p>
                 <div className="grid grid-cols-2 gap-1">
                   <div>
@@ -1369,17 +2222,44 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               </div>
             ) : selected ? (
               <div className="mt-2 space-y-2">
-                <Input
-                  value={selected.name}
-                  onChange={(e) => void patchObject({ ...selected, name: e.target.value })}
-                  placeholder="Label"
-                />
-                {selected.kind === "booth" ? (
+                <div>
+                  <Label htmlFor="insp-label" className="text-[10px] text-muted-foreground">
+                    Label
+                  </Label>
                   <Input
-                    value={selected.boothNumber}
-                    onChange={(e) => void patchObject({ ...selected, boothNumber: e.target.value })}
-                    placeholder="Booth number"
+                    id="insp-label"
+                    value={selected.name}
+                    onChange={(e) => void patchObject({ ...selected, name: e.target.value })}
+                    placeholder="Display name"
                   />
+                </div>
+                {selected.kind === "booth" ? (
+                  <div>
+                    <Label htmlFor="insp-booth-number" className="text-[10px] text-muted-foreground">
+                      Booth number
+                    </Label>
+                    <Input
+                      id="insp-booth-number"
+                      value={selected.boothNumber}
+                      onChange={(e) => void patchObject({ ...selected, boothNumber: e.target.value })}
+                      placeholder="A12"
+                    />
+                  </div>
+                ) : null}
+                {selected.kind === "booth" ? (
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground">Sponsor</Label>
+                    <SponsorCombobox
+                      sponsors={bundle.sponsors}
+                      value={selected.sponsorId}
+                      onChange={(s) => void bindSponsor(s)}
+                    />
+                    {!bundle.sponsors.length ? (
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        Cache sponsors in Assets to bind this booth.
+                      </p>
+                    ) : null}
+                  </div>
                 ) : null}
                 {selected.kind === "booth" && selected.polygon ? (
                   <div className="space-y-1.5">
@@ -1629,8 +2509,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               placeholder="Search name or booth"
             />
           </div>
-          <ScrollArea className="flex-1 px-3 pb-3">
-            <div className="space-y-1">
+            <div className="space-y-1 px-3 pb-3">
               {filteredSponsors.map((s) => (
                 <button
                   key={s.id}
@@ -1640,7 +2519,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 >
                   {s.logoUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={s.logoUrl} alt="" className="h-6 w-6 object-contain" />
+                    <img src={s.logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
                   ) : (
                     <span className="h-6 w-6 rounded bg-muted" />
                   )}
