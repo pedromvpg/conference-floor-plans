@@ -24,7 +24,7 @@ export function ThemeToggle() {
       disabled={!mounted}
       onClick={() => setTheme(dark ? "light" : "dark")}
     >
-      {dark ? <Sun /> : <Moon />}
+      {dark ? <Sun strokeWidth={1.5} /> : <Moon strokeWidth={1.5} />}
     </Button>
   );
 }

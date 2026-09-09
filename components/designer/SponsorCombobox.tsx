@@ -60,7 +60,7 @@ export function SponsorCombobox({
           role="combobox"
           aria-expanded={open}
           aria-label="Sponsor"
-          className="mt-1 flex h-8 w-full min-w-0 items-center justify-between gap-1.5 rounded-none border border-input bg-background py-1 pr-2 pl-1.5 text-[11px] outline-none select-none focus-visible:border-primary"
+          className="mt-1 flex h-8 w-full min-w-0 items-center justify-between gap-1.5 rounded-lg border border-input bg-background py-1 pr-2 pl-1.5 text-[11px] outline-none select-none focus-visible:border-primary"
         >
           <span className="flex min-w-0 items-center gap-1.5">
             {selected ? <SponsorLogo url={selected.logoUrl} size="sm" /> : null}
@@ -73,13 +73,13 @@ export function SponsorCombobox({
               {selected?.name ?? "None"}
             </span>
           </span>
-          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
         </button>
       </PopoverTrigger>
       <PopoverContent
-        align="end"
+        align="start"
         sideOffset={4}
-        className="w-72 rounded-none p-0"
+        className="w-[var(--radix-popover-trigger-width)] max-w-[min(18rem,calc(100vw-2rem))] p-0"
       >
         <Command loop>
           <CommandInput placeholder="Search name or booth" />
@@ -91,9 +91,10 @@ export function SponsorCombobox({
                 <span className="flex-1 truncate text-muted-foreground">None</span>
                 <Check
                   className={cn(
-                    "ml-auto size-3.5 shrink-0",
+                    "ml-auto size-4 shrink-0",
                     selected ? "opacity-0" : "opacity-100",
                   )}
+                  strokeWidth={1.5}
                 />
               </CommandItem>
               {sponsors.map((s) => (
@@ -112,9 +113,10 @@ export function SponsorCombobox({
                   ) : null}
                   <Check
                     className={cn(
-                      "size-3.5 shrink-0",
+                      "size-4 shrink-0",
                       selected?.id === s.id ? "opacity-100" : "opacity-0",
                     )}
+                    strokeWidth={1.5}
                   />
                 </CommandItem>
               ))}

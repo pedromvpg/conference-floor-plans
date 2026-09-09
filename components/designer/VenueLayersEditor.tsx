@@ -203,13 +203,13 @@ function LayerRows({
                     setExpanded(next);
                   }}
                 >
-                  <ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
+                  <ChevronRight className={cn("size-4 shrink-0 transition-transform", open && "rotate-90")} strokeWidth={1.5} />
                 </button>
               ) : (
                 <span className="size-4" />
               )}
               <span className="cursor-grab text-muted-foreground active:cursor-grabbing" aria-hidden>
-                <GripVertical className="size-3.5" />
+                <GripVertical className="size-4 shrink-0" strokeWidth={1.5} />
               </span>
               {editing ? (
                 <Input
@@ -253,7 +253,7 @@ function LayerRows({
                   onToggleLocked(layer.id, !layer.locked);
                 }}
               >
-                {layer.locked ? <Lock /> : <LockOpen />}
+                {layer.locked ? <Lock strokeWidth={1.5} /> : <LockOpen strokeWidth={1.5} />}
               </Button>
               <Button
                 type="button"
@@ -265,7 +265,7 @@ function LayerRows({
                   onToggleHidden(layer.id, !layer.hidden);
                 }}
               >
-                {layer.hidden ? <EyeOff /> : <Eye />}
+                {layer.hidden ? <EyeOff strokeWidth={1.5} /> : <Eye strokeWidth={1.5} />}
               </Button>
               <Button
                 type="button"
@@ -277,7 +277,7 @@ function LayerRows({
                   if (window.confirm(`Delete “${layer.name}” from the drawing?`)) onDelete(layer.id);
                 }}
               >
-                <Trash2 />
+                <Trash2 strokeWidth={1.5} />
               </Button>
             </div>
             {hasKids && open ? (
@@ -369,7 +369,7 @@ export function VenueLayersEditor({
     <div className="mt-2">
       <div className="mb-1.5 flex items-center gap-1">
         <Button size="sm" variant="outline" disabled={selectedIds.length < 1} onClick={onGroup}>
-          <Group />
+          <Group strokeWidth={1.5} />
           Group
         </Button>
         <Button
@@ -378,7 +378,7 @@ export function VenueLayersEditor({
           disabled={!canUngroup}
           onClick={() => selected && onUngroup(selected.id)}
         >
-          <Ungroup />
+          <Ungroup strokeWidth={1.5} />
           Ungroup
         </Button>
       </div>

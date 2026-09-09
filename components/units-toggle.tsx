@@ -10,7 +10,7 @@ export function UnitsToggle({
   onChange: (units: Units) => void;
 }) {
   return (
-    <div className="inline-flex rounded-none border border-border p-0.5" role="group" aria-label="Measurement units">
+    <div className="inline-flex rounded-lg border border-border p-0.5" role="group" aria-label="Measurement units">
       {(["m", "ft"] as const).map((u) => (
         <button
           key={u}
@@ -18,7 +18,7 @@ export function UnitsToggle({
           aria-pressed={units === u}
           title={u === "m" ? "Show metres" : "Show feet"}
           onClick={() => onChange(u)}
-          className={`min-w-7 rounded-none px-1.5 py-1 font-mono text-[10px] ${
+          className={`h-8 min-w-8 rounded-md px-2 text-[11px] font-medium ${
             units === u ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"
           }`}
         >

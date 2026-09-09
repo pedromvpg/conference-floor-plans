@@ -30,7 +30,7 @@ function CommandInput({
       data-slot="command-input-wrapper"
       className="flex items-center gap-2 border-b border-border px-2"
     >
-      <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      <SearchIcon className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
       <CommandPrimitive.Input
         data-slot="command-input"
         className={cn(
