@@ -366,6 +366,7 @@ export function ViewerApp({
               {items.map((o) => {
                 const s = o.sponsorId ? sponsors.find((sp) => sp.id === o.sponsorId) : undefined;
                 const title = objectTitle(o, s);
+                const logoUrl = displayLogoUrl(o, [], s);
                 const area = locationTab === "size" ? polygonArea(o) : 0;
                 const sub =
                   locationTab === "size" && area > 0
@@ -382,9 +383,9 @@ export function ViewerApp({
                     onDoubleClick={() => frameItem(o.id)}
                     className="chrome-row"
                   >
-                    {displayLogoUrl(o, [], s) ? (
+                    {logoUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={displayLogoUrl(o, [], s)} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
+                      <img src={logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
                     ) : null}
                     <span className="min-w-0 flex-1 truncate">{title}</span>
                     {sub ? <span className="font-mono text-[10px] text-muted-foreground">{sub}</span> : null}

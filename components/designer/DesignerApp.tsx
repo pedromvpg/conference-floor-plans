@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/select";
 import { AMENITIES, amenityLabel } from "@/lib/amenities";
 import { STAGE_PRESET_METERS, resolveAppearance } from "@/lib/appearance";
+import { displayLogoUrl } from "@/lib/hall";
 import { DEFAULT_FLOOR_BASEMAP, BASEMAP_COORD_STEP, bearingSliderValue, roundBasemapCoord, wrapBearingDeg } from "@/lib/basemap";
 import { calibrationFromBounds, floorSizeMeters, ringBounds, scaleRingToSize } from "@/lib/geometry";
 import { commitShape, objectShape, rotateBezier, translateBezier } from "@/lib/bezier";
@@ -1642,6 +1643,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       ? bundle.sponsors.find((sp) => sp.id === o.sponsorId)
                       : undefined;
                     const title = objectTitle(o, s);
+                    const logoUrl = displayLogoUrl(o, bundle.assets, s);
                     const sub =
                       o.kind === "amenity"
                         ? "Icon"
@@ -1672,9 +1674,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         }}
                         className="chrome-row"
                       >
-                        {s?.logoUrl ? (
+                        {logoUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={s.logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
+                          <img src={logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
                         ) : null}
                         <span className="min-w-0 flex-1 truncate">{title}</span>
                         <span className="font-mono text-[10px] text-muted-foreground">{sub}</span>
