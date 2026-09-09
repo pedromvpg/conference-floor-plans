@@ -889,18 +889,26 @@ export function svgElementMetrics(markup: string, id: string): SvgMetrics | null
   };
 }
 
-export function setSvgElementPoint(markup: string, id: string, index: number, point: SvgPoint): string {
+export function setSvgElementPoint(
+  markup: string,
+  id: string,
+  index: number,
+  point: SvgPoint,
+  opts?: { constrain?: boolean; keepRectangle?: boolean },
+): string {
   const root = parseRoot(markup);
   const el = findLayer(root, id);
   if (!el) return markup;
+  const keepRect = opts?.keepRectangle !== false;
   const kind = localName(el);
   if (kind === "polygon" || kind === "polyline") {
     const pts = parsePoints(el.getAttribute("points") || "");
     if (!pts[index]) return markup;
     const nodes = fromRing(pts.map((p): [number, number] => [p.x, p.y]));
-    const next = isRectangleShape(nodes)
-      ? resizeRectangleCorner(nodes, index, point.x, point.y)
-      : moveNode(nodes, index, point.x, point.y);
+    const next =
+      keepRect && isRectangleShape(nodes)
+        ? resizeRectangleCorner(nodes, index, point.x, point.y, opts?.constrain)
+        : moveNode(nodes, index, point.x, point.y);
     el.setAttribute("points", formatPoints(next.map((n) => ({ x: n.x, y: n.y }))));
   } else if (kind === "rect") {
     const next = applyRectHandle(rectBox(el), index, point);
@@ -912,9 +920,10 @@ export function setSvgElementPoint(markup: string, id: string, index: number, po
     const parsed = parseSvgPath(el.getAttribute("d") || "") ?? polylineFromPath(el.getAttribute("d") || "");
     if (!parsed) return markup;
     if ("nodes" in parsed) {
-      const next = isRectangleShape(parsed.nodes)
-        ? resizeRectangleCorner(parsed.nodes, index, point.x, point.y)
-        : moveNode(parsed.nodes, index, point.x, point.y);
+      const next =
+        keepRect && isRectangleShape(parsed.nodes)
+          ? resizeRectangleCorner(parsed.nodes, index, point.x, point.y, opts?.constrain)
+          : moveNode(parsed.nodes, index, point.x, point.y);
       el.setAttribute("d", svgPathD(next, parsed.closed));
     } else if (parsed.pts[index]) {
       parsed.pts[index] = point;

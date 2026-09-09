@@ -1319,15 +1319,10 @@ export function FloorCanvas({
       } else if (d.mode === "vertex" && d.vertex != null && live) {
         const local = clientToSvgEl(live, e.clientX, e.clientY);
         const lock = e.shiftKey ? !constrainProportions : constrainProportions;
-        const next =
-          d.nodes && isRectangleShape(d.nodes) && !e.altKey
-            ? setSvgElementBezier(
-                d.startMarkup,
-                d.id,
-                resizeRectangleCorner(d.nodes, d.vertex, local.x, local.y, lock),
-                d.closed ?? true,
-              )
-            : setSvgElementPoint(d.startMarkup, d.id, d.vertex, local);
+        const next = setSvgElementPoint(d.startMarkup, d.id, d.vertex, local, {
+          constrain: lock,
+          keepRectangle: !e.altKey,
+        });
         lastVenuePreview.current = next;
         onPreviewVenueSvg?.(next);
       } else if ((d.mode === "handle-in" || d.mode === "handle-out") && d.vertex != null && live && d.nodes) {
