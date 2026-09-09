@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { Box, ChevronDown, Eye, EyeOff, LayoutGrid, MapPin, Maximize2, Pentagon, Plus, Redo2, Settings, Square, Theater, Undo2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Box, ChevronDown, Eye, EyeOff, LayoutGrid, MapPin, Maximize2, Pentagon, Plus, Redo2, Square, Theater, Undo2 } from "lucide-react";
 import { ObjectMediaFields } from "@/components/designer/ObjectMediaFields";
 import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
 import { UnderlayPreview } from "@/components/designer/UnderlayPreview";
@@ -234,6 +235,7 @@ async function rasterizeIfPdf(file: File): Promise<File> {
 }
 
 export function DesignerApp({ initial }: { initial: DraftBundle }) {
+  const router = useRouter();
   const [bundle, setBundle] = useState(initial);
   const [floorId, setFloorId] = useState(initial.floors[0]?.id ?? "");
   const [tool, setTool] = useState<Tool>("select");
@@ -265,6 +267,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [boothWidth, setBoothWidth] = useState("");
   const [boothHeight, setBoothHeight] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [publishedAt, setPublishedAt] = useState(initial.publication?.publishedAt ?? null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [saveLabel, setSaveLabel] = useState<"Saved" | "Saving…">("Saved");
   const [versions, setVersions] = useState<DraftVersionMeta[]>([]);
@@ -1016,6 +1019,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       const res = await fetch(`/api/events/${bundle.event.slug}/publish`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Publish failed");
+      if (typeof data.publishedAt === "string") setPublishedAt(data.publishedAt);
       toast.success("Published");
       window.open(`/e/${bundle.event.slug}`, "_blank");
     } catch (err) {
@@ -1224,7 +1228,35 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
             Maps
           </Link>
           <span className="text-border">/</span>
-          <h1 className="truncate text-[13px] font-medium">{bundle.event.name}</h1>
+          <h1 className="min-w-0">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="flex max-w-full items-center gap-0.5 truncate text-[13px] font-medium hover:text-primary"
+                >
+                  <span className="truncate">{bundle.event.name}</span>
+                  <ChevronDown className="size-3.5 shrink-0 opacity-60" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-40">
+                {(
+                  [
+                    ["Designer", `/e/${bundle.event.slug}/edit`],
+                    ["Assets", `/e/${bundle.event.slug}/assets`],
+                    ["Sponsors", `/e/${bundle.event.slug}/assets/sponsors`],
+                    ["Agenda", `/e/${bundle.event.slug}/assets/agenda`],
+                    ["Library", `/e/${bundle.event.slug}/assets/library`],
+                    ["Settings", `/e/${bundle.event.slug}/settings`],
+                  ] as const
+                ).map(([label, href]) => (
+                  <DropdownMenuItem key={href} onSelect={() => router.push(href)}>
+                    {label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </h1>
         </div>
         <div className="flex items-center gap-1">
           <Button
@@ -1302,22 +1334,25 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           <UnitsToggle units={units} onChange={setUnits} />
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
-          <Button size="sm" variant="outline" asChild>
-            <Link href={`/e/${bundle.event.slug}/assets`}>Assets</Link>
-          </Button>
-          <Button size="sm" onClick={() => void publish()} disabled={busy}>
-            Publish
-          </Button>
-          <Button size="sm" variant="outline" asChild>
-            <Link href={viewerUrl} target="_blank">
-              Viewer
-            </Link>
-          </Button>
-          <Button size="icon-sm" variant="ghost" asChild>
-            <Link href={`/e/${bundle.event.slug}/settings`} aria-label="Settings" title="Settings">
-              <Settings />
-            </Link>
-          </Button>
+          <div className="group relative">
+            <Button size="sm" onClick={() => void publish()} disabled={busy}>
+              Publish
+            </Button>
+            <div className="invisible absolute right-0 top-full z-50 pt-1 opacity-0 group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+              <div className="min-w-52 rounded-lg bg-popover p-2 text-sm shadow-md ring-1 ring-foreground/10">
+                <p className="px-1.5 pb-1.5 text-[11px] leading-snug text-muted-foreground">
+                  {publishedAt
+                    ? `Last published ${formatSavedWhen(new Date(publishedAt), new Date(nowTick))} · ${new Date(publishedAt).toLocaleString()}`
+                    : "Not published yet"}
+                </p>
+                <Button size="sm" variant="outline" className="w-full" asChild>
+                  <Link href={viewerUrl} target="_blank">
+                    Viewer
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          </div>
           <ThemeToggle />
         </div>
       </header>
