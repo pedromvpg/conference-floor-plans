@@ -11,7 +11,6 @@ import { UnderlayPreview } from "@/components/designer/UnderlayPreview";
 import { VenueLayersEditor } from "@/components/designer/VenueLayersEditor";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
 import { FloorSwitcher, GridToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
-import { UnitsToggle } from "@/components/units-toggle";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -1254,6 +1253,19 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     {label}
                   </DropdownMenuItem>
                 ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Units</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={units}
+                  onValueChange={(value) => setUnits(value as "m" | "ft")}
+                >
+                  <DropdownMenuRadioItem value="m" onSelect={(e) => e.preventDefault()}>
+                    Metres
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="ft" onSelect={(e) => e.preventDefault()}>
+                    Feet
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
           </h1>
@@ -1331,7 +1343,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               if (mode === "hall" && tool === "calibrate") setTool("select");
             }}
           />
-          <UnitsToggle units={units} onChange={setUnits} />
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
           <div className="group relative">
