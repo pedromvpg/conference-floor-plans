@@ -1,4 +1,5 @@
 import type { Appearance, MapObject } from "./types";
+import { tessellate } from "./bezier";
 
 export function isStageObject(o: { name: string; boothNumber: string }): boolean {
   return /\bstage\b/i.test(`${o.name} ${o.boothNumber}`);
@@ -24,8 +25,11 @@ export function hallDefaults(partial?: Partial<Pick<MapObject, "appearance" | "f
 }
 
 export function normalizeObject(o: MapObject): MapObject {
+  const path = o.path?.length ? o.path : null;
   return {
     ...o,
+    path,
+    polygon: path ? tessellate(path, true) : o.polygon,
     appearance: o.appearance ?? null,
     facingDeg: o.facingDeg ?? 0,
     modelAssetId: o.modelAssetId ?? null,

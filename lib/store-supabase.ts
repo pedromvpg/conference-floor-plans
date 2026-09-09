@@ -16,6 +16,7 @@ import type {
 import { MAX_DRAFT_VERSIONS, sliceKey } from "./draft-versions";
 import { buildMapDocument } from "./map-document";
 import { normalizeFloorBasemap } from "./basemap";
+import { parseStoredPolygon, serializePolygon } from "./bezier";
 import { nowIso } from "./store";
 import type { NewEventInput, NewLibraryAsset, Store } from "./store";
 import { normalizeObject } from "./appearance";
@@ -54,7 +55,7 @@ type ObjectRow = {
   id: string;
   floor_id: string;
   kind: MapObject["kind"];
-  polygon: [number, number][] | null;
+  polygon: unknown;
   x: number | null;
   y: number | null;
   rotation: number;
@@ -118,11 +119,13 @@ function floorFrom(r: FloorRow): Floor {
 }
 
 function objectFrom(r: ObjectRow): MapObject {
+  const shape = parseStoredPolygon(r.polygon);
   return {
     id: r.id,
     floorId: r.floor_id,
     kind: r.kind,
-    polygon: r.polygon,
+    polygon: shape.polygon,
+    path: shape.path,
     x: r.x,
     y: r.y,
     rotation: r.rotation ?? 0,
@@ -343,7 +346,7 @@ export class SupabaseStore implements Store {
         id: obj.id,
         floor_id: obj.floorId,
         kind: obj.kind,
-        polygon: obj.polygon,
+        polygon: serializePolygon(obj.polygon, obj.path),
         x: obj.x,
         y: obj.y,
         rotation: obj.rotation,

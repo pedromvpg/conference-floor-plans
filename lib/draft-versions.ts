@@ -18,6 +18,7 @@ export function sliceKey(slice: DraftSlice): string {
       floorId: o.floorId,
       kind: o.kind,
       polygon: o.polygon,
+      path: o.path,
       x: o.x,
       y: o.y,
       rotation: o.rotation,
