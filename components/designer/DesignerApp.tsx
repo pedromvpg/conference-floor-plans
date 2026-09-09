@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Box, ChevronDown, Eye, EyeOff, LayoutGrid, MapPin, Maximize2, Pentagon, Plus, Redo2, Settings, Square, Theater, Undo2 } from "lucide-react";
+import { ObjectMediaFields } from "@/components/designer/ObjectMediaFields";
 import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
 import { UnderlayPreview } from "@/components/designer/UnderlayPreview";
 import { VenueLayersEditor } from "@/components/designer/VenueLayersEditor";
@@ -39,8 +40,8 @@ import { AMENITIES, amenityLabel } from "@/lib/amenities";
 import { STAGE_PRESET_METERS, resolveAppearance } from "@/lib/appearance";
 import { DEFAULT_FLOOR_BASEMAP, BASEMAP_COORD_STEP, bearingSliderValue, roundBasemapCoord, wrapBearingDeg } from "@/lib/basemap";
 import { calibrationFromBounds, floorSizeMeters, ringBounds, scaleRingToSize } from "@/lib/geometry";
-import { rotatePlot } from "@/lib/hall";
-import { PRESETS, presetMeters as presetSize, formatSize, fromMeters, toMeters } from "@/lib/units";
+import { commitShape, objectShape, rotateBezier, translateBezier } from "@/lib/bezier";
+import { PRESETS, presetMeters as presetSize, formatArea, formatSize, fromMeters, toMeters } from "@/lib/units";
 import { useUnits } from "@/lib/use-units";
 import type {
   AmenityType,
@@ -62,14 +63,23 @@ import {
   blankVenueSvg,
   deleteSvgLayer,
   findSvgLayer,
+  groupSvgLayers,
   isSvgUnderlay,
   listSvgLayers,
   reorderSvgSiblings,
+  reparentSvgLayer,
   serializeSvg,
   setSvgElementPaint,
+  setSvgElementRotation,
   setSvgLayerHidden,
+  setSvgLayerLocked,
+  setSvgLayerName,
   setSvgLayerText,
+  svgElementMetrics,
   svgElementPaint,
+  svgElementRotation,
+  svgViewBox,
+  ungroupSvgLayer,
   wrapRasterAsSvg,
 } from "@/lib/svg-layers";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -157,11 +167,18 @@ function parseCopiedObjects(text: string): MapObject[] | null {
 
 function cloneObjectAt(src: MapObject, floorId: string, dx: number, dy: number): MapObject {
   const t = nowIso();
+  const path = src.path?.length
+    ? translateBezier(src.path, dx, dy)
+    : src.polygon
+      ? translateBezier(objectShape(src), dx, dy)
+      : null;
+  const polygon = path ? commitShape(path).polygon : src.polygon;
   return {
     ...src,
     id: newId(),
     floorId,
-    polygon: src.polygon?.map(([x, y]) => [x + dx, y + dy] as [number, number]) ?? null,
+    polygon,
+    path,
     x: src.x != null ? src.x + dx : null,
     y: src.y != null ? src.y + dy : null,
     createdAt: t,
@@ -263,6 +280,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [venueSvg, setVenueSvg] = useState<string | null>(null);
   const [hoverLayerId, setHoverLayerId] = useState<string | null>(null);
   const [selectedVenueEl, setSelectedVenueEl] = useState<string | null>(null);
+  const [selectedVenueEls, setSelectedVenueEls] = useState<string[]>([]);
 
   const bundleRef = useRef(bundle);
   bundleRef.current = bundle;
@@ -274,7 +292,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const venueSvgSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const objectClipboardRef = useRef<MapObject[] | null>(null);
   const pasteGenRef = useRef(1);
-  const venueEditRef = useRef({ el: null as string | null, svg: null as string | null, tab: "objects" as string });
+  const venueEditRef = useRef({
+    el: null as string | null,
+    els: [] as string[],
+    svg: null as string | null,
+    tab: "objects" as string,
+  });
 
   const floorsSorted = useMemo(
     () => [...bundle.floors].sort((a, b) => a.sortOrder - b.sortOrder),
@@ -328,7 +351,22 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     }
   }, [venueSvg, selectedVenueEl]);
 
-  venueEditRef.current = { el: selectedVenueEl, svg: venueSvg, tab: sidebarTab };
+  const selectedVenueMetrics = useMemo(() => {
+    if (!venueSvg || !selectedVenueEl || !floor?.calibration) return null;
+    try {
+      const raw = svgElementMetrics(venueSvg, selectedVenueEl);
+      const vb = svgViewBox(venueSvg);
+      if (!raw || !vb || vb.w <= 0 || vb.h <= 0) return null;
+      const size = floorSizeMeters(floor.calibration);
+      const sx = size.w / vb.w;
+      const sy = size.h / vb.h;
+      return { w: raw.w * sx, h: raw.h * sy, area: raw.area * sx * sy };
+    } catch {
+      return null;
+    }
+  }, [venueSvg, selectedVenueEl, floor?.calibration]);
+
+  venueEditRef.current = { el: selectedVenueEl, els: selectedVenueEls, svg: venueSvg, tab: sidebarTab };
 
   const slug = bundle.event.slug;
 
@@ -652,6 +690,20 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     return "custom";
   }
 
+  function applyBoothRotation(nextDeg: number) {
+    if (!selected?.polygon) return;
+    if (!Number.isFinite(nextDeg)) return;
+    const delta = nextDeg - (selected.facingDeg ?? 0);
+    const rotated = commitShape(rotateBezier(objectShape(selected), delta));
+    void patchObject({
+      ...selected,
+      polygon: rotated.polygon,
+      path: rotated.path,
+      facingDeg: nextDeg,
+      rotation: nextDeg,
+    });
+  }
+
   function applyBoothPreset(id: string) {
     if (!selected?.polygon || id === "custom") return;
     const size = id === "stage" ? STAGE_PRESET_METERS : presetSize(id);
@@ -782,6 +834,47 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     markSaved();
   }
 
+  function selectVenueLayer(id: string | null, additive = false) {
+    if (!id) {
+      setSelectedVenueEl(null);
+      setSelectedVenueEls([]);
+      return;
+    }
+    if (additive) {
+      setSelectedVenueEls((prev) => {
+        const has = prev.includes(id);
+        const next = has ? prev.filter((x) => x !== id) : [...prev, id];
+        setSelectedVenueEl(next[next.length - 1] ?? null);
+        return next;
+      });
+      return;
+    }
+    setSelectedVenueEl(id);
+    setSelectedVenueEls([id]);
+  }
+
+  function groupSelectedVenueLayers() {
+    if (!venueSvg || selectedVenueEls.length < 1) return;
+    const { markup, groupId } = groupSvgLayers(venueSvg, selectedVenueEls);
+    if (!groupId) {
+      toast.error("Layers must share the same parent to group.");
+      return;
+    }
+    commitVenueSvg(markup);
+    selectVenueLayer(groupId);
+  }
+
+  function ungroupVenueLayer(id: string) {
+    if (!venueSvg) return;
+    const next = ungroupSvgLayer(venueSvg, id);
+    if (next === venueSvg) return;
+    commitVenueSvg(next);
+    if (selectedVenueEl === id) {
+      setSelectedVenueEl(null);
+      setSelectedVenueEls([]);
+    }
+  }
+
   function commitVenueSvg(next: string) {
     const id = floor?.id;
     if (!id) return;
@@ -798,9 +891,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   }
 
   function deleteSelectedVenueElement() {
-    if (!venueSvg || !selectedVenueEl) return;
-    commitVenueSvg(deleteSvgLayer(venueSvg, selectedVenueEl));
+    if (!venueSvg || !selectedVenueEls.length) return;
+    let next = venueSvg;
+    for (const id of selectedVenueEls) next = deleteSvgLayer(next, id);
+    commitVenueSvg(next);
     setSelectedVenueEl(null);
+    setSelectedVenueEls([]);
   }
 
   function ensureVenueDrawing(): string | null {
@@ -1055,11 +1151,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           selected.polygon
         ) {
           e.preventDefault();
-          const next = rotatePlot(selected.polygon, selected.facingDeg ?? 0, 45);
+          const rotated = commitShape(rotateBezier(objectShape(selected), 45));
           void patchObject({
             ...selected,
-            polygon: next.polygon,
-            facingDeg: next.facingDeg,
+            polygon: rotated.polygon,
+            path: rotated.path,
+            facingDeg: (selected.facingDeg ?? 0) + 45,
             rotation: selected.rotation + 45,
           });
           return;
@@ -1088,10 +1185,13 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       }
       if (e.key === "Delete" || e.key === "Backspace") {
         const venue = venueEditRef.current;
-        if (venue.tab === "venue" && venue.el && venue.svg) {
+        if (venue.tab === "venue" && venue.els.length && venue.svg) {
           e.preventDefault();
-          commitVenueSvg(deleteSvgLayer(venue.svg, venue.el));
+          let next = venue.svg;
+          for (const id of venue.els) next = deleteSvgLayer(next, id);
+          commitVenueSvg(next);
           setSelectedVenueEl(null);
+          setSelectedVenueEls([]);
           return;
         }
         if (sidebarTab === "objects") void deleteSelected();
@@ -1404,7 +1504,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   <p className="text-[11px] text-primary">
                     {viewMode === "hall"
                       ? "Switch to Plan to trace a polygon. Esc cancels."
-                      : "Click corners on the plan, then Enter to close. Esc cancels."}
+                      : "Click a corner; drag for Bézier handles. Click the first point or Enter to close. Alt-drag breaks handle symmetry."}
                   </p>
                 ) : null}
                 {tool === "icon" ? (
@@ -1875,12 +1975,14 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         if (editVenueLayers) {
                           setEditVenueLayers(false);
                           setSelectedVenueEl(null);
+                          setSelectedVenueEls([]);
                           setTool("select");
                           return;
                         }
                         if (!ensureVenueDrawing()) return;
                         setEditVenueLayers(true);
                         setSelectedVenueEl(null);
+                        setSelectedVenueEls([]);
                       }}
                     >
                       {editVenueLayers ? "Done" : "Edit venue"}
@@ -1912,16 +2014,27 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         }
                       })()}
                       hoverId={hoverLayerId}
-                      selectedId={selectedVenueEl}
+                      selectedIds={selectedVenueEls}
                       onHover={setHoverLayerId}
-                      onSelect={setSelectedVenueEl}
+                      onSelect={selectVenueLayer}
                       onToggleHidden={(id, hidden) => commitVenueSvg(setSvgLayerHidden(venueSvg, id, hidden))}
+                      onToggleLocked={(id, locked) => commitVenueSvg(setSvgLayerLocked(venueSvg, id, locked))}
                       onDelete={(id) => {
                         commitVenueSvg(deleteSvgLayer(venueSvg, id));
-                        if (selectedVenueEl === id) setSelectedVenueEl(null);
+                        setSelectedVenueEls((prev) => {
+                          const next = prev.filter((x) => x !== id);
+                          setSelectedVenueEl(next[next.length - 1] ?? null);
+                          return next;
+                        });
                       }}
                       onReorder={(parentId, ids) => commitVenueSvg(reorderSvgSiblings(venueSvg, parentId, ids))}
+                      onReparent={(id, newParentId, beforeId) =>
+                        commitVenueSvg(reparentSvgLayer(venueSvg, id, newParentId, beforeId))
+                      }
+                      onRename={(id, name) => commitVenueSvg(setSvgLayerName(venueSvg, id, name))}
                       onRenameText={(id, text) => commitVenueSvg(setSvgLayerText(venueSvg, id, text))}
+                      onGroup={groupSelectedVenueLayers}
+                      onUngroup={ungroupVenueLayer}
                     />
                   ) : null}
                 </div>
@@ -2002,6 +2115,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 floor={floor}
                 objects={objects}
                 sponsors={bundle.sponsors}
+                assets={bundle.assets}
                 selectedId={selectedId}
                 selectedIds={selectedIds}
                 frameNonce={frameNonce}
@@ -2044,7 +2158,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 editVenueElements={editVenueLayers}
                 selectedVenueElementId={editVenueLayers ? selectedVenueEl : null}
                 onHoverVenueElement={setHoverLayerId}
-                onSelectVenueElement={setSelectedVenueEl}
+                onSelectVenueElement={(id) => selectVenueLayer(id)}
                 onPreviewVenueSvg={setVenueSvg}
                 onCommitVenueSvg={(svg) => commitVenueSvg(svg)}
               />
@@ -2076,7 +2190,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           ) : sidebarTab === "venue" && (tool === "rect" || tool === "polygon") ? (
             <div className="pointer-events-none absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-md border border-primary/40 bg-background/80 px-3 py-1.5 text-xs text-foreground">
               {tool === "polygon"
-                ? "Click corners of the venue. Enter closes. Hold Space to pan."
+                ? "Click to add a corner; click-drag for curves. Enter closes. Hold Space to pan."
                 : "Drag a rectangle on the venue. Hold Space to pan."}
             </div>
           ) : null}
@@ -2088,8 +2202,29 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
             <p className="chrome-kicker">Inspector</p>
             {selectedVenueLayer && venueSvg ? (
               <div className="mt-2 space-y-2">
-                <p className="text-sm font-medium">{selectedVenueLayer.name}</p>
                 <p className="font-mono text-[10px] text-muted-foreground uppercase">{selectedVenueLayer.kind}</p>
+                <div>
+                  <Label htmlFor="insp-venue-name" className="text-[10px] text-muted-foreground">
+                    Name
+                  </Label>
+                  <Input
+                    id="insp-venue-name"
+                    value={selectedVenueLayer.name}
+                    onChange={(e) => commitVenueSvg(setSvgLayerName(venueSvg, selectedVenueLayer.id, e.target.value))}
+                  />
+                </div>
+                {selectedVenueMetrics ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-[10px] text-muted-foreground">Size</p>
+                      <p className="text-sm tabular-nums">{formatSize(selectedVenueMetrics.w, selectedVenueMetrics.h, units, 2)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-muted-foreground">Area</p>
+                      <p className="text-sm tabular-nums">{formatArea(selectedVenueMetrics.area, units, 2)}</p>
+                    </div>
+                  </div>
+                ) : null}
                 {selectedVenueLayer.text != null ? (
                   <div>
                     <Label htmlFor="insp-venue-label" className="text-[10px] text-muted-foreground">
@@ -2150,6 +2285,57 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     </div>
                   </div>
                 ) : null}
+                <div>
+                  <Label htmlFor="insp-venue-rot" className="text-[10px] text-muted-foreground">
+                    Rotation
+                  </Label>
+                  <div className="mt-1 flex items-center gap-1">
+                    <Input
+                      id="insp-venue-rot"
+                      type="number"
+                      step="1"
+                      value={Number(svgElementRotation(venueSvg, selectedVenueLayer.id).toFixed(2))}
+                      onChange={(e) => {
+                        const deg = Number(e.target.value);
+                        if (!Number.isFinite(deg)) return;
+                        commitVenueSvg(setSvgElementRotation(venueSvg, selectedVenueLayer.id, deg));
+                      }}
+                    />
+                    <span className="shrink-0 text-[10px] text-muted-foreground">°</span>
+                  </div>
+                  <div className="mt-1 flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        commitVenueSvg(
+                          setSvgElementRotation(
+                            venueSvg,
+                            selectedVenueLayer.id,
+                            svgElementRotation(venueSvg, selectedVenueLayer.id) - 45,
+                          ),
+                        )
+                      }
+                    >
+                      −45°
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        commitVenueSvg(
+                          setSvgElementRotation(
+                            venueSvg,
+                            selectedVenueLayer.id,
+                            svgElementRotation(venueSvg, selectedVenueLayer.id) + 45,
+                          ),
+                        )
+                      }
+                    >
+                      +45°
+                    </Button>
+                  </div>
+                </div>
                 <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
                   <input
                     type="checkbox"
@@ -2160,6 +2346,17 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     }
                   />
                   Hidden
+                </label>
+                <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="size-3.5 accent-primary"
+                    checked={selectedVenueLayer.locked}
+                    onChange={(e) =>
+                      commitVenueSvg(setSvgLayerLocked(venueSvg, selectedVenueLayer.id, e.target.checked))
+                    }
+                  />
+                  Locked (not selectable on the drawing)
                 </label>
                 <p className="text-xs text-muted-foreground">
                   Drag to move. Rectangles resize from handles; polygons from vertices. Delete or Backspace removes the
@@ -2358,39 +2555,55 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   </div>
                 ) : null}
                 {selected.kind === "booth" && selected.polygon ? (
-                  <div className="flex gap-1">
+                  <ObjectMediaFields
+                    slug={slug}
+                    object={selected}
+                    assets={bundle.assets}
+                    sponsorLogoUrl={
+                      selected.sponsorId
+                        ? bundle.sponsors.find((s) => s.id === selected.sponsorId)?.logoUrl
+                        : undefined
+                    }
+                    onPatch={(o) => void patchObject(o)}
+                    onAsset={(asset) =>
+                      setBundle((b) => ({
+                        ...b,
+                        assets: b.assets.some((a) => a.id === asset.id) ? b.assets : [...b.assets, asset],
+                      }))
+                    }
+                  />
+                ) : null}
+                {selected.kind === "booth" && selected.polygon ? (
+                  <div>
+                    <Label htmlFor="insp-object-rot" className="text-[10px] text-muted-foreground">
+                      Rotation
+                    </Label>
+                    <div className="mt-1 flex items-center gap-1">
+                      <Input
+                        id="insp-object-rot"
+                        type="number"
+                        step="1"
+                        value={Number((selected.facingDeg ?? 0).toFixed(2))}
+                        onChange={(e) => applyBoothRotation(Number(e.target.value))}
+                      />
+                      <span className="shrink-0 text-[10px] text-muted-foreground">°</span>
+                    </div>
+                    <div className="mt-1 flex gap-1">
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => {
-                        if (!selected.polygon) return;
-                        const next = rotatePlot(selected.polygon, selected.facingDeg ?? 0, -45);
-                        void patchObject({
-                          ...selected,
-                          polygon: next.polygon,
-                          facingDeg: next.facingDeg,
-                          rotation: selected.rotation - 45,
-                        });
-                      }}
+                      onClick={() => applyBoothRotation((selected.facingDeg ?? 0) - 45)}
                     >
                       Rotate −45°
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => {
-                        if (!selected.polygon) return;
-                        const next = rotatePlot(selected.polygon, selected.facingDeg ?? 0, 45);
-                        void patchObject({
-                          ...selected,
-                          polygon: next.polygon,
-                          facingDeg: next.facingDeg,
-                          rotation: selected.rotation + 45,
-                        });
-                      }}
+                      onClick={() => applyBoothRotation((selected.facingDeg ?? 0) + 45)}
                     >
                       Rotate +45°
                     </Button>
+                    </div>
                   </div>
                 ) : null}
                 <Button size="sm" variant="destructive" onClick={() => void deleteSelected()}>
@@ -2417,9 +2630,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         </SelectContent>
                       </Select>
                     </div>
-                    <p className="font-mono text-[10px] text-muted-foreground">
-                      Facing {Math.round(selected.facingDeg ?? 0)}°
-                    </p>
                     <div>
                       <Label className="text-[10px] text-muted-foreground">Rug texture</Label>
                       <Select

@@ -23,6 +23,12 @@ export function formatSize(widthM: number, depthM: number, units: Units, digits 
   return `${n(w)} × ${n(d)} ${units}`;
 }
 
+export function formatArea(squareMeters: number, units: Units, digits = 1): string {
+  const v = units === "ft" ? squareMeters / METERS_PER_FOOT ** 2 : squareMeters;
+  const n = Number.isInteger(v) ? String(v) : v.toFixed(digits);
+  return `${n} ${units}²`;
+}
+
 export const PRESETS: { id: string; label: string; w: number; d: number; units: Units }[] = [
   { id: "3x3m", label: "3 × 3 m", w: 3, d: 3, units: "m" },
   { id: "6x6m", label: "6 × 6 m", w: 6, d: 6, units: "m" },
