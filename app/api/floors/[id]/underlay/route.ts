@@ -85,3 +85,44 @@ export async function POST(req: Request, ctx: Ctx) {
     return Response.json({ error: message }, { status: 500 });
   }
 }
+
+export async function PUT(req: Request, ctx: Ctx) {
+  try {
+    await requireEditor();
+    const { id } = await ctx.params;
+    const body = (await req.json()) as { svg?: string };
+    const svg = typeof body.svg === "string" ? body.svg : "";
+    if (!svg.includes("<svg")) {
+      return Response.json({ error: "svg required" }, { status: 400 });
+    }
+    const store = getStore();
+    const existing = await store.getFloor(id);
+    if (!existing) return Response.json({ error: "Floor not found" }, { status: 404 });
+    const size = svgSize(svg);
+    const widthPx = size?.w ?? existing.calibration?.widthPx ?? 1000;
+    const heightPx = size?.h ?? existing.calibration?.heightPx ?? 1000;
+    const underlayUrl = await store.putFile(
+      `underlays/${id}/${newId()}.svg`,
+      Buffer.from(svg, "utf8"),
+      "image/svg+xml",
+    );
+    const cal = existing.calibration;
+    const floor = await store.updateFloor(id, {
+      underlayUrl,
+      calibration: cal
+        ? { ...cal, widthPx, heightPx }
+        : {
+            originX: 0,
+            originY: 0,
+            metersPerPixel: 0.1,
+            rotationDeg: 0,
+            widthPx,
+            heightPx,
+          },
+    });
+    return Response.json(floor);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Save failed";
+    return Response.json({ error: message }, { status: 500 });
+  }
+}
