@@ -52,6 +52,8 @@ export function normalizeObject(o: MapObject): MapObject {
     wallTextureAssetId: o.wallTextureAssetId ?? null,
     logoAssetId: o.logoAssetId ?? null,
     fillTextureAssetId: o.fillTextureAssetId ?? null,
+    description: o.description ?? "",
+    eventDate: o.eventDate ?? "",
   };
 }
 

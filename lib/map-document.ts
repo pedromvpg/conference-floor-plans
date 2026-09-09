@@ -9,9 +9,11 @@ import type {
   MapObject,
   Sponsor,
 } from "./types";
+import { isPinObject } from "./types";
 import { closeRing } from "./geometry";
 import { resolveAppearance } from "./appearance";
 import { normalizeFloorBasemap } from "./basemap";
+import { withInheritedFloorSettings } from "./floor-settings";
 
 export function buildMapDocument(input: {
   event: MapEvent;
@@ -31,7 +33,8 @@ export function buildMapDocument(input: {
     version: 1,
     event: { slug: input.event.slug, name: input.event.name },
     publishedAt: input.publishedAt,
-    floors: floors.map((floor) => {
+    floors: floors.map((raw) => {
+      const floor = withInheritedFloorSettings(raw, floors);
       const cal = floor.calibration;
       const features: MapGeo.Feature[] = input.objects
         .filter((o) => o.floorId === floor.id)
@@ -106,9 +109,11 @@ function objectToFeature(
     rugTextureUrl: rug?.url ?? "",
     wallTextureUrl: wall?.url ?? "",
     fillTextureUrl: fill?.url ?? "",
+    description: o.description ?? "",
+    eventDate: o.eventDate ?? "",
   };
 
-  if (o.kind === "amenity" && o.x != null && o.y != null) {
+  if (isPinObject(o) && o.x != null && o.y != null) {
     return {
       type: "Feature",
       id: o.id,

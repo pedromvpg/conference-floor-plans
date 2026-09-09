@@ -61,6 +61,8 @@ type ObjectRow = {
   rotation: number;
   booth_number: string;
   name: string;
+  description: string;
+  event_date: string;
   sponsor_id: string | null;
   amenity_type: MapObject["amenityType"];
   color: string | null;
@@ -133,6 +135,8 @@ function objectFrom(r: ObjectRow): MapObject {
     rotation: r.rotation ?? 0,
     boothNumber: r.booth_number ?? "",
     name: r.name ?? "",
+    description: r.description ?? "",
+    eventDate: r.event_date ?? "",
     sponsorId: r.sponsor_id,
     amenityType: r.amenity_type,
     color: r.color ?? null,
@@ -356,6 +360,8 @@ export class SupabaseStore implements Store {
         rotation: obj.rotation,
         booth_number: obj.boothNumber,
         name: obj.name,
+        description: obj.description ?? "",
+        event_date: obj.eventDate ?? "",
         sponsor_id: obj.sponsorId,
         amenity_type: obj.amenityType,
         color: obj.color,

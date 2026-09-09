@@ -13,7 +13,13 @@ export type AmenityType =
   | "first_aid"
   | "water";
 
-export type ObjectKind = "booth" | "amenity";
+export type ObjectKind = "booth" | "amenity" | "side_event";
+
+export type PinKind = "amenity" | "side_event";
+
+export function isPinObject(o: { kind: ObjectKind }): boolean {
+  return o.kind === "amenity" || o.kind === "side_event";
+}
 
 export type Appearance = "booth" | "stage" | "custom";
 
@@ -100,6 +106,8 @@ export type MapObject = {
   rotation: number;
   boothNumber: string;
   name: string;
+  description: string;
+  eventDate: string;
   sponsorId: string | null;
   amenityType: AmenityType | null;
   color: string | null;

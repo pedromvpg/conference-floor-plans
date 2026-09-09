@@ -10,6 +10,8 @@ export function newMapObject(input: {
   y?: number | null;
   name?: string;
   boothNumber?: string;
+  description?: string;
+  eventDate?: string;
   amenityType?: AmenityType | null;
   appearance?: Appearance | null;
   modelAssetId?: string | null;
@@ -25,6 +27,8 @@ export function newMapObject(input: {
     rotation: 0,
     boothNumber: input.boothNumber ?? "",
     name: input.name ?? "",
+    description: input.description ?? "",
+    eventDate: input.eventDate ?? "",
     sponsorId: null,
     amenityType: input.amenityType ?? null,
     color: null,
