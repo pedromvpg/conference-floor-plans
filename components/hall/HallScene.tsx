@@ -18,11 +18,13 @@ import type {
   Floor,
   LibraryAsset,
   MapObject,
+  PinKind,
   Ring,
   Sponsor,
   Tool,
   Units,
 } from "@/lib/types";
+import { isPinObject } from "@/lib/types";
 import { BoothKit } from "./BoothKit";
 import { CustomModel } from "./CustomModel";
 import { StageKit } from "./StageKit";
@@ -38,6 +40,7 @@ export type HallSceneProps = {
   tool: Tool;
   units: Units;
   amenityStamp: AmenityType;
+  pinKind: PinKind;
   presetMeters: { w: number; d: number } | null;
   stampAppearance: Appearance | null;
   stampModelAssetId: string | null;
@@ -133,6 +136,7 @@ export function HallScene({
   tool,
   units,
   amenityStamp,
+  pinKind,
   presetMeters,
   stampAppearance,
   stampModelAssetId,
@@ -179,14 +183,22 @@ export function HallScene({
     if (!canEdit) return;
     if (tool === "icon") {
       onCreateRef.current?.(
-        newMapObject({
-          floorId: floor.id,
-          kind: "amenity",
-          x,
-          y,
-          name: amenityLabel(amenityStamp),
-          amenityType: amenityStamp,
-        }),
+        pinKind === "side_event"
+          ? newMapObject({
+              floorId: floor.id,
+              kind: "side_event",
+              x,
+              y,
+              name: "Side event",
+            })
+          : newMapObject({
+              floorId: floor.id,
+              kind: "amenity",
+              x,
+              y,
+              name: amenityLabel(amenityStamp),
+              amenityType: amenityStamp,
+            }),
       );
       return;
     }
@@ -251,7 +263,7 @@ export function HallScene({
       const dx = p.x - d.ox;
       const dy = p.y - d.oy;
       if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return;
-      if (obj.kind === "amenity") {
+      if (isPinObject(obj)) {
         onChangeRef.current?.({ ...obj, x: (d.x ?? 0) + dx, y: (d.y ?? 0) + dy });
       } else if (d.polygon || d.path) {
         const path = translateBezier(d.path?.length ? d.path : objectShape({ polygon: d.polygon, path: d.path }), dx, dy);
@@ -369,7 +381,7 @@ export function HallScene({
       ) : null}
 
       {objects
-        .filter((o) => o.kind !== "amenity")
+        .filter((o) => !isPinObject(o))
         .map((o) => {
           const sponsor = o.sponsorId ? sponsors.find((s) => s.id === o.sponsorId) : undefined;
           const selected = o.id === selectedId || o.id === highlightId;
@@ -394,7 +406,7 @@ export function HallScene({
           );
         })}
       {objects
-        .filter((o) => o.kind === "amenity")
+        .filter((o) => isPinObject(o))
         .map((o) => {
           const selected = o.id === selectedId || o.id === highlightId;
           return (
@@ -433,6 +445,8 @@ export function HallScene({
             sponsorId: null,
             amenityType: null,
             color: null,
+            description: "",
+            eventDate: "",
             ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
             createdAt: "",
             updatedAt: "",
@@ -443,7 +457,11 @@ export function HallScene({
         />
       ) : null}
       {placing && hover && tool === "icon" ? (
-        <AmenityTotem x={hover.x} y={hover.y} type={amenityStamp} selected={false} ghost />
+        pinKind === "side_event" ? (
+          <AmenityTotem x={hover.x} y={hover.y} color="#ea580c" selected={false} ghost />
+        ) : (
+          <AmenityTotem x={hover.x} y={hover.y} type={amenityStamp} selected={false} ghost />
+        )
       ) : null}
     </>
   );
@@ -504,9 +522,16 @@ function HallPlot({
   selected: boolean;
   tone?: MapTone;
 }) {
-  if (object.kind === "amenity" && object.x != null && object.y != null) {
+  if (isPinObject(object) && object.x != null && object.y != null) {
     return (
-      <AmenityTotem x={object.x} y={object.y} type={object.amenityType ?? "info"} rotation={object.rotation ?? 0} selected={selected} />
+      <AmenityTotem
+        x={object.x}
+        y={object.y}
+        type={object.amenityType ?? "info"}
+        color={object.kind === "side_event" ? "#ea580c" : undefined}
+        rotation={object.rotation ?? 0}
+        selected={selected}
+      />
     );
   }
   if (!object.polygon?.length) return null;
@@ -566,25 +591,27 @@ function HallPlot({
 function AmenityTotem({
   x,
   y,
-  type,
+  type = "info",
+  color,
   rotation = 0,
   selected,
   ghost,
 }: {
   x: number;
   y: number;
-  type: AmenityType;
+  type?: AmenityType;
+  color?: string;
   rotation?: number;
   selected: boolean;
   ghost?: boolean;
 }) {
-  const color = AMENITY_COLOR[type];
+  const fill = color ?? AMENITY_COLOR[type];
   const h = selected ? 1.45 : 1.2;
   return (
     <group position={[x, 0, y]} rotation={[0, yawRad(rotation), 0]}>
       <mesh position={[0, h / 2, 0]}>
         <cylinderGeometry args={[0.28, 0.34, h, 10]} />
-        <meshStandardMaterial color={color} roughness={0.45} transparent={ghost} opacity={ghost ? 0.5 : 1} />
+        <meshStandardMaterial color={fill} roughness={0.45} transparent={ghost} opacity={ghost ? 0.5 : 1} />
       </mesh>
       {selected ? (
         <mesh position={[0, 0.04, 0]} rotation={[-Math.PI / 2, 0, 0]}>

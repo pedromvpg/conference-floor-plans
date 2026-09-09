@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { ChevronLeft, Search } from "lucide-react";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
-import { FloorSwitcher, GridToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
+import { FloorSwitcher, GridToggle, RulersToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
+import { UnitsToggle } from "@/components/units-toggle";
 import {
   Dialog,
   DialogContent,
@@ -58,12 +59,13 @@ function polygonArea(o: MapObject): number {
 }
 
 function objectTitle(o: MapObject, sponsor?: Sponsor): string {
-  return sponsor?.name || o.name || o.boothNumber || amenityLabel(o.amenityType ?? "info");
+  return sponsor?.name || o.name || o.boothNumber || (o.kind === "side_event" ? "Side event" : amenityLabel(o.amenityType ?? "info"));
 }
 
 function themeOf(o: MapObject, sponsor?: Sponsor): string {
   if (sponsor?.tier) return sponsor.tier;
   if (isStage(o)) return "Stages";
+  if (o.kind === "side_event") return "Side events";
   if (o.kind === "amenity") return amenityLabel(o.amenityType ?? "info");
   return o.name || "Untitled";
 }
@@ -102,18 +104,21 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
       fillTextureUrl: String(p.fillTextureUrl ?? ""),
     };
     if (feat.geometry.type === "Point") {
+      const kind = (p.kind as MapObject["kind"]) === "side_event" ? "side_event" : "amenity";
       return {
         id,
         floorId,
-        kind: "amenity" as const,
+        kind,
         polygon: null,
         x: feat.geometry.coordinates[0],
         y: feat.geometry.coordinates[1],
         rotation: Number(p.rotation ?? 0),
         boothNumber: "",
         name: String(p.name ?? ""),
+        description: String(p.description ?? ""),
+        eventDate: String(p.eventDate ?? ""),
         sponsorId: null,
-        amenityType: (p.amenityType as MapObject["amenityType"]) ?? "info",
+        amenityType: kind === "amenity" ? ((p.amenityType as MapObject["amenityType"]) ?? "info") : null,
         color: typeof p.color === "string" ? p.color : null,
         ...hall,
         createdAt: "",
@@ -131,6 +136,8 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
       rotation: Number(p.rotation ?? 0),
       boothNumber: String(p.boothNumber ?? ""),
       name: String(p.name ?? ""),
+      description: String(p.description ?? ""),
+      eventDate: String(p.eventDate ?? ""),
       sponsorId: sponsor?.id ?? null,
       amenityType: null,
       color: typeof p.color === "string" ? p.color : null,
@@ -140,6 +147,20 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
     };
   });
   return { objects, sponsors };
+}
+
+function inheritPublishedFloor(
+  f: MapDocument["floors"][number],
+  floors: MapDocument["floors"],
+): MapDocument["floors"][number] {
+  const primary = [...floors].sort((a, b) => a.order - b.order)[0];
+  if (!primary || primary.id === f.id) return f;
+  const emptyCal = !f.underlay.widthPx && !f.underlay.heightPx;
+  return {
+    ...f,
+    underlay: emptyCal ? { ...primary.underlay, url: f.underlay.url } : f.underlay,
+    basemap: f.basemap ?? primary.basemap ?? null,
+  };
 }
 
 function floorFromDoc(f: MapDocument["floors"][number], eventId: string): Floor {
@@ -177,6 +198,28 @@ function Detail({
   const next = upcomingOnStage(doc.sessions, selected);
   const speakers = next ? speakersForSession(next.speakerIds, doc.speakers) : [];
   const logoUrl = displayLogoUrl(selected, [], sponsor);
+  if (selected.kind === "side_event") {
+    const when = selected.eventDate
+      ? new Date(`${selected.eventDate}T12:00:00`).toLocaleDateString(undefined, {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })
+      : "";
+    return (
+      <div className="space-y-3">
+        {logoUrl ? (
+          <div className="overflow-hidden border border-border bg-muted/30">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={logoUrl} alt="" className="max-h-40 w-full object-cover" />
+          </div>
+        ) : null}
+        {when ? <p className="font-mono text-[11px] text-muted-foreground">{when}</p> : null}
+        {selected.description ? <p className="text-[13px] leading-snug whitespace-pre-wrap">{selected.description}</p> : null}
+      </div>
+    );
+  }
   return (
     <div className="space-y-3">
       {logoUrl ? (
@@ -223,12 +266,14 @@ export function ViewerApp({
   const [locationTab, setLocationTab] = useState<LocationTab>("all");
   const [viewMode, setViewMode] = useState<ViewMode>("plan");
   const [showGrid, setShowGrid] = useState(false);
+  const [showRulers, setShowRulers] = useState(false);
 
   useEffect(() => {
     if (window.matchMedia("(min-width: 768px)").matches) setViewMode("hall");
   }, []);
 
-  const floorDoc = doc.floors.find((f) => f.id === floorId) ?? doc.floors[0];
+  const floorDocRaw = doc.floors.find((f) => f.id === floorId) ?? doc.floors[0];
+  const floorDoc = floorDocRaw ? inheritPublishedFloor(floorDocRaw, doc.floors) : undefined;
   const floor = floorDoc ? floorFromDoc(floorDoc, doc.event.slug) : null;
   const { objects, sponsors } = useMemo(
     () => (floorDoc ? objectsFromDoc(doc, floorDoc.id) : { objects: [], sponsors: [] }),
@@ -264,7 +309,7 @@ export function ViewerApp({
       const s = o.sponsorId ? sponsors.find((sp) => sp.id === o.sponsorId) : undefined;
       if (tier && s?.tier !== tier) return false;
       if (q) {
-        const blob = `${o.name} ${o.boothNumber} ${s?.name ?? ""} ${s?.tier ?? ""} ${o.amenityType ?? ""}`.toLowerCase();
+        const blob = `${o.name} ${o.boothNumber} ${o.description} ${o.eventDate} ${s?.name ?? ""} ${s?.tier ?? ""} ${o.amenityType ?? ""} ${o.kind}`.toLowerCase();
         if (!blob.includes(q)) return false;
       } else if (locationTab === "all" || locationTab === "theme") {
         if (o.kind !== "booth" && !o.name) return false;
@@ -344,14 +389,13 @@ export function ViewerApp({
         className="shrink-0 gap-0 bg-background px-2 pb-1"
       >
         <TabsList
-          variant="line"
-          className="grid h-auto w-full grid-cols-3 gap-0 rounded-none p-0 group-data-horizontal/tabs:h-auto"
+          className="grid h-8 w-full grid-cols-3 gap-0.5 rounded-lg p-0.5 group-data-horizontal/tabs:h-8"
         >
           {LOCATION_TABS.map((tab) => (
             <TabsTrigger
               key={tab.value}
               value={tab.value}
-              className="h-7 flex-none px-2 text-[10px] tracking-wide uppercase"
+              className="h-7 flex-none rounded-md px-2 text-[11px]"
             >
               {tab.label}
             </TabsTrigger>
@@ -403,7 +447,7 @@ export function ViewerApp({
     <div className="relative h-dvh overflow-clip bg-background">
       <main
         className="absolute inset-y-0 right-0 overflow-clip"
-        style={{ left: sidebarOpen ? 260 : 44 }}
+        style={{ left: sidebarOpen ? 260 : 40 }}
       >
         {floor ? (
           viewMode === "hall" ? (
@@ -440,15 +484,13 @@ export function ViewerApp({
         )}
       </main>
 
-      <div className="pointer-events-none absolute top-4 right-4 z-20 font-mono text-[11px] tracking-wide text-muted-foreground">
-        <p>
-          <span className="text-primary">$</span> <span className="text-muted-foreground">map</span>{" "}
-          <span className="text-foreground">{doc.event.name}</span>
-        </p>
+      <div className="pointer-events-none absolute top-4 right-4 z-20 text-[12px] text-muted-foreground">
+        <p>{doc.event.name}</p>
       </div>
 
-      <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 flex-wrap justify-center gap-2.5">
+      <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-background/80 p-1 shadow-sm backdrop-blur-md">
         <GridToggle value={showGrid} onChange={setShowGrid} />
+        <span className="h-5 w-px bg-border" aria-hidden />
         <ViewModeToggle value={viewMode} onChange={setViewMode} />
         <FloorSwitcher
           floors={[...doc.floors].sort((a, b) => a.order - b.order)}
@@ -458,18 +500,13 @@ export function ViewerApp({
             setSelectedId(null);
           }}
         />
-        <button type="button" className="chrome-pill" data-active={units === "m"} onClick={() => setUnits("m")}>
-          m
-        </button>
-        <button type="button" className="chrome-pill" data-active={units === "ft"} onClick={() => setUnits("ft")}>
-          ft
-        </button>
+        <UnitsToggle units={units} onChange={setUnits} />
         <button
           type="button"
           className="chrome-pill md:hidden"
           onClick={() => setSheetOpen(true)}
         >
-          <Search className="size-3.5" />
+          <Search className="size-4 shrink-0" strokeWidth={1.5} />
           Search
         </button>
         <div className="md:hidden">
@@ -479,27 +516,27 @@ export function ViewerApp({
 
       <aside
         className="absolute top-0 left-0 bottom-0 z-10 hidden border-r border-border bg-background md:flex md:flex-col"
-        style={{ width: sidebarOpen ? 260 : 44 }}
+        style={{ width: sidebarOpen ? 260 : 40 }}
       >
-        <div className="flex shrink-0 items-center border-b border-border">
-          {sidebarOpen ? <div className="pl-1"><ThemeToggle /></div> : null}
+        <div className="flex h-10 shrink-0 items-center border-b border-border px-1">
+          {sidebarOpen ? <ThemeToggle /> : null}
           <button
             type="button"
-            className="ml-auto flex size-11 shrink-0 items-center justify-center text-foreground hover:text-primary"
+            className="ml-auto flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground hover:bg-muted"
             onClick={() => setSidebarOpen((v) => !v)}
             aria-label={sidebarOpen ? "Collapse list" : "Expand list"}
           >
-            <ChevronLeft className={`size-4 transition-transform ${sidebarOpen ? "rotate-180" : ""}`} />
+            <ChevronLeft className={`size-4 shrink-0 transition-transform ${sidebarOpen ? "" : "rotate-180"}`} strokeWidth={1.5} />
           </button>
         </div>
         {sidebarOpen ? list : (
           <button
             type="button"
-            className="flex size-11 items-center justify-center text-muted-foreground hover:text-primary"
+            className="mx-auto mt-1 flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
             onClick={() => setSidebarOpen(true)}
             aria-label="Search"
           >
-            <Search className="size-4" />
+            <Search className="size-4 shrink-0" strokeWidth={1.5} />
           </button>
         )}
       </aside>
@@ -507,18 +544,20 @@ export function ViewerApp({
       <Dialog modal={false} open={detailOpen && Boolean(selected)} onOpenChange={setDetailOpen}>
         <DialogContent
           overlayClassName="bg-transparent backdrop-blur-none supports-backdrop-filter:backdrop-blur-none pointer-events-none"
-          className={`top-4 left-4 w-[min(22rem,calc(100%-2rem))] max-w-sm translate-x-0 translate-y-0 rounded-none sm:max-w-sm ${sidebarOpen ? "md:left-[276px]" : "md:left-[60px]"}`}
+          className={`top-4 left-4 w-[min(22rem,calc(100%-2rem))] max-w-sm translate-x-0 translate-y-0 rounded-xl sm:max-w-sm ${sidebarOpen ? "md:left-[276px]" : "md:left-[56px]"}`}
         >
           {selected ? (
             <>
               <DialogHeader>
                 <DialogTitle>
-                  {selectedSponsor?.name || selected.name || selected.boothNumber || amenityLabel(selected.amenityType ?? "info")}
+                  {selectedSponsor?.name || selected.name || selected.boothNumber || (selected.kind === "side_event" ? "Side event" : amenityLabel(selected.amenityType ?? "info"))}
                 </DialogTitle>
                 <DialogDescription>
                   {selected.boothNumber
                     ? `Booth ${selected.boothNumber}${selectedSponsor?.tier ? ` · ${selectedSponsor.tier}` : ""}`
-                    : selectedSponsor?.tier || (selected.amenityType ? amenityLabel(selected.amenityType) : "Location")}
+                    : selected.kind === "side_event"
+                      ? selected.eventDate || "Side event"
+                      : selectedSponsor?.tier || (selected.amenityType ? amenityLabel(selected.amenityType) : "Location")}
                 </DialogDescription>
               </DialogHeader>
               <Detail selected={selected} sponsor={selectedSponsor} doc={doc} />
@@ -528,7 +567,7 @@ export function ViewerApp({
       </Dialog>
 
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent side="bottom" className="max-h-[75dvh] rounded-none border-border bg-background md:hidden">
+        <SheetContent side="bottom" className="max-h-[75dvh] rounded-t-xl border-border bg-background md:hidden">
           <SheetHeader>
             <SheetTitle className="text-sm">Search</SheetTitle>
           </SheetHeader>

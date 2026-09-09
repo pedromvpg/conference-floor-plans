@@ -23,6 +23,7 @@ export function ObjectMediaFields({
   sponsorLogoUrl,
   onPatch,
   onAsset,
+  imageOnly,
 }: {
   slug: string;
   object: MapObject;
@@ -30,19 +31,22 @@ export function ObjectMediaFields({
   sponsorLogoUrl?: string;
   onPatch: (obj: MapObject) => void;
   onAsset: (asset: LibraryAsset) => void;
+  imageOnly?: boolean;
 }) {
   const textures = assets.filter((a) => a.kind === "texture");
   const urls = objectUrls(object, assets);
   return (
     <div className="space-y-3">
       <MediaPicker
-        label="Logo"
+        label={imageOnly ? "Image" : "Logo"}
         hint={
-          object.logoAssetId
-            ? "Custom logo on the plan and hall wall."
-            : sponsorLogoUrl
-              ? "Using the bound sponsor logo. Upload to override."
-              : "Shown on the plan and hall wall."
+          imageOnly
+            ? "Photo shown on the pin and in the visitor inspector."
+            : object.logoAssetId
+              ? "Custom logo on the plan and hall wall."
+              : sponsorLogoUrl
+                ? "Using the bound sponsor logo. Upload to override."
+                : "Shown on the plan and hall wall."
         }
         accept={IMAGE_ACCEPT}
         slug={slug}
@@ -55,6 +59,7 @@ export function ObjectMediaFields({
           onPatch({ ...object, logoAssetId: asset.id });
         }}
       />
+      {imageOnly ? null : (
       <MediaPicker
         label="Background"
         hint="Covers the booth or stage shape on the plan and hall floor."
@@ -70,6 +75,7 @@ export function ObjectMediaFields({
           onPatch({ ...object, fillTextureAssetId: asset.id });
         }}
       />
+      )}
     </div>
   );
 }
@@ -121,7 +127,7 @@ function MediaPicker({
   return (
     <div>
       <Label className="text-[10px] text-muted-foreground">{label}</Label>
-      <div className="mt-1 flex items-center gap-2">
+      <div className="mt-1 flex min-w-0 items-center gap-2">
         <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden border border-border bg-muted/40">
           {previewUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -148,7 +154,7 @@ function MediaPicker({
               ))}
             </SelectContent>
           </Select>
-          <div className="flex gap-1">
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
             <Button
               size="sm"
               variant="outline"
@@ -176,7 +182,7 @@ function MediaPicker({
           e.target.value = "";
         }}
       />
-      <p className="mt-1 text-[10px] text-muted-foreground">{hint}</p>
+      <p className="mt-1 text-[10px] leading-snug break-words text-muted-foreground">{hint}</p>
     </div>
   );
 }

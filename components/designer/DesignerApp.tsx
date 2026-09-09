@@ -5,13 +5,13 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import { Box, ChevronDown, Eye, EyeOff, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, Square, Theater, Undo2 } from "lucide-react";
+import { Box, CalendarDays, ChevronDown, Eye, EyeOff, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, Square, Theater, Undo2 } from "lucide-react";
 import { ObjectMediaFields } from "@/components/designer/ObjectMediaFields";
 import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
 import { UnderlayPreview } from "@/components/designer/UnderlayPreview";
 import { VenueLayersEditor } from "@/components/designer/VenueLayersEditor";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
-import { FloorSwitcher, GridToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
+import { FloorSwitcher, GridToggle, RulersToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -31,6 +31,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -42,6 +43,7 @@ import { AMENITIES, amenityLabel } from "@/lib/amenities";
 import { STAGE_PRESET_METERS, resolveAppearance } from "@/lib/appearance";
 import { displayLogoUrl } from "@/lib/hall";
 import { DEFAULT_FLOOR_BASEMAP, BASEMAP_COORD_STEP, bearingSliderValue, roundBasemapCoord, wrapBearingDeg } from "@/lib/basemap";
+import { withInheritedFloorSettings, inheritedSettingsTargetId } from "@/lib/floor-settings";
 import { calibrationFromBounds, floorSizeMeters, ringBounds, scaleRingToSize } from "@/lib/geometry";
 import { commitShape, objectShape, rotateBezier, translateBezier } from "@/lib/bezier";
 import { PRESETS, presetMeters as presetSize, formatArea, formatSize, fromMeters, toMeters } from "@/lib/units";
@@ -56,12 +58,13 @@ import type {
   Floor,
   FloorBasemap,
   MapObject,
+  PinKind,
   Sponsor,
   Tool,
   Units,
   ViewMode,
 } from "@/lib/types";
-import { VENUE_ID } from "@/lib/types";
+import { VENUE_ID, isPinObject } from "@/lib/types";
 import {
   blankVenueSvg,
   deleteSvgLayer,
@@ -126,7 +129,7 @@ function isBooth(o: MapObject): boolean {
 }
 
 function objectTitle(o: MapObject, sponsor?: Sponsor): string {
-  return sponsor?.name || o.name || o.boothNumber || amenityLabel(o.amenityType ?? "info");
+  return sponsor?.name || o.name || o.boothNumber || (o.kind === "side_event" ? "Side event" : amenityLabel(o.amenityType ?? "info"));
 }
 
 function objectArea(o: MapObject): number {
@@ -249,6 +252,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [snapToUnits, setSnapToUnits] = useState(false);
   const [presetId, setPresetId] = useState<string>("none");
   const [amenityStamp, setAmenityStamp] = useState<AmenityType>("bathroom");
+  const [pinKind, setPinKind] = useState<PinKind>("amenity");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selectedId = selectedIds[0] ?? null;
   const [frameNonce, setFrameNonce] = useState(0);
@@ -283,6 +287,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [underlayOpacity, setUnderlayOpacity] = useState(1);
   const [showUnderlay, setShowUnderlay] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
+  const [showRulers, setShowRulers] = useState(false);
   const [editVenueLayers, setEditVenueLayers] = useState(false);
   const [venueSvg, setVenueSvg] = useState<string | null>(null);
   const [hoverLayerId, setHoverLayerId] = useState<string | null>(null);
@@ -310,7 +315,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     () => [...bundle.floors].sort((a, b) => a.sortOrder - b.sortOrder),
     [bundle.floors],
   );
-  const floor = floorsSorted.find((f) => f.id === floorId) ?? floorsSorted[0];
+  const floorRecord = floorsSorted.find((f) => f.id === floorId) ?? floorsSorted[0];
+  const floor = floorRecord ? withInheritedFloorSettings(floorRecord, floorsSorted) : undefined;
   const objects = bundle.objects.filter((o) => o.floorId === floor?.id);
   const venueSelected = selectedIds.length === 1 && selectedIds[0] === VENUE_ID;
   const multiSelected = selectedIds.filter((id) => id !== VENUE_ID).length > 1;
@@ -324,7 +330,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     const matches = objects.filter((o) => {
       if (objectFilter === "booths") return isBooth(o);
       if (objectFilter === "stages") return isStage(o);
-      if (objectFilter === "icons") return o.kind === "amenity";
+      if (objectFilter === "icons") return isPinObject(o);
       return true;
     });
     return [...matches].sort((a, b) => {
@@ -551,8 +557,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const basemapSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function patchBasemap(next: FloorBasemap, immediate = false) {
-    if (!floor) return;
-    const nextFloors = bundleRef.current.floors.map((f) => (f.id === floor.id ? { ...f, basemap: next } : f));
+    if (!floorRecord) return;
+    const targetId = inheritedSettingsTargetId(floorRecord, bundleRef.current.floors, "basemap");
+    const nextFloors = bundleRef.current.floors.map((f) => (f.id === targetId ? { ...f, basemap: next } : f));
     const objects = bundleRef.current.objects;
     bundleRef.current = { ...bundleRef.current, floors: nextFloors };
     setBundle((b) => ({ ...b, floors: nextFloors }));
@@ -709,7 +716,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   function applyObjectRotation(nextDeg: number) {
     if (!selected) return;
     if (!Number.isFinite(nextDeg)) return;
-    if (selected.kind === "amenity") {
+    if (isPinObject(selected)) {
       void patchObject({ ...selected, rotation: nextDeg, facingDeg: nextDeg });
       return;
     }
@@ -771,9 +778,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   );
 
   async function onCalibrated(next: Calibration, _previous: Calibration | null) {
-    if (!floor) return;
+    if (!floorRecord) return;
     markHistory();
-    const nextFloors = bundle.floors.map((f) => (f.id === floor.id ? { ...f, calibration: next } : f));
+    const targetId = inheritedSettingsTargetId(floorRecord, bundle.floors, "calibration");
+    const nextFloors = bundle.floors.map((f) => (f.id === targetId ? { ...f, calibration: next } : f));
     try {
       await persistSlice({ floors: nextFloors, objects: bundle.objects });
       setTool("select");
@@ -1203,6 +1211,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       }
       if (e.key === "i" || e.key === "I") {
         setSidebarTab("objects");
+        setPinKind("amenity");
         setTool("icon");
       }
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -1235,11 +1244,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
-      <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-border px-3 py-0">
-        <div className="flex min-w-0 items-center gap-2">
+      <header className="grid h-10 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-sidebar-border bg-sidebar px-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
           <Button size="icon-sm" variant="ghost" asChild>
             <Link href="/events" aria-label="All events" title="All events">
-              <Menu />
+              <Menu strokeWidth={1.5} />
             </Link>
           </Button>
           <h1 className="min-w-0">
@@ -1247,10 +1256,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="flex max-w-full items-center gap-0.5 truncate text-[13px] font-medium hover:text-primary"
+                  className="flex max-w-full items-center gap-1 truncate rounded-lg px-1.5 py-1 text-[13px] font-medium hover:bg-muted"
                 >
                   <span className="truncate">{bundle.event.name}</span>
-                  <ChevronDown className="size-3.5 shrink-0 opacity-60" />
+                  <ChevronDown className="size-4 shrink-0 opacity-60" strokeWidth={1.5} />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="min-w-40">
@@ -1322,47 +1331,50 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
             </DropdownMenu>
           </h1>
         </div>
-        <div className="flex items-center gap-1">
-          <Button
-            size="icon-sm"
-            variant="outline"
-            title="Fit drawing and objects (0)"
-            onClick={() => setFitNonce((n) => n + 1)}
-          >
-            <Maximize2 />
-          </Button>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            title="Undo"
-            disabled={!canUndo || busy}
-            onClick={() => void undo()}
-          >
-            <Undo2 />
-          </Button>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            title="Redo"
-            disabled={!canRedo || busy}
-            onClick={() => void redo()}
-          >
-            <Redo2 />
-          </Button>
+        <div className="flex items-center gap-1.5">
+          <div className="flex items-center">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              title="Fit drawing and objects (0)"
+              onClick={() => setFitNonce((n) => n + 1)}
+            >
+              <Maximize2 strokeWidth={1.5} />
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              title="Undo"
+              disabled={!canUndo || busy}
+              onClick={() => void undo()}
+            >
+              <Undo2 strokeWidth={1.5} />
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              title="Redo"
+              disabled={!canRedo || busy}
+              onClick={() => void redo()}
+            >
+              <Redo2 strokeWidth={1.5} />
+            </Button>
+          </div>
+          <span className="h-5 w-px bg-border" aria-hidden />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 size="sm"
-                variant="outline"
+                variant="ghost"
                 title="Versions"
-                className="min-w-0 gap-1 px-2 font-mono text-[10px] tracking-[0.08em] text-muted-foreground uppercase hover:text-primary"
+                className="h-8 min-w-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
               >
                 {saveLabel === "Saving…"
                   ? "Saving…"
                   : lastSavedAt
                     ? `Saved ${formatSavedWhen(lastSavedAt, new Date(nowTick))}`
                     : "Saved"}
-                <ChevronDown className="size-3 opacity-60" />
+                <ChevronDown className="size-4 opacity-60" strokeWidth={1.5} />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="center" className="min-w-56">
@@ -1387,14 +1399,18 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <GridToggle value={showGrid} onChange={setShowGrid} />
-          <ViewModeToggle
-            value={viewMode}
-            onChange={(mode) => {
-              setViewMode(mode);
-              if (mode === "hall" && tool === "calibrate") setTool("select");
-            }}
-          />
+          <span className="h-5 w-px bg-border" aria-hidden />
+          <div className="flex items-center">
+            <GridToggle value={showGrid} onChange={setShowGrid} />
+            <RulersToggle value={showRulers} onChange={setShowRulers} />
+            <ViewModeToggle
+              value={viewMode}
+              onChange={(mode) => {
+                setViewMode(mode);
+                if (mode === "hall" && tool === "calibrate") setTool("select");
+              }}
+            />
+          </div>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
           <div className="group relative">
@@ -1420,8 +1436,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-[260px] min-h-0 shrink-0 flex-col overflow-hidden border-r border-border bg-background md:flex">
-          <div className="flex border-b border-border">
+        <aside className="hidden w-[260px] min-h-0 shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar md:flex">
+          <div className="flex gap-0.5 border-b border-border p-1.5">
             {(
               [
                 ["objects", "Objects"],
@@ -1432,9 +1448,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               <button
                 key={id}
                 type="button"
-                className={`flex-1 px-2 py-2 text-xs font-medium ${
+                className={`h-8 flex-1 rounded-md px-2 text-[11px] font-medium ${
                   sidebarTab === id
-                    ? "border-b-2 border-primary text-foreground"
+                    ? "bg-muted text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
                 onClick={() => {
@@ -1487,7 +1503,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       className="w-full"
                       variant={tool === "select" || tool === "calibrate" ? "outline" : "default"}
                     >
-                      <Plus />
+                      <Plus strokeWidth={1.5} />
                       Add new
                     </Button>
                   </DropdownMenuTrigger>
@@ -1526,7 +1542,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         setTool("rect");
                       }}
                     >
-                      <Square />
+                      <Square strokeWidth={1.5} />
                       Rectangle
                       <DropdownMenuShortcut>R</DropdownMenuShortcut>
                     </DropdownMenuItem>
@@ -1538,13 +1554,24 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         setTool("polygon");
                       }}
                     >
-                      <Pentagon />
+                      <Pentagon strokeWidth={1.5} />
                       Polygon
                       <DropdownMenuShortcut>P</DropdownMenuShortcut>
                     </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setStampAppearance(null);
+                        setStampModelId(null);
+                        setPinKind("side_event");
+                        setTool("icon");
+                      }}
+                    >
+                      <CalendarDays strokeWidth={1.5} />
+                      Side event
+                    </DropdownMenuItem>
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger>
-                        <MapPin />
+                        <MapPin strokeWidth={1.5} />
                         Icon
                       </DropdownMenuSubTrigger>
                       <DropdownMenuSubContent>
@@ -1554,6 +1581,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                             onClick={() => {
                               setStampAppearance(null);
                               setStampModelId(null);
+                              setPinKind("amenity");
                               setAmenityStamp(a.type);
                               setTool("icon");
                             }}
@@ -1565,7 +1593,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     </DropdownMenuSub>
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger>
-                        <Box />
+                        <Box strokeWidth={1.5} />
                         Library model
                       </DropdownMenuSubTrigger>
                       <DropdownMenuSubContent>
@@ -1612,7 +1640,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 {tool === "icon" ? (
                   <p className="text-[11px] text-primary">
                     Click the {viewMode === "hall" ? "hall floor" : "plan"} to place{" "}
-                    {amenityLabel(amenityStamp).toLowerCase()}. Esc cancels.
+                    {pinKind === "side_event" ? "a side event" : amenityLabel(amenityStamp).toLowerCase()}. Esc cancels.
                   </p>
                 ) : null}
               </div>
@@ -1634,13 +1662,13 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                           aria-selected={active}
                           data-active={active}
                           onClick={() => setObjectFilter(tab.value)}
-                          className={`flex size-7 items-center justify-center rounded-md transition-colors ${
+                          className={`flex size-8 items-center justify-center rounded-md transition-colors ${
                             active
-                              ? "bg-primary text-primary-foreground"
+                              ? "bg-muted text-foreground"
                               : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
                           }`}
                         >
-                          <Icon className="size-3.5" strokeWidth={1.75} />
+                          <Icon className="size-4 shrink-0" strokeWidth={1.5} />
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">{tab.label}</TooltipContent>
@@ -1654,11 +1682,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         <button
                           type="button"
                           aria-label="Sort objects"
-                          className="ml-auto flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+                          className="ml-auto flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
                         >
                           <ChevronDown
-                            className={`size-3.5 ${objectSortDir === "desc" ? "rotate-180" : ""}`}
-                            strokeWidth={1.75}
+                            className={`size-4 shrink-0 ${objectSortDir === "desc" ? "rotate-180" : ""}`}
+                            strokeWidth={1.5}
                           />
                         </button>
                       </DropdownMenuTrigger>
@@ -1695,7 +1723,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     const title = objectTitle(o, s);
                     const logoUrl = displayLogoUrl(o, bundle.assets, s);
                     const sub =
-                      o.kind === "amenity"
+                      o.kind === "side_event"
+                        ? "Side event"
+                        : o.kind === "amenity"
                         ? "Icon"
                         : o.polygon
                           ? formatSize(ringBounds(o.polygon).w, ringBounds(o.polygon).h, units)
@@ -1983,7 +2013,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                               title={showUnderlay ? "Hide drawing" : "Show drawing"}
                               onClick={() => setShowUnderlay((v) => !v)}
                             >
-                              {showUnderlay ? <Eye /> : <EyeOff />}
+                              {showUnderlay ? <Eye strokeWidth={1.5} /> : <EyeOff strokeWidth={1.5} />}
                             </Button>
                           ) : null}
                         </div>
@@ -2095,7 +2125,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       variant={editVenueLayers && tool === "rect" ? "default" : "outline"}
                       onClick={() => beginVenueDraw("rect")}
                     >
-                      <Square />
+                      <Square strokeWidth={1.5} />
                       Rect
                     </Button>
                     <Button
@@ -2103,7 +2133,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       variant={editVenueLayers && tool === "polygon" ? "default" : "outline"}
                       onClick={() => beginVenueDraw("polygon")}
                     >
-                      <Pentagon />
+                      <Pentagon strokeWidth={1.5} />
                       Polygon
                     </Button>
                   </div>
@@ -2198,10 +2228,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 tool={tool}
                 units={units}
                 amenityStamp={amenityStamp}
+                pinKind={pinKind}
                 presetMeters={presetId && presetId !== "none" ? preset : null}
                 stampAppearance={stampAppearance}
                 stampModelAssetId={stampModelId}
                 showGrid={showGrid}
+                showRulers={showRulers}
                 onSelect={(id) => setSelectedIds(id ? [id] : [])}
                 onChangeObject={(o) => void patchObject(o)}
                 onCreateObject={(o) => {
@@ -2226,6 +2258,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 tool={tool}
                 units={units}
                 amenityStamp={amenityStamp}
+                pinKind={pinKind}
                 presetMeters={presetId && presetId !== "none" ? preset : null}
                 stampAppearance={stampAppearance}
                 stampModelAssetId={stampModelId}
@@ -2255,6 +2288,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 knownLengthMeters={toMeters(Number(scaleLength), units)}
                 underlayOpacity={underlayOpacity}
                 showGrid={showGrid}
+                showRulers={showRulers}
                 snapToObjects={snapToObjects}
                 snapToUnits={snapToUnits}
                 underlaySvg={venueSvg}
@@ -2281,7 +2315,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 onChange={(id) => {
                   setFloorId(id);
                   setSelectedIds([]);
-                  setFitNonce((n) => n + 1);
                 }}
               />
             </div>
@@ -2301,12 +2334,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           ) : null}
         </main>
 
-        <aside className="hidden w-[260px] min-h-0 shrink-0 flex-col overflow-hidden border-l border-border bg-background lg:flex">
-          <ScrollArea className="min-h-0 flex-1">
-          <div className="border-b border-border p-3">
+        <aside className="hidden w-[260px] min-w-0 min-h-0 shrink-0 flex-col overflow-hidden border-l border-sidebar-border bg-sidebar lg:flex">
+          <ScrollArea className="min-h-0 min-w-0 w-full flex-1">
+          <div className="w-full min-w-0 max-w-full overflow-x-hidden border-b border-border p-3">
             <p className="chrome-kicker">Inspector</p>
             {selectedVenueLayer && venueSvg ? (
-              <div className="mt-2 space-y-2">
+              <div className="mt-2 min-w-0 space-y-2">
                 <p className="font-mono text-[10px] text-muted-foreground uppercase">{selectedVenueLayer.kind}</p>
                 <div>
                   <Label htmlFor="insp-venue-name" className="text-[10px] text-muted-foreground">
@@ -2391,14 +2424,15 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   </div>
                 ) : null}
                 <div>
-                  <Label htmlFor="insp-venue-rot" className="text-[10px] text-muted-foreground">
+                  <Label htmlFor="insp-venue-rot" className="text-[10px] text-muted-foreground" title="Drag the top handle to rotate. Shift snaps to 15°.">
                     Rotation
                   </Label>
-                  <div className="mt-1 flex items-center gap-1">
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
                     <Input
                       id="insp-venue-rot"
                       type="number"
                       step="any"
+                      className="min-w-0 flex-1"
                       value={Number(svgElementRotation(venueSvg, selectedVenueLayer.id).toFixed(2))}
                       onChange={(e) => {
                         const deg = Number(e.target.value);
@@ -2407,11 +2441,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       }}
                     />
                     <span className="shrink-0 text-[10px] text-muted-foreground">°</span>
-                  </div>
-                  <div className="mt-1 flex gap-1">
                     <Button
                       size="sm"
                       variant="outline"
+                      className="shrink-0 px-2"
                       onClick={() =>
                         commitVenueSvg(
                           setSvgElementRotation(
@@ -2422,11 +2455,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         )
                       }
                     >
-                      −45°
+                      −45
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
+                      className="shrink-0 px-2"
                       onClick={() =>
                         commitVenueSvg(
                           setSvgElementRotation(
@@ -2437,7 +2471,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         )
                       }
                     >
-                      +45°
+                      +45
                     </Button>
                   </div>
                 </div>
@@ -2472,7 +2506,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 </Button>
               </div>
             ) : multiSelected ? (
-              <div className="mt-2 space-y-2">
+              <div className="mt-2 min-w-0 space-y-2">
                 <p className="text-sm font-medium">{selectedIds.filter((id) => id !== VENUE_ID).length} objects selected</p>
                 <p className="text-xs text-muted-foreground">
                   Drag to move the group. Shift-click or shift-drag to add. Delete removes all.
@@ -2482,7 +2516,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 </Button>
               </div>
             ) : venueSelected && floor?.calibration ? (
-              <div className="mt-2 space-y-2">
+              <div className="mt-2 min-w-0 space-y-2">
                 <p className="text-sm font-medium">Venue drawing</p>
                 <p className="text-xs text-muted-foreground">
                   Hold Space and drag to pan. Drag orange handles to stretch. Shift-drag the hall to slide the drawing.
@@ -2523,18 +2557,58 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 </div>
               </div>
             ) : selected ? (
-              <div className="mt-2 space-y-2">
+              <div className="mt-2 min-w-0 space-y-2">
                 <div>
                   <Label htmlFor="insp-label" className="text-[10px] text-muted-foreground">
-                    Label
+                    {selected.kind === "side_event" ? "Title" : "Label"}
                   </Label>
                   <Input
                     id="insp-label"
                     value={selected.name}
                     onChange={(e) => void patchObject({ ...selected, name: e.target.value })}
-                    placeholder="Display name"
+                    placeholder={selected.kind === "side_event" ? "Afterparty" : "Display name"}
                   />
                 </div>
+                {selected.kind === "side_event" ? (
+                  <>
+                    <div>
+                      <Label htmlFor="insp-event-date" className="text-[10px] text-muted-foreground">
+                        Date
+                      </Label>
+                      <Input
+                        id="insp-event-date"
+                        type="date"
+                        value={selected.eventDate}
+                        onChange={(e) => void patchObject({ ...selected, eventDate: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="insp-event-desc" className="text-[10px] text-muted-foreground">
+                        Description
+                      </Label>
+                      <Textarea
+                        id="insp-event-desc"
+                        value={selected.description}
+                        onChange={(e) => void patchObject({ ...selected, description: e.target.value })}
+                        placeholder="What happens here"
+                        className="mt-1 min-h-24 text-sm"
+                      />
+                    </div>
+                    <ObjectMediaFields
+                      slug={slug}
+                      object={selected}
+                      assets={bundle.assets}
+                      imageOnly
+                      onPatch={(o) => void patchObject(o)}
+                      onAsset={(asset) =>
+                        setBundle((b) => ({
+                          ...b,
+                          assets: b.assets.some((a) => a.id === asset.id) ? b.assets : [...b.assets, asset],
+                        }))
+                      }
+                    />
+                  </>
+                ) : null}
                 {selected.kind === "booth" ? (
                   <div>
                     <Label htmlFor="insp-booth-number" className="text-[10px] text-muted-foreground">
@@ -2601,6 +2675,16 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         />
                       </div>
                     </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Area{" "}
+                      <span className="tabular-nums text-foreground">
+                        {formatArea(
+                          ringBounds(selected.polygon).w * ringBounds(selected.polygon).h,
+                          units,
+                          2,
+                        )}
+                      </span>
+                    </p>
                     <div>
                       <Label className="text-[10px] text-muted-foreground">Preset</Label>
                       <Select
@@ -2636,7 +2720,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   </div>
                 ) : null}
                 {selected.kind === "booth" && selected.polygon ? (
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <Label htmlFor="object-color" className="text-[11px] font-normal text-muted-foreground">
                       Color
                     </Label>
@@ -2680,38 +2764,36 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 ) : null}
                 {selected ? (
                   <div>
-                    <Label htmlFor="insp-object-rot" className="text-[10px] text-muted-foreground">
+                    <Label htmlFor="insp-object-rot" className="text-[10px] text-muted-foreground" title="Drag the top handle on the plan. Shift snaps to 15°.">
                       Rotation
                     </Label>
-                    <div className="mt-1 flex items-center gap-1">
+                    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
                       <Input
                         id="insp-object-rot"
                         type="number"
                         step="any"
-                        value={Number(((selected.kind === "amenity" ? selected.rotation : selected.facingDeg) ?? 0).toFixed(2))}
+                        className="min-w-0 flex-1"
+                        value={Number(((isPinObject(selected) ? selected.rotation : selected.facingDeg) ?? 0).toFixed(2))}
                         onChange={(e) => applyObjectRotation(Number(e.target.value))}
                       />
                       <span className="shrink-0 text-[10px] text-muted-foreground">°</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 px-2"
+                        onClick={() => applyObjectRotation(((isPinObject(selected) ? selected.rotation : selected.facingDeg) ?? 0) - 45)}
+                      >
+                        −45
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 px-2"
+                        onClick={() => applyObjectRotation(((isPinObject(selected) ? selected.rotation : selected.facingDeg) ?? 0) + 45)}
+                      >
+                        +45
+                      </Button>
                     </div>
-                    <div className="mt-1 flex gap-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => applyObjectRotation(((selected.kind === "amenity" ? selected.rotation : selected.facingDeg) ?? 0) - 45)}
-                    >
-                      −45°
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => applyObjectRotation(((selected.kind === "amenity" ? selected.rotation : selected.facingDeg) ?? 0) + 45)}
-                    >
-                      +45°
-                    </Button>
-                    </div>
-                    <p className="mt-1 text-[10px] text-muted-foreground">
-                      Drag the top handle on the plan for any angle. Hold Shift to snap to 15°.
-                    </p>
                   </div>
                 ) : null}
                 <Button size="sm" variant="destructive" onClick={() => void deleteSelected()}>
@@ -2728,7 +2810,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                           void patchObject({ ...selected, appearance: v as Appearance })
                         }
                       >
-                        <SelectTrigger className="mt-1">
+                        <SelectTrigger className="mt-1 w-full min-w-0">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2746,7 +2828,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                           void patchObject({ ...selected, rugTextureAssetId: v === "none" ? null : v })
                         }
                       >
-                        <SelectTrigger className="mt-1">
+                        <SelectTrigger className="mt-1 w-full min-w-0">
                           <SelectValue placeholder="None" />
                         </SelectTrigger>
                         <SelectContent>
@@ -2769,7 +2851,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                           void patchObject({ ...selected, wallTextureAssetId: v === "none" ? null : v })
                         }
                       >
-                        <SelectTrigger className="mt-1">
+                        <SelectTrigger className="mt-1 w-full min-w-0">
                           <SelectValue placeholder="None" />
                         </SelectTrigger>
                         <SelectContent>
@@ -2796,7 +2878,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                           })
                         }
                       >
-                        <SelectTrigger className="mt-1">
+                        <SelectTrigger className="mt-1 w-full min-w-0">
                           <SelectValue placeholder="None" />
                         </SelectTrigger>
                         <SelectContent>
@@ -2818,7 +2900,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               <p className="mt-2 text-sm text-muted-foreground">Select a booth or icon.</p>
             )}
           </div>
-          <div className="p-3">
+          <div className="w-full min-w-0 max-w-full overflow-x-hidden p-3">
             <p className="chrome-kicker">Sponsors</p>
             <Input
               className="mt-2"
@@ -2827,7 +2909,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               placeholder="Search name or booth"
             />
           </div>
-            <div className="space-y-1 px-3 pb-3">
+            <div className="min-w-0 space-y-1 px-3 pb-3">
               {filteredSponsors.map((s) => (
                 <button
                   key={s.id}
