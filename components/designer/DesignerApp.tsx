@@ -1396,6 +1396,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           beginVenueDraw("ellipse");
           return;
         }
+        setSidebarTab("objects");
+        setStampAppearance(null);
+        setStampModelId(null);
+        setPresetId("none");
+        setTool("ellipse");
       }
       if ((e.key === "l" || e.key === "L") && sidebarTab === "venue") {
         beginVenueLabel();
@@ -1601,7 +1606,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
             value={viewMode}
             onChange={(mode) => {
               setViewMode(mode);
-              if (mode === "hall" && (tool === "calibrate" || tool === "label" || tool === "image" || tool === "ellipse")) setTool("select");
+              if (mode === "hall" && (tool === "calibrate" || tool === "label" || tool === "image")) setTool("select");
             }}
             orthographic={orthographic}
             onOrthographicChange={setOrthographic}
@@ -1759,6 +1764,18 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         setStampAppearance(null);
                         setStampModelId(null);
                         setPresetId("none");
+                        setTool("ellipse");
+                      }}
+                    >
+                      <Circle strokeWidth={1.5} />
+                      Ellipse
+                      <DropdownMenuShortcut>E</DropdownMenuShortcut>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setStampAppearance(null);
+                        setStampModelId(null);
+                        setPresetId("none");
                         setTool("polygon");
                       }}
                     >
@@ -1825,6 +1842,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                             : PRESETS.find((p) => p.id === presetId)?.label ?? "booth"
                         }.`
                       : `Drag on the ${viewMode === "hall" ? "hall floor" : "plan"} to draw a rectangle. Esc cancels.`}
+                  </p>
+                ) : null}
+                {tool === "ellipse" ? (
+                  <p className="text-[11px] text-primary">
+                    Drag on the {viewMode === "hall" ? "hall floor" : "plan"} to draw an ellipse. Hold Shift for a circle. Esc
+                    cancels.
                   </p>
                 ) : null}
                 {tool === "polygon" ? (
