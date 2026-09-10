@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { ChevronDown, ChevronLeft, LayoutGrid, MapPin, Search, Square, Theater } from "lucide-react";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
-import { FloorSwitcher, GridToggle, RulersToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
+import { FloorSwitcher, ViewModeToggle } from "@/components/map/ViewModeToggle";
 import { UnitsToggle } from "@/components/units-toggle";
 import {
   Dialog,
@@ -24,7 +24,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
   Tooltip,
@@ -59,10 +58,18 @@ const OBJECT_FILTERS: {
   icon: typeof Square;
 }[] = [
   { value: "all", label: "All", icon: LayoutGrid },
-  { value: "booths", label: "Booths", icon: Square },
   { value: "stages", label: "Stages", icon: Theater },
+  { value: "booths", label: "Booths", icon: Square },
   { value: "icons", label: "Icons", icon: MapPin },
 ];
+
+const OBJECT_GROUP_ORDER = ["stages", "booths", "icons"] as const;
+type ObjectListGroup = (typeof OBJECT_GROUP_ORDER)[number];
+const OBJECT_GROUP_LABEL: Record<ObjectListGroup, string> = {
+  stages: "Stages",
+  booths: "Booths",
+  icons: "Icons",
+};
 
 function isStage(o: MapObject): boolean {
   return /\bstage\b/i.test(`${o.name} ${o.boothNumber}`);
@@ -70,6 +77,12 @@ function isStage(o: MapObject): boolean {
 
 function isBooth(o: MapObject): boolean {
   return o.kind === "booth" && !isStage(o);
+}
+
+function objectListGroup(o: MapObject): ObjectListGroup {
+  if (o.kind === "amenity" || isMapPinObject(o)) return "icons";
+  if (isStage(o)) return "stages";
+  return "booths";
 }
 
 function objectTitle(o: MapObject, sponsor?: Sponsor): string {
@@ -273,18 +286,17 @@ export function ViewerApp({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [frameNonce, setFrameNonce] = useState(0);
   const [units, setUnits] = useUnits();
-  const [sheetOpen, setSheetOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [objectFilter, setObjectFilter] = useState<ObjectFilter>("all");
   const [objectSort, setObjectSort] = useState<ObjectSort>("name");
   const [objectSortDir, setObjectSortDir] = useState<SortDir>("asc");
   const [viewMode, setViewMode] = useState<ViewMode>("plan");
-  const [showGrid, setShowGrid] = useState(false);
-  const [showRulers, setShowRulers] = useState(false);
+  const [orthographic, setOrthographic] = useState(false);
 
   useEffect(() => {
     if (window.matchMedia("(min-width: 768px)").matches) setViewMode("hall");
+    else setSidebarOpen(false);
   }, []);
 
   const floorDocRaw = doc.floors.find((f) => f.id === floorId) ?? doc.floors[0];
@@ -334,6 +346,11 @@ export function ViewerApp({
       return true;
     });
     return [...matches].sort((a, b) => {
+      if (objectFilter === "all") {
+        const groupCmp =
+          OBJECT_GROUP_ORDER.indexOf(objectListGroup(a)) - OBJECT_GROUP_ORDER.indexOf(objectListGroup(b));
+        if (groupCmp !== 0) return groupCmp;
+      }
       const sa = a.sponsorId ? sponsors.find((sp) => sp.id === a.sponsorId) : undefined;
       const sb = b.sponsorId ? sponsors.find((sp) => sp.id === b.sponsorId) : undefined;
       const byName = objectTitle(a, sa).localeCompare(objectTitle(b, sb));
@@ -349,7 +366,6 @@ export function ViewerApp({
   function openItem(id: string) {
     setSelectedId(id);
     setDetailOpen(true);
-    setSheetOpen(false);
   }
 
   function selectFromMap(id: string | null) {
@@ -455,10 +471,14 @@ export function ViewerApp({
       </div>
       <ScrollArea className="flex-1">
         <div className="py-1">
-          {results.map((o) => {
+          {results.map((o, i) => {
             const s = o.sponsorId ? sponsors.find((sp) => sp.id === o.sponsorId) : undefined;
             const title = objectTitle(o, s);
             const logoUrl = displayLogoUrl(o, [], s);
+            const group = objectListGroup(o);
+            const showGroup =
+              objectFilter === "all" &&
+              (i === 0 || objectListGroup(results[i - 1]) !== group);
             const sub = isMapPinObject(o)
               ? MAP_PIN_META[o.kind].label
               : o.kind === "amenity"
@@ -469,21 +489,27 @@ export function ViewerApp({
                     ? "Stage"
                     : "Booth";
             return (
-              <button
-                key={o.id}
-                type="button"
-                data-active={o.id === selected?.id}
-                onClick={() => openItem(o.id)}
-                onDoubleClick={() => frameItem(o.id)}
-                className="chrome-row"
-              >
-                {logoUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
+              <Fragment key={o.id}>
+                {showGroup ? (
+                  <p className="px-3 pt-2 pb-0.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                    {OBJECT_GROUP_LABEL[group]}
+                  </p>
                 ) : null}
-                <span className="min-w-0 flex-1 truncate">{title}</span>
-                <span className="font-mono text-[10px] text-muted-foreground">{sub}</span>
-              </button>
+                <button
+                  type="button"
+                  data-active={o.id === selected?.id}
+                  onClick={() => openItem(o.id)}
+                  onDoubleClick={() => frameItem(o.id)}
+                  className="chrome-row"
+                >
+                  {logoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={logoUrl} alt="" className="h-6 w-6 bg-white object-contain p-0.5" />
+                  ) : null}
+                  <span className="min-w-0 flex-1 truncate">{title}</span>
+                  <span className="font-mono text-[10px] text-muted-foreground">{sub}</span>
+                </button>
+              </Fragment>
             );
           })}
           {!results.length ? (
@@ -513,8 +539,7 @@ export function ViewerApp({
               highlightId={highlightId}
               frameNonce={frameNonce}
               units={units}
-              showGrid={showGrid}
-              showRulers={showRulers}
+              orthographic={orthographic}
               onSelect={selectFromMap}
             />
           ) : (
@@ -527,8 +552,6 @@ export function ViewerApp({
               frameNonce={frameNonce}
               highlightId={highlightId}
               units={units}
-              showGrid={showGrid}
-              showRulers={showRulers}
               onSelect={selectFromMap}
             />
           )
@@ -544,12 +567,12 @@ export function ViewerApp({
       </div>
 
       <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-background/80 p-1 shadow-sm backdrop-blur-md">
-        <div className="flex items-center">
-          <GridToggle value={showGrid} onChange={setShowGrid} />
-          <RulersToggle value={showRulers} onChange={setShowRulers} />
-        </div>
-        <span className="h-5 w-px bg-border" aria-hidden />
-        <ViewModeToggle value={viewMode} onChange={setViewMode} />
+        <ViewModeToggle
+          value={viewMode}
+          onChange={setViewMode}
+          orthographic={orthographic}
+          onOrthographicChange={setOrthographic}
+        />
         <FloorSwitcher
           floors={[...doc.floors].sort((a, b) => a.order - b.order)}
           value={floorId}
@@ -559,21 +582,13 @@ export function ViewerApp({
           }}
         />
         <UnitsToggle units={units} onChange={setUnits} />
-        <button
-          type="button"
-          className="chrome-pill md:hidden"
-          onClick={() => setSheetOpen(true)}
-        >
-          <Search className="size-4 shrink-0" strokeWidth={1.5} />
-          Search
-        </button>
         <div className="md:hidden">
           <ThemeToggle />
         </div>
       </div>
 
       <aside
-        className="absolute top-0 left-0 bottom-0 z-10 hidden border-r border-border bg-background md:flex md:flex-col"
+        className="absolute top-0 left-0 bottom-0 z-10 flex flex-col border-r border-border bg-background"
         style={{ width: sidebarOpen ? 260 : 40 }}
       >
         <div className="flex h-10 shrink-0 items-center border-b border-border px-1">
@@ -623,15 +638,6 @@ export function ViewerApp({
           ) : null}
         </DialogContent>
       </Dialog>
-
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent side="bottom" className="max-h-[75dvh] rounded-t-xl border-border bg-background md:hidden">
-          <SheetHeader>
-            <SheetTitle className="text-sm">Search</SheetTitle>
-          </SheetHeader>
-          <div className="h-72">{list}</div>
-        </SheetContent>
-      </Sheet>
     </div>
   );
 }

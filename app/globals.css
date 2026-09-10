@@ -188,6 +188,12 @@
   color: var(--foreground);
 }
 
+.chrome-row-align {
+  width: 100%;
+  margin-inline: 0;
+  padding-inline: 6px 8px;
+}
+
 .chrome-pill {
   display: inline-flex;
   height: 32px;

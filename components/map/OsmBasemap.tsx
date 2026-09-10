@@ -2,7 +2,7 @@
 
 import { useLayoutEffect, useEffect, useRef, type RefObject } from "react";
 import { Map as MaplibreMap, type StyleSpecification } from "maplibre-gl";
-import { useTheme } from "next-themes";
+import { useTheme } from "@/components/theme-provider";
 import type { FloorBasemap } from "@/lib/types";
 
 export type LeafletCam = {
@@ -111,7 +111,7 @@ export function OsmBasemap({ view, camera, svgRef, hall }: Props) {
       bearing: Number.isFinite(camera.bearing) ? camera.bearing : 0,
       minZoom: 0,
       maxZoom: 24,
-      attributionControl: { compact: true },
+      attributionControl: false,
       maplibreLogo: false,
       cooperativeGestures: false,
       fadeDuration: 0,
@@ -183,9 +183,30 @@ export function OsmBasemap({ view, camera, svgRef, hall }: Props) {
   }, [view.opacity]);
 
   return (
-    <div
-      ref={hostRef}
-      className="absolute inset-0 z-0 h-full w-full pointer-events-none [&_.maplibregl-ctrl-attrib]:pointer-events-auto [&_.maplibregl-ctrl-attrib]:bg-transparent [&_.maplibregl-ctrl-attrib]:text-[10px] [&_.maplibregl-ctrl-attrib]:text-muted-foreground [&_.maplibregl-ctrl-attrib_a]:text-muted-foreground [&_.maplibregl-ctrl-logo]:hidden"
-    />
+    <>
+      <div
+        ref={hostRef}
+        className="pointer-events-none absolute inset-0 z-0 h-full w-full [&_.maplibregl-ctrl-logo]:hidden"
+      />
+      <p className="pointer-events-none absolute right-2 bottom-1.5 z-20 text-right text-[10px] leading-none text-muted-foreground/40 [text-shadow:0_0_6px_var(--map-bg)]">
+        <a
+          href="https://www.openstreetmap.org/copyright"
+          target="_blank"
+          rel="noreferrer"
+          className="pointer-events-auto hover:text-muted-foreground hover:underline"
+        >
+          OpenStreetMap
+        </a>
+        <span>, © </span>
+        <a
+          href="https://carto.com/attributions"
+          target="_blank"
+          rel="noreferrer"
+          className="pointer-events-auto hover:text-muted-foreground hover:underline"
+        >
+          CARTO
+        </a>
+      </p>
+    </>
   );
 }
