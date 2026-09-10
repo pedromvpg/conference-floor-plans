@@ -72,6 +72,7 @@ import {
   closestOnPath,
   commitShape,
   corner,
+  ellipseFromCorners,
   dragHandle,
   insertNode,
   isRectangleShape,
@@ -1509,7 +1510,7 @@ export function FloorCanvas({
     }
 
     if (tool === "ellipse") {
-      if (!drawVenueShapes) return;
+      if (!canEditObjects && !drawVenueShapes) return;
       const p = snapPoint(w.x, w.y, null);
       setGuides({ gx: p.gx, gy: p.gy });
       drawing.current = { x: p.x, y: p.y };
@@ -1945,6 +1946,37 @@ export function FloorCanvas({
     });
   }
 
+  function commitEllipse(ring: Ring) {
+    if (drawVenueShapes) {
+      commitVenueEllipse(ring);
+      return;
+    }
+    const b = ringBounds(ring);
+    if (b.w < 0.3 || b.h < 0.3) return;
+    const shape = commitShape(ellipseFromCorners(b.minX, b.minY, b.maxX, b.maxY));
+    const t = nowIso();
+    onCreateObject?.({
+      id: newId(),
+      floorId: floor.id,
+      kind: "booth",
+      polygon: shape.polygon,
+      path: shape.path,
+      x: null,
+      y: null,
+      rotation: 0,
+      boothNumber: "",
+      name: stampAppearance === "stage" ? "Stage" : "",
+      sponsorId: null,
+      amenityType: null,
+      color: null,
+      description: "",
+      eventDate: "",
+      ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
+      createdAt: t,
+      updatedAt: t,
+    });
+  }
+
   function onPointerUp(e: React.PointerEvent<SVGSVGElement>) {
     const remaining = pointers.current.size - (pointers.current.has(e.pointerId) ? 1 : 0);
     pointers.current.delete(e.pointerId);
@@ -1980,7 +2012,7 @@ export function FloorCanvas({
       commitRect(draftRect);
     }
     if (drawing.current && draftRect && tool === "ellipse") {
-      commitVenueEllipse(draftRect);
+      commitEllipse(draftRect);
     }
     if (drawing.current && tool === "image") {
       if (draftRect) {

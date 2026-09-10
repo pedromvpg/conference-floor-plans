@@ -7,9 +7,9 @@ import { useThree, type ThreeEvent } from "@react-three/fiber";
 import { AMENITY_COLOR } from "@/lib/amenities";
 import { hallDefaults, resolveAppearance } from "@/lib/appearance";
 import { boothFillHex, HALL_THEME, type MapTone } from "@/lib/colors";
-import { angleDeg, rectFromCenter, rectRing, ringBounds, rotateHandlePos, snapDeg, venueWorldRect } from "@/lib/geometry";
+import { angleDeg, rectFromCenter, rectRing, ringBounds, rotateHandlePos, snapDeg, squareRectRing, venueWorldRect } from "@/lib/geometry";
 import { displayLogoUrl, objectUrls, snapWorld, yawRad } from "@/lib/hall";
-import { commitShape, objectShape, rotateBezier, translateBezier } from "@/lib/bezier";
+import { commitShape, ellipseFromCorners, objectShape, rotateBezier, tessellate, translateBezier } from "@/lib/bezier";
 import { stampPinObject, newMapObject } from "@/lib/new-object";
 import { gridSize } from "@/lib/units";
 import type {
@@ -211,7 +211,24 @@ export function HallScene({
       );
       return;
     }
-    if (tool !== "rect") return;
+    if (tool !== "rect" && tool !== "ellipse") return;
+    if (tool === "ellipse") {
+      const b = ring ? ringBounds(ring) : null;
+      if (!b || b.w < 0.3 || b.h < 0.3) return;
+      const shape = commitShape(ellipseFromCorners(b.minX, b.minY, b.maxX, b.maxY));
+      onCreateObject?.(
+        newMapObject({
+          floorId: floor.id,
+          kind: "booth",
+          polygon: shape.polygon,
+          path: shape.path,
+          name: stampAppearance === "stage" ? "Stage" : "",
+          appearance: stampAppearance,
+          modelAssetId: stampModelAssetId,
+        }),
+      );
+      return;
+    }
     const poly = ring ?? (presetMeters ? rectFromCenter(x, y, presetMeters.w, presetMeters.d) : null);
     if (!poly) return;
     const b = ringBounds(poly);
@@ -258,9 +275,12 @@ export function HallScene({
       const p = worldFromEvent(ev);
       if (!p) return;
       if (placing) setHover(p);
-      if (draw.current && tool === "rect" && !presetMeters) {
-        const ring = rectRing(draw.current.x, draw.current.y, p.x, p.y);
-        draftRef.current = ring;
+      if (draw.current && (tool === "rect" || tool === "ellipse") && !presetMeters) {
+        const box = ev.shiftKey
+          ? squareRectRing(draw.current.x, draw.current.y, p.x, p.y)
+          : rectRing(draw.current.x, draw.current.y, p.x, p.y);
+        const ring = tool === "ellipse" ? tessellate(ellipseFromCorners(box[0][0], box[0][1], box[2][0], box[2][1]), true) : box;
+        draftRef.current = tool === "ellipse" ? box : ring;
         setDraft(ring);
       }
       const pending = pendingDrag.current;
@@ -308,7 +328,7 @@ export function HallScene({
     }
 
     function onUp() {
-      if (draw.current && tool === "rect" && !presetMeters) {
+      if (draw.current && (tool === "rect" || tool === "ellipse") && !presetMeters) {
         const ring = draftRef.current;
         if (ring) stampRef.current(0, 0, ring);
       }
@@ -355,7 +375,7 @@ export function HallScene({
       stampAt(p.x, p.y);
       return;
     }
-    if (tool === "rect") {
+    if (tool === "rect" || tool === "ellipse") {
       draw.current = p;
       const ring = rectRing(p.x, p.y, p.x, p.y);
       draftRef.current = ring;
