@@ -7,9 +7,9 @@ import { useThree, type ThreeEvent } from "@react-three/fiber";
 import { AMENITY_COLOR } from "@/lib/amenities";
 import { hallDefaults, resolveAppearance } from "@/lib/appearance";
 import { boothFillHex, HALL_THEME, type MapTone } from "@/lib/colors";
-import { rectFromCenter, rectRing, ringBounds, venueWorldRect } from "@/lib/geometry";
+import { angleDeg, rectFromCenter, rectRing, ringBounds, rotateHandlePos, snapDeg, venueWorldRect } from "@/lib/geometry";
 import { displayLogoUrl, objectUrls, snapWorld, yawRad } from "@/lib/hall";
-import { commitShape, objectShape, translateBezier } from "@/lib/bezier";
+import { commitShape, objectShape, rotateBezier, translateBezier } from "@/lib/bezier";
 import { stampPinObject, newMapObject } from "@/lib/new-object";
 import { gridSize } from "@/lib/units";
 import type {
@@ -127,6 +127,18 @@ function hitToWorld(point: THREE.Vector3, grid: number) {
   return snapWorld(point.x, point.z, grid);
 }
 
+function planeToWorld(point: THREE.Vector3) {
+  return { x: point.x, y: point.z };
+}
+
+function objectFrame(o: MapObject) {
+  if (isPinObject(o) && o.x != null && o.y != null) {
+    return { minX: o.x - 0.55, minY: o.y - 0.55, maxX: o.x + 0.55, maxY: o.y + 0.55, w: 1.1, h: 1.1 };
+  }
+  if (o.polygon?.length) return ringBounds(o.polygon);
+  return null;
+}
+
 export function HallScene({
   mode,
   floor,
@@ -160,12 +172,15 @@ export function HallScene({
   const [draft, setDraft] = useState<Ring | null>(null);
   const drag = useRef<{
     id: string;
+    mode: "move" | "rotate";
     ox: number;
     oy: number;
     polygon: Ring | null;
     path?: MapObject["path"];
     x: number | null;
     y: number | null;
+    startAngle?: number;
+    startRot?: number;
   } | null>(null);
   const pendingDrag = useRef<typeof drag.current>(null);
   const passThroughNav = useRef(false);
@@ -222,13 +237,19 @@ export function HallScene({
     const ndc = new THREE.Vector2();
     const hit = new THREE.Vector3();
 
-    function worldFromEvent(ev: PointerEvent) {
+    function planeFromEvent(ev: PointerEvent) {
       const rect = gl.domElement.getBoundingClientRect();
       ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(ndc, camera);
       if (!raycaster.ray.intersectPlane(plane, hit)) return null;
-      return hitToWorld(hit, grid);
+      return planeToWorld(hit);
+    }
+
+    function worldFromEvent(ev: PointerEvent) {
+      const p = planeFromEvent(ev);
+      if (!p) return null;
+      return snapWorld(p.x, p.y, grid);
     }
 
     function onMove(ev: PointerEvent) {
@@ -254,6 +275,26 @@ export function HallScene({
       if (!d) return;
       const obj = objectsRef.current.find((o) => o.id === d.id);
       if (!obj) return;
+      if (d.mode === "rotate" && d.startAngle != null && d.startRot != null) {
+        const raw = planeFromEvent(ev);
+        if (!raw) return;
+        let nextDeg = d.startRot + (angleDeg(d.ox, d.oy, raw.x, raw.y) - d.startAngle);
+        if (ev.shiftKey) nextDeg = snapDeg(nextDeg, 15);
+        if (isPinObject(obj)) {
+          onChangeRef.current?.({ ...obj, rotation: nextDeg, facingDeg: nextDeg });
+          return;
+        }
+        const startPath = d.path?.length ? d.path : obj.polygon ? objectShape({ ...obj, polygon: d.polygon, path: d.path }) : [];
+        const rotated = commitShape(rotateBezier(startPath, nextDeg - d.startRot));
+        onChangeRef.current?.({
+          ...obj,
+          polygon: rotated.polygon,
+          path: rotated.path,
+          facingDeg: nextDeg,
+          rotation: nextDeg,
+        });
+        return;
+      }
       const dx = p.x - d.ox;
       const dy = p.y - d.oy;
       if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return;
@@ -328,6 +369,7 @@ export function HallScene({
     const p = hitToWorld(e.point, grid);
     pendingDrag.current = {
       id: obj.id,
+      mode: "move",
       ox: p.x,
       oy: p.y,
       polygon: obj.polygon,
@@ -336,6 +378,34 @@ export function HallScene({
       y: obj.y,
     };
   }
+
+  function startRotate(obj: MapObject, e: ThreeEvent<PointerEvent>) {
+    if (!canEdit || tool !== "select") return;
+    const box = objectFrame(obj);
+    if (!box) return;
+    e.stopPropagation();
+    const rh = rotateHandlePos(box, Math.max(1.1, Math.min(box.w, box.h) * 0.18));
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const hit = new THREE.Vector3();
+    if (!e.ray.intersectPlane(plane, hit)) return;
+    const p = planeToWorld(hit);
+    drag.current = {
+      id: obj.id,
+      mode: "rotate",
+      ox: rh.cx,
+      oy: rh.cy,
+      polygon: obj.polygon,
+      path: obj.path ?? (obj.polygon ? objectShape(obj) : undefined),
+      x: obj.x,
+      y: obj.y,
+      startAngle: angleDeg(rh.cx, rh.cy, p.x, p.y),
+      startRot: isPinObject(obj) ? (obj.rotation ?? obj.facingDeg ?? 0) : (obj.facingDeg ?? obj.rotation ?? 0),
+    };
+    pendingDrag.current = null;
+    onNavLock?.(true);
+  }
+
+  const selectedObj = selectedId ? objects.find((o) => o.id === selectedId) : undefined;
 
   return (
     <>
@@ -453,6 +523,15 @@ export function HallScene({
           tone={tone}
         />
       ) : null}
+      {canEdit && tool === "select" && selectedObj && !isMapPinObject(selectedObj) ? (
+        <HallRotateGizmo
+          object={selectedObj}
+          onPointerDown={(e) => {
+            if (e.button !== 0 || spacePan) return;
+            startRotate(selectedObj, e);
+          }}
+        />
+      ) : null}
       {placing && hover && tool === "icon" ? (
         pinKind === "side_event" || pinKind === "hotel" ? (
           <AmenityTotem x={hover.x} y={hover.y} color={MAP_PIN_META[pinKind].color} selected={false} ghost />
@@ -503,6 +582,48 @@ function UnderlayPlane({
         }
       />
     </mesh>
+  );
+}
+
+function HallRotateGizmo({
+  object,
+  onPointerDown,
+}: {
+  object: MapObject;
+  onPointerDown: (e: ThreeEvent<PointerEvent>) => void;
+}) {
+  const box = objectFrame(object);
+  if (!box) return null;
+  const offset = Math.max(1.1, Math.min(box.w, box.h) * 0.18);
+  const rh = rotateHandlePos(box, offset);
+  const y = isPinObject(object) ? 1.85 : 3.05;
+  const from = new THREE.Vector3(rh.cx, isPinObject(object) ? 1.35 : 2.55, box.minY);
+  const to = new THREE.Vector3(rh.hx, y, rh.hy);
+  const mid = from.clone().lerp(to, 0.5);
+  const stemLen = Math.max(from.distanceTo(to), 0.2);
+  const stemQuat = new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    to.clone().sub(from).normalize(),
+  );
+  return (
+    <group>
+      <mesh position={mid} quaternion={stemQuat}>
+        <cylinderGeometry args={[0.035, 0.035, stemLen, 8]} />
+        <meshBasicMaterial color="#f97316" />
+      </mesh>
+      <mesh position={[rh.hx, y, rh.hy]} onPointerDown={onPointerDown}>
+        <sphereGeometry args={[0.22, 16, 12]} />
+        <meshBasicMaterial color="#ffffff" />
+      </mesh>
+      <mesh position={[rh.hx, y, rh.hy]} rotation={[Math.PI / 2, 0, 0]} onPointerDown={onPointerDown}>
+        <torusGeometry args={[0.38, 0.055, 8, 24]} />
+        <meshBasicMaterial color="#f97316" />
+      </mesh>
+      <mesh position={[rh.hx, y, rh.hy]} onPointerDown={onPointerDown} visible={false}>
+        <sphereGeometry args={[0.55, 12, 8]} />
+        <meshBasicMaterial />
+      </mesh>
+    </group>
   );
 }
 

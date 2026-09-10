@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Grid3x3, Ruler, Square } from "lucide-react";
+import { Box, Cuboid, Grid3x3, Ruler, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ViewMode } from "@/lib/types";
 
@@ -78,9 +78,13 @@ export function FloorSwitcher({
 export function ViewModeToggle({
   value,
   onChange,
+  orthographic,
+  onOrthographicChange,
 }: {
   value: ViewMode;
   onChange: (mode: ViewMode) => void;
+  orthographic?: boolean;
+  onOrthographicChange?: (ortho: boolean) => void;
 }) {
   return (
     <div className="inline-flex items-center" role="group" aria-label="View mode">
@@ -106,6 +110,19 @@ export function ViewModeToggle({
       >
         <Box strokeWidth={1.5} />
       </Button>
+      {value === "hall" && onOrthographicChange ? (
+        <Button
+          size="icon-sm"
+          variant={orthographic ? "secondary" : "ghost"}
+          className="size-8"
+          title={orthographic ? "Perspective" : "Orthographic"}
+          aria-label={orthographic ? "Switch to perspective" : "Switch to orthographic"}
+          aria-pressed={Boolean(orthographic)}
+          onClick={() => onOrthographicChange(!orthographic)}
+        >
+          <Cuboid strokeWidth={1.5} />
+        </Button>
+      ) : null}
     </div>
   );
 }

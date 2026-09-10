@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ComponentRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type RefObject } from "react";
 import * as THREE from "three";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { MapControls } from "@react-three/drei";
-import { useTheme } from "next-themes";
+import { useTheme } from "@/components/theme-provider";
 import { HALL_THEME, type MapTone } from "@/lib/colors";
 import { isometricPose } from "@/lib/hall";
 import type {
@@ -42,6 +42,7 @@ export type HallCanvasProps = {
   fitNonce?: number;
   showGrid?: boolean;
   showRulers?: boolean;
+  orthographic?: boolean;
 };
 
 export function HallCanvas({
@@ -66,6 +67,7 @@ export function HallCanvas({
   fitNonce = 0,
   showGrid = mode === "edit",
   showRulers = false,
+  orthographic = false,
 }: HallCanvasProps) {
   const { resolvedTheme } = useTheme();
   const tone: MapTone = resolvedTheme === "light" ? "light" : "dark";
@@ -75,6 +77,7 @@ export function HallCanvas({
   const placing = mode === "edit" && tool !== "select" && tool !== "calibrate";
   const extent = useMemo(() => hallExtent(floor, objects), [floor, objects]);
   const controlsRef = useRef<ComponentRef<typeof MapControls>>(null);
+  const orbitTarget = useRef(new THREE.Vector3(extent.cx, 0, extent.cy));
 
   const [camNonce, setCamNonce] = useState(0);
   const [focusId, setFocusId] = useState<string | null>(highlightId ?? null);
@@ -172,6 +175,8 @@ export function HallCanvas({
         <ambientLight intensity={tone === "light" ? 0.45 : 0.22} />
         <directionalLight position={[48, 70, 28]} intensity={tone === "light" ? 0.95 : 1.15} />
         <HallScene {...sceneProps} />
+        <HallCamera orthographic={orthographic} targetRef={orbitTarget} />
+        <OrbitTargetKeep controlsRef={controlsRef} targetRef={orbitTarget} />
         <MapControls
           ref={controlsRef}
           makeDefault
@@ -183,28 +188,174 @@ export function HallCanvas({
           maxPolarAngle={Math.PI / 2 - 0.08}
           minDistance={6}
           maxDistance={280}
+          minZoom={0.15}
+          maxZoom={80}
           enabled={!navLocked && !placing}
         />
-        <CameraRig controlsRef={controlsRef} focus={focus} nonce={camNonce} />
+        <CameraRig controlsRef={controlsRef} focus={focus} nonce={camNonce} orthographic={orthographic} />
+        <RestoreOrbitTarget controlsRef={controlsRef} targetRef={orbitTarget} />
       </Canvas>
     </div>
   );
+}
+
+const HALL_FOV = 42;
+const HALL_NEAR = 0.08;
+const HALL_FAR = 800;
+const HALL_MIN_DIST = 6;
+const HALL_MAX_DIST = 280;
+
+function halfFovTan() {
+  return Math.tan((HALL_FOV * Math.PI) / 360);
+}
+
+function orthoZoomForSpan(span: number, viewH: number) {
+  return viewH / Math.max(span * 1.15, 8);
+}
+
+function applyOrthoFrustum(cam: THREE.OrthographicCamera, width: number, height: number) {
+  cam.left = width / -2;
+  cam.right = width / 2;
+  cam.top = height / 2;
+  cam.bottom = height / -2;
+  cam.near = HALL_NEAR;
+  cam.far = HALL_FAR;
+  cam.updateProjectionMatrix();
+}
+
+function matchProjection(
+  from: THREE.Camera,
+  to: THREE.Camera,
+  target: THREE.Vector3,
+  viewH: number,
+) {
+  to.position.copy(from.position);
+  to.quaternion.copy(from.quaternion);
+  to.up.copy(from.up);
+  const dist = Math.max(from.position.distanceTo(target), 0.01);
+  if (to instanceof THREE.OrthographicCamera && from instanceof THREE.PerspectiveCamera) {
+    to.zoom = viewH / Math.max(2 * halfFovTan() * dist, 1);
+    to.updateProjectionMatrix();
+    return;
+  }
+  if (to instanceof THREE.PerspectiveCamera && from instanceof THREE.OrthographicCamera) {
+    const visibleH = viewH / Math.max(from.zoom, 0.001);
+    const nextDist = THREE.MathUtils.clamp(visibleH / (2 * halfFovTan()), HALL_MIN_DIST, HALL_MAX_DIST);
+    const dir = from.position.clone().sub(target);
+    if (dir.lengthSq() > 1e-8) {
+      dir.setLength(nextDist);
+      to.position.copy(target).add(dir);
+    }
+    to.updateProjectionMatrix();
+  }
+}
+
+function OrbitTargetKeep({
+  controlsRef,
+  targetRef,
+}: {
+  controlsRef: RefObject<ComponentRef<typeof MapControls> | null>;
+  targetRef: RefObject<THREE.Vector3>;
+}) {
+  useFrame(() => {
+    const c = controlsRef.current;
+    if (c) targetRef.current.copy(c.target);
+  });
+  return null;
+}
+
+function RestoreOrbitTarget({
+  controlsRef,
+  targetRef,
+}: {
+  controlsRef: RefObject<ComponentRef<typeof MapControls> | null>;
+  targetRef: RefObject<THREE.Vector3>;
+}) {
+  const camera = useThree((s) => s.camera);
+  useLayoutEffect(() => {
+    const c = controlsRef.current;
+    if (!c) return;
+    c.target.copy(targetRef.current);
+    c.update();
+  }, [camera, controlsRef, targetRef]);
+  return null;
+}
+
+function HallCamera({
+  orthographic,
+  targetRef,
+}: {
+  orthographic: boolean;
+  targetRef: RefObject<THREE.Vector3>;
+}) {
+  const set = useThree((s) => s.set);
+  const get = useThree((s) => s.get);
+  const size = useThree((s) => s.size);
+  const persp = useRef<THREE.PerspectiveCamera | null>(null);
+  const ortho = useRef<THREE.OrthographicCamera | null>(null);
+  const lastOrtho = useRef<boolean | null>(null);
+
+  if (!persp.current) persp.current = new THREE.PerspectiveCamera(HALL_FOV, 1, HALL_NEAR, HALL_FAR);
+  if (!ortho.current) ortho.current = new THREE.OrthographicCamera(-1, 1, 1, -1, HALL_NEAR, HALL_FAR);
+
+  useLayoutEffect(() => {
+    const p = persp.current!;
+    const o = ortho.current!;
+    p.aspect = size.width / Math.max(size.height, 1);
+    p.updateProjectionMatrix();
+    applyOrthoFrustum(o, size.width, size.height);
+
+    const current = get().camera;
+    const next = orthographic ? o : p;
+    const swapped = lastOrtho.current !== null && lastOrtho.current !== orthographic;
+
+    if (lastOrtho.current === null) {
+      if (!orthographic && current instanceof THREE.PerspectiveCamera) {
+        persp.current = current;
+        lastOrtho.current = false;
+        current.fov = HALL_FOV;
+        current.near = HALL_NEAR;
+        current.far = HALL_FAR;
+        current.aspect = size.width / Math.max(size.height, 1);
+        current.updateProjectionMatrix();
+        return;
+      }
+      next.position.copy(current.position);
+      next.quaternion.copy(current.quaternion);
+      next.up.copy(current.up);
+      if (orthographic && current instanceof THREE.PerspectiveCamera) {
+        matchProjection(current, next, targetRef.current, size.height);
+      }
+    } else if (swapped && current !== next) {
+      matchProjection(current, next, targetRef.current, size.height);
+    }
+
+    lastOrtho.current = orthographic;
+    if (get().camera !== next) set({ camera: next });
+  }, [get, orthographic, set, size.height, size.width, targetRef]);
+
+  return null;
 }
 
 function CameraRig({
   controlsRef,
   focus,
   nonce,
+  orthographic,
 }: {
   controlsRef: RefObject<ComponentRef<typeof MapControls> | null>;
   focus: { cx: number; cz: number; span: number };
   nonce: number;
+  orthographic: boolean;
 }) {
+  const size = useThree((s) => s.size);
   const anim = useRef(0);
   const fromP = useRef(new THREE.Vector3());
   const fromT = useRef(new THREE.Vector3());
   const toP = useRef(new THREE.Vector3());
   const toT = useRef(new THREE.Vector3());
+  const fromZoom = useRef(1);
+  const toZoom = useRef(1);
 
   useEffect(() => {
     const c = controlsRef.current;
@@ -214,6 +365,10 @@ function CameraRig({
     fromT.current.copy(c.target);
     toP.current.set(...pose.position);
     toT.current.set(...pose.target);
+    if (c.object instanceof THREE.OrthographicCamera) {
+      fromZoom.current = c.object.zoom;
+      toZoom.current = orthoZoomForSpan(focus.span, size.height);
+    }
     anim.current = 1;
     // Animate only when nonce changes (fit / frame / floor), not when the hall is dragged.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -228,6 +383,10 @@ function CameraRig({
     const k = t * t * (3 - 2 * t);
     c.object.position.lerpVectors(fromP.current, toP.current, k);
     c.target.lerpVectors(fromT.current, toT.current, k);
+    if (orthographic && c.object instanceof THREE.OrthographicCamera) {
+      c.object.zoom = fromZoom.current + (toZoom.current - fromZoom.current) * k;
+      c.object.updateProjectionMatrix();
+    }
     c.update();
   });
   return null;
