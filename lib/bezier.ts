@@ -16,12 +16,12 @@ export function anchors(nodes: BezierNode[]): Ring {
   return nodes.map((n) => [n.x, n.y]);
 }
 
+export function nodeHasHandles(n: BezierNode): boolean {
+  return Math.abs(n.inDx) + Math.abs(n.inDy) + Math.abs(n.outDx) + Math.abs(n.outDy) > EPS;
+}
+
 export function pathHasCurves(nodes: BezierNode[]): boolean {
-  return nodes.some(
-    (n) =>
-      n.mode !== "none" ||
-      Math.abs(n.inDx) + Math.abs(n.inDy) + Math.abs(n.outDx) + Math.abs(n.outDy) > EPS,
-  );
+  return nodes.some((n) => n.mode !== "none" || nodeHasHandles(n));
 }
 
 function cubic(
@@ -270,7 +270,7 @@ export function setMirroredHandles(nodes: BezierNode[], index: number, outDx: nu
 export function toggleSmooth(nodes: BezierNode[], index: number, closed: boolean): BezierNode[] {
   const n = nodes[index];
   if (!n) return nodes;
-  if (pathHasCurves([n])) {
+  if (nodeHasHandles(n) || n.mode !== "none") {
     return nodes.map((node, i) => (i === index ? corner(n.x, n.y) : node));
   }
   const prev = nodes[(index - 1 + nodes.length) % nodes.length];
@@ -282,9 +282,15 @@ export function toggleSmooth(nodes: BezierNode[], index: number, closed: boolean
     const dy = (other.y - n.y) / 3;
     return setMirroredHandles(nodes, index, index === 0 ? dx : -dx, index === 0 ? dy : -dy);
   }
-  const tx = (next.x - prev.x) / 6;
-  const ty = (next.y - prev.y) / 6;
+  const tx = (next.x - prev.x) / 3;
+  const ty = (next.y - prev.y) / 3;
   return setMirroredHandles(nodes, index, tx, ty);
+}
+
+export function removeNode(nodes: BezierNode[], index: number, closed: boolean): BezierNode[] | null {
+  const min = closed ? 3 : 2;
+  if (index < 0 || index >= nodes.length || nodes.length <= min) return null;
+  return nodes.filter((_, i) => i !== index);
 }
 
 function splitCubic(

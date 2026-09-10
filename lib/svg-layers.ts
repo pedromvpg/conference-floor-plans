@@ -12,6 +12,9 @@ import {
 const LAYER_ATTR = "data-cm-layer";
 const NAME_ATTR = "data-cm-name";
 const LOCK_ATTR = "data-cm-locked";
+const PRIVATE_ATTR = "data-cm-private";
+const PRIVATE_STYLE_ID = "cm-hide-private";
+const PRIVATE_STYLE_CSS = `[${PRIVATE_ATTR}="1"]{display:none!important}`;
 const TX_ATTR = "data-cm-tx";
 const TY_ATTR = "data-cm-ty";
 const ROT_ATTR = "data-cm-rot";
@@ -59,7 +62,10 @@ export type SvgLayer = {
   kind: string;
   hidden: boolean;
   locked: boolean;
+  private: boolean;
   text: string | null;
+  fontSize: number | null;
+  opacity: number;
   children: SvgLayer[];
 };
 
@@ -109,6 +115,21 @@ export function appendSvgRect(markup: string, x: number, y: number, w: number, h
   return new XMLSerializer().serializeToString(root);
 }
 
+export function appendSvgEllipse(markup: string, cx: number, cy: number, rx: number, ry: number): string {
+  const root = parseRoot(markup);
+  const el = root.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+  el.setAttribute("cx", String(cx));
+  el.setAttribute("cy", String(cy));
+  el.setAttribute("rx", String(Math.max(1, rx)));
+  el.setAttribute("ry", String(Math.max(1, ry)));
+  el.setAttribute("fill", SHAPE_FILL);
+  el.setAttribute("stroke", SHAPE_STROKE);
+  el.setAttribute("stroke-width", "2");
+  root.appendChild(el);
+  ensureLayerIds(root);
+  return new XMLSerializer().serializeToString(root);
+}
+
 export function lastSvgLayerId(markup: string): string | null {
   const layers = listSvgLayers(markup);
   return layers[0]?.id ?? null;
@@ -143,6 +164,126 @@ export function appendSvgBezier(markup: string, nodes: BezierNode[], closed = tr
   return new XMLSerializer().serializeToString(root);
 }
 
+export function appendSvgText(markup: string, x: number, y: number, text = "Label", fontSize?: number): string {
+  const root = parseRoot(markup);
+  const vb = svgViewBox(markup);
+  const fs = fontSize ?? Math.max(12, Math.min(vb?.w ?? 1000, vb?.h ?? 1000) * 0.035);
+  const el = root.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "text");
+  el.setAttribute("x", String(x));
+  el.setAttribute("y", String(y));
+  el.setAttribute("fill", SHAPE_STROKE);
+  el.setAttribute("font-size", String(fs));
+  el.setAttribute("font-family", "system-ui, sans-serif");
+  el.setAttribute("font-weight", "600");
+  el.setAttribute("text-anchor", "middle");
+  el.setAttribute("dominant-baseline", "middle");
+  el.setAttribute(NAME_ATTR, text);
+  el.textContent = text;
+  root.appendChild(el);
+  ensureLayerIds(root);
+  return new XMLSerializer().serializeToString(root);
+}
+
+export function appendSvgImage(markup: string, href: string, x: number, y: number, w: number, h: number): string {
+  const root = parseRoot(markup);
+  const el = root.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "image");
+  el.setAttribute("href", href);
+  el.setAttribute("x", String(x));
+  el.setAttribute("y", String(y));
+  el.setAttribute("width", String(Math.max(1, w)));
+  el.setAttribute("height", String(Math.max(1, h)));
+  el.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  root.appendChild(el);
+  ensureLayerIds(root);
+  return new XMLSerializer().serializeToString(root);
+}
+
+export function extractClipboardPathD(text: string): string | null {
+  const t = text.trim();
+  if (!t || t.startsWith("<")) return null;
+  const quoted = t.match(/^(?:d\s*=\s*)?(["'])([\s\S]*?)\1\s*$/i);
+  if (quoted?.[2]?.trim() && /^[Mm]/.test(quoted[2].trim())) return quoted[2].trim();
+  const attr = t.match(/\bd\s*=\s*(["'])([\s\S]*?)\1/);
+  if (attr?.[2]?.trim() && /^[Mm]/.test(attr[2].trim())) return attr[2].trim();
+  if (/^[Mm]([\s,]|[-+0-9])/.test(t)) return t;
+  return null;
+}
+
+export function clipboardLooksLikeSvg(text: string): boolean {
+  if (!text.trim()) return false;
+  if (extractClipboardPathD(text)) return true;
+  return /<svg[\s>]/i.test(text) || /<path[\s>]/i.test(text);
+}
+
+function wrapSvgFragment(text: string): string {
+  const t = text.trim();
+  const svg = t.match(/<svg[\s\S]*?<\/svg>/i);
+  if (svg) return svg[0];
+  return `<svg xmlns="http://www.w3.org/2000/svg">${t}</svg>`;
+}
+
+export function pastedSvgPaths(pasted: string): { nodes: BezierNode[]; closed: boolean }[] {
+  const d = extractClipboardPathD(pasted);
+  if (d) {
+    const parsed = parseSvgPath(d);
+    return parsed && parsed.nodes.length >= 2 ? [parsed] : [];
+  }
+  if (!/<[a-z]/i.test(pasted)) return [];
+  try {
+    const guest = parseRoot(wrapSvgFragment(pasted));
+    const out: { nodes: BezierNode[]; closed: boolean }[] = [];
+    for (const el of guest.querySelectorAll("path")) {
+      const parsed = parseSvgPath(el.getAttribute("d") || "");
+      if (parsed && parsed.nodes.length >= 2) out.push(parsed);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+export function appendPastedSvg(hostMarkup: string, pasted: string): { markup: string; ids: string[] } | null {
+  const d = extractClipboardPathD(pasted);
+  if (d) {
+    const parsed = parseSvgPath(d);
+    if (!parsed || parsed.nodes.length < 2) return null;
+    const markup = appendSvgBezier(hostMarkup, parsed.nodes, parsed.closed);
+    const id = lastSvgLayerId(markup);
+    return id ? { markup, ids: [id] } : null;
+  }
+  if (!/<[a-z]/i.test(pasted)) return null;
+  try {
+    const guest = parseRoot(wrapSvgFragment(pasted));
+    const kids = graphicChildren(guest);
+    if (!kids.length) {
+      const paths = pastedSvgPaths(pasted);
+      if (!paths.length) return null;
+      let markup = hostMarkup;
+      const ids: string[] = [];
+      for (const parsed of paths) {
+        markup = appendSvgBezier(markup, parsed.nodes, parsed.closed);
+        const id = lastSvgLayerId(markup);
+        if (id) ids.push(id);
+      }
+      return ids.length ? { markup, ids } : null;
+    }
+    const before = new Set(listSvgLayers(hostMarkup).map((l) => l.id));
+    const host = parseRoot(hostMarkup);
+    const doc = host.ownerDocument;
+    for (const kid of kids) {
+      host.appendChild(doc.importNode(kid, true));
+    }
+    ensureLayerIds(host);
+    const markup = new XMLSerializer().serializeToString(host);
+    const ids = listSvgLayers(markup)
+      .map((l) => l.id)
+      .filter((id) => !before.has(id));
+    return ids.length ? { markup, ids } : null;
+  } catch {
+    return null;
+  }
+}
+
 function localName(el: Element): string {
   return el.tagName.toLowerCase().replace(/^svg:/, "");
 }
@@ -167,6 +308,11 @@ function graphicChildren(el: Element): Element[] {
 
 function isLocked(el: Element): boolean {
   const v = (el.getAttribute(LOCK_ATTR) || "").toLowerCase();
+  return v === "1" || v === "true";
+}
+
+function isPrivate(el: Element): boolean {
+  const v = (el.getAttribute(PRIVATE_ATTR) || "").toLowerCase();
   return v === "1" || v === "true";
 }
 
@@ -239,7 +385,10 @@ function toLayer(el: Element, index: number): SvgLayer {
     kind,
     hidden: isHidden(el),
     locked: isLocked(el),
+    private: isPrivate(el),
     text: kind === "text" ? (el.textContent || "").replace(/\s+/g, " ").trim() : null,
+    fontSize: kind === "text" ? Number(el.getAttribute("font-size") || "") || null : null,
+    opacity: svgOpacityFromEl(el),
     children: [...kids].map((child, i) => toLayer(child, i)).reverse(),
   };
 }
@@ -285,13 +434,19 @@ export function svgViewBox(markup: string): { x: number; y: number; w: number; h
   return null;
 }
 
-export function svgInnerMarkup(markup: string, opts?: { hoverId?: string | null; selectedId?: string | null }): string {
+export function svgInnerMarkup(
+  markup: string,
+  opts?: { hoverId?: string | null; selectedId?: string | null; selectedIds?: string[] },
+): string {
   const root = parseRoot(markup);
+  root.querySelector(`#${PRIVATE_STYLE_ID}`)?.remove();
   const hoverId = opts?.hoverId ?? null;
-  const selectedId = opts?.selectedId ?? null;
+  const selected = new Set(
+    opts?.selectedIds?.length ? opts.selectedIds : opts?.selectedId ? [opts.selectedId] : [],
+  );
   for (const el of collectNodes(root)) {
     const id = el.getAttribute(LAYER_ATTR);
-    if (id && id === selectedId) el.setAttribute("data-cm-selected", "1");
+    if (id && selected.has(id)) el.setAttribute("data-cm-selected", "1");
     else el.removeAttribute("data-cm-selected");
     if (id && id === hoverId) el.setAttribute("data-cm-hover", "1");
     else el.removeAttribute("data-cm-hover");
@@ -310,6 +465,26 @@ export function setSvgLayerHidden(markup: string, id: string, hidden: boolean): 
   if (!el) return markup;
   if (hidden) el.setAttribute("display", "none");
   else el.removeAttribute("display");
+  return new XMLSerializer().serializeToString(root);
+}
+
+export function setSvgLayerPrivate(markup: string, id: string, nextPrivate: boolean): string {
+  const root = parseRoot(markup);
+  const el = findLayer(root, id);
+  if (!el) return markup;
+  if (nextPrivate) el.setAttribute(PRIVATE_ATTR, "1");
+  else el.removeAttribute(PRIVATE_ATTR);
+  return new XMLSerializer().serializeToString(root);
+}
+
+export function svgForPublishedUnderlay(markup: string): string {
+  const root = parseRoot(markup);
+  root.querySelector(`#${PRIVATE_STYLE_ID}`)?.remove();
+  const ns = root.namespaceURI || "http://www.w3.org/2000/svg";
+  const style = root.ownerDocument.createElementNS(ns, "style");
+  style.setAttribute("id", PRIVATE_STYLE_ID);
+  style.textContent = PRIVATE_STYLE_CSS;
+  root.insertBefore(style, root.firstChild);
   return new XMLSerializer().serializeToString(root);
 }
 
@@ -426,6 +601,14 @@ export function reparentSvgLayer(
   } else {
     newParent.appendChild(el);
   }
+  return new XMLSerializer().serializeToString(root);
+}
+
+export function setSvgLayerFontSize(markup: string, id: string, fontSize: number): string {
+  const root = parseRoot(markup);
+  const el = findLayer(root, id);
+  if (!el || localName(el) !== "text") return markup;
+  el.setAttribute("font-size", String(Math.max(1, fontSize)));
   return new XMLSerializer().serializeToString(root);
 }
 
@@ -566,6 +749,26 @@ function rectBox(el: Element): { x: number; y: number; w: number; h: number } {
     w: Number(el.getAttribute("width") || 0),
     h: Number(el.getAttribute("height") || 0),
   };
+}
+
+function textFontSize(el: Element): number {
+  const n = Number(el.getAttribute("font-size") || "");
+  return Number.isFinite(n) && n > 0 ? n : 24;
+}
+
+function textBox(el: Element): { minX: number; minY: number; maxX: number; maxY: number; area: number } {
+  const fs = textFontSize(el);
+  const len = Math.max(1, (el.textContent || "").replace(/\s+/g, " ").trim().length);
+  const w = fs * len * 0.62;
+  const h = fs * 1.25;
+  const cx = Number(el.getAttribute("x") || 0);
+  const cy = Number(el.getAttribute("y") || 0);
+  const anchor = el.getAttribute("text-anchor") || "start";
+  let minX = cx;
+  if (anchor === "middle") minX = cx - w / 2;
+  else if (anchor === "end") minX = cx - w;
+  const minY = cy - h / 2;
+  return { minX, minY, maxX: minX + w, maxY: minY + h, area: w * h };
 }
 
 function rectHandlePoints(b: { x: number; y: number; w: number; h: number }): SvgPoint[] {
@@ -753,7 +956,24 @@ export function svgElementPoints(markup: string, id: string): SvgPoint[] | null 
     const pts = parsePoints(el.getAttribute("points") || "");
     return pts.length ? pts : null;
   }
-  if (kind === "rect") return rectHandlePoints(rectBox(el));
+  if (kind === "rect" || kind === "image") return rectHandlePoints(rectBox(el));
+  if (kind === "circle") {
+    const cx = Number(el.getAttribute("cx") || 0);
+    const cy = Number(el.getAttribute("cy") || 0);
+    const r = Number(el.getAttribute("r") || 0);
+    return rectHandlePoints({ x: cx - r, y: cy - r, w: r * 2, h: r * 2 });
+  }
+  if (kind === "ellipse") {
+    const cx = Number(el.getAttribute("cx") || 0);
+    const cy = Number(el.getAttribute("cy") || 0);
+    const rx = Number(el.getAttribute("rx") || 0);
+    const ry = Number(el.getAttribute("ry") || 0);
+    return rectHandlePoints({ x: cx - rx, y: cy - ry, w: rx * 2, h: ry * 2 });
+  }
+  if (kind === "text") {
+    const b = textBox(el);
+    return rectHandlePoints({ x: b.minX, y: b.minY, w: b.maxX - b.minX, h: b.maxY - b.minY });
+  }
   if (kind === "path") {
     const parsed = parseSvgPath(el.getAttribute("d") || "");
     return parsed?.nodes.map((n) => ({ x: n.x, y: n.y })) ?? null;
@@ -808,6 +1028,9 @@ function elementBox(el: Element): { minX: number; minY: number; maxX: number; ma
     const w = Number(el.getAttribute("width") || 0);
     const h = Number(el.getAttribute("height") || 0);
     return { minX: x, minY: y, maxX: x + w, maxY: y + h, area: w * h };
+  }
+  if (kind === "text") {
+    return textBox(el);
   }
   if (kind === "line") {
     const x1 = Number(el.getAttribute("x1") || 0);
@@ -910,12 +1133,44 @@ export function setSvgElementPoint(
         ? resizeRectangleCorner(nodes, index, point.x, point.y, opts?.constrain)
         : moveNode(nodes, index, point.x, point.y);
     el.setAttribute("points", formatPoints(next.map((n) => ({ x: n.x, y: n.y }))));
-  } else if (kind === "rect") {
+  } else if (kind === "rect" || kind === "image") {
     const next = applyRectHandle(rectBox(el), index, point);
     el.setAttribute("x", String(next.x));
     el.setAttribute("y", String(next.y));
     el.setAttribute("width", String(next.w));
     el.setAttribute("height", String(next.h));
+  } else if (kind === "circle" || kind === "ellipse") {
+    const cx = Number(el.getAttribute("cx") || 0);
+    const cy = Number(el.getAttribute("cy") || 0);
+    const rx = kind === "circle" ? Number(el.getAttribute("r") || 0) : Number(el.getAttribute("rx") || 0);
+    const ry = kind === "circle" ? rx : Number(el.getAttribute("ry") || 0);
+    const next = applyRectHandle({ x: cx - rx, y: cy - ry, w: rx * 2, h: ry * 2 }, index, point);
+    const ncx = next.x + next.w / 2;
+    const ncy = next.y + next.h / 2;
+    if (kind === "circle") {
+      const r = Math.max(1, Math.min(next.w, next.h) / 2);
+      el.setAttribute("cx", String(ncx));
+      el.setAttribute("cy", String(ncy));
+      el.setAttribute("r", String(r));
+    } else {
+      el.setAttribute("cx", String(ncx));
+      el.setAttribute("cy", String(ncy));
+      el.setAttribute("rx", String(Math.max(1, next.w / 2)));
+      el.setAttribute("ry", String(Math.max(1, next.h / 2)));
+    }
+  } else if (kind === "text") {
+    const b = textBox(el);
+    const next = applyRectHandle(
+      { x: b.minX, y: b.minY, w: b.maxX - b.minX, h: b.maxY - b.minY },
+      index,
+      point,
+    );
+    const fs = Math.max(1, next.h / 1.25);
+    el.setAttribute("font-size", String(fs));
+    el.setAttribute("x", String(next.x + next.w / 2));
+    el.setAttribute("y", String(next.y + next.h / 2));
+    el.setAttribute("text-anchor", "middle");
+    el.setAttribute("dominant-baseline", "middle");
   } else if (kind === "path") {
     const parsed = parseSvgPath(el.getAttribute("d") || "") ?? polylineFromPath(el.getAttribute("d") || "");
     if (!parsed) return markup;
@@ -938,6 +1193,31 @@ export function setSvgElementPoint(
       el.setAttribute("y2", String(point.y));
     }
   }
+  return new XMLSerializer().serializeToString(root);
+}
+
+function svgOpacityFromEl(el: Element): number {
+  const raw = el.getAttribute("opacity");
+  if (raw == null || raw === "") return 1;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(1, Math.max(0, n));
+}
+
+export function svgElementOpacity(markup: string, id: string): number {
+  const root = parseRoot(markup);
+  const el = findLayer(root, id);
+  if (!el) return 1;
+  return svgOpacityFromEl(el);
+}
+
+export function setSvgElementOpacity(markup: string, id: string, opacity: number): string {
+  const root = parseRoot(markup);
+  const el = findLayer(root, id);
+  if (!el) return markup;
+  const n = Math.min(1, Math.max(0, Number.isFinite(opacity) ? opacity : 1));
+  if (n >= 1) el.removeAttribute("opacity");
+  else el.setAttribute("opacity", String(n));
   return new XMLSerializer().serializeToString(root);
 }
 
@@ -974,4 +1254,4 @@ export function layerAttrSelector(id: string): string {
   return `[${LAYER_ATTR}="${CSS.escape(id)}"]`;
 }
 
-export { LAYER_ATTR, LOCK_ATTR };
+export { LAYER_ATTR, LOCK_ATTR, PRIVATE_ATTR };

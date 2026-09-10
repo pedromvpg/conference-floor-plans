@@ -311,6 +311,31 @@ export function snapToPixel(x: number, y: number, cal: Calibration | null): { x:
   return { x: n.x, y: n.y };
 }
 
+/** Snap a point to other anchors on the same path (x and y independently). */
+export function snapToShapeNodes(
+  x: number,
+  y: number,
+  nodes: { x: number; y: number }[],
+  skipIndex: number,
+  threshold: number,
+): { x: number; y: number; gx: number[]; gy: number[] } {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    if (i === skipIndex) continue;
+    xs.push(nodes[i].x);
+    ys.push(nodes[i].y);
+  }
+  const sx = xs.length ? snapScalar(x, xs, threshold) : null;
+  const sy = ys.length ? snapScalar(y, ys, threshold) : null;
+  return {
+    x: sx ?? x,
+    y: sy ?? y,
+    gx: sx != null ? [sx] : [],
+    gy: sy != null ? [sy] : [],
+  };
+}
+
 export function snapScalar(value: number, targets: number[], threshold: number): number | null {
   let best: number | null = null;
   let bestD = threshold;

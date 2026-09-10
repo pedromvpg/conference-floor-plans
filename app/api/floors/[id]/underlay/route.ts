@@ -3,6 +3,7 @@ import { getStore } from "@/lib/get-store";
 import { requireEditor } from "@/lib/auth";
 import { newId } from "@/lib/store";
 import { calibrationFromPrimary, primaryFloor } from "@/lib/floor-settings";
+import { svgForPublishedUnderlay } from "@/lib/svg-layers";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -87,10 +88,11 @@ export async function PUT(req: Request, ctx: Ctx) {
     await requireEditor();
     const { id } = await ctx.params;
     const body = (await req.json()) as { svg?: string };
-    const svg = typeof body.svg === "string" ? body.svg : "";
-    if (!svg.includes("<svg")) {
+    const raw = typeof body.svg === "string" ? body.svg : "";
+    if (!raw.includes("<svg")) {
       return Response.json({ error: "svg required" }, { status: 400 });
     }
+    const svg = svgForPublishedUnderlay(raw);
     const store = getStore();
     const existing = await store.getFloor(id);
     if (!existing) return Response.json({ error: "Floor not found" }, { status: 404 });

@@ -38,7 +38,7 @@ export type LibraryAssetKind = "texture" | "model";
 
 export type ViewMode = "plan" | "hall";
 
-export type Tool = "select" | "rect" | "polygon" | "icon" | "calibrate";
+export type Tool = "select" | "rect" | "ellipse" | "polygon" | "icon" | "calibrate" | "label" | "image";
 
 export type Ring = [number, number][];
 
