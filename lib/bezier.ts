@@ -684,3 +684,23 @@ export function objectShape(obj: { polygon: Ring | null; path?: BezierNode[] | n
 export function commitShape(path: BezierNode[], closed = true): { polygon: Ring; path: BezierNode[] } {
   return { polygon: tessellate(path, closed), path };
 }
+
+/** Cubic Bézier ellipse (κ ≈ 0.5523). */
+export function ellipseBezier(cx: number, cy: number, rx: number, ry: number): BezierNode[] {
+  const kx = Math.max(0, rx) * 0.5522847498307936;
+  const ky = Math.max(0, ry) * 0.5522847498307936;
+  return [
+    { x: cx + rx, y: cy, inDx: 0, inDy: -ky, outDx: 0, outDy: ky, mode: "mirrored" },
+    { x: cx, y: cy + ry, inDx: kx, inDy: 0, outDx: -kx, outDy: 0, mode: "mirrored" },
+    { x: cx - rx, y: cy, inDx: 0, inDy: ky, outDx: 0, outDy: -ky, mode: "mirrored" },
+    { x: cx, y: cy - ry, inDx: -kx, inDy: 0, outDx: kx, outDy: 0, mode: "mirrored" },
+  ];
+}
+
+export function ellipseFromCorners(x0: number, y0: number, x1: number, y1: number): BezierNode[] {
+  const minX = Math.min(x0, x1);
+  const minY = Math.min(y0, y1);
+  const w = Math.abs(x1 - x0);
+  const h = Math.abs(y1 - y0);
+  return ellipseBezier(minX + w / 2, minY + h / 2, w / 2, h / 2);
+}

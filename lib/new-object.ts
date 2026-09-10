@@ -1,13 +1,14 @@
 import { hallDefaults } from "./appearance";
 import { amenityLabel } from "./amenities";
 import { nowIso, newId } from "./store";
-import type { AmenityType, Appearance, MapObject, PinKind, Ring } from "./types";
+import type { AmenityType, Appearance, BezierNode, MapObject, PinKind, Ring } from "./types";
 import { MAP_PIN_META } from "./types";
 
 export function newMapObject(input: {
   floorId: string;
   kind: MapObject["kind"];
   polygon?: Ring | null;
+  path?: BezierNode[] | null;
   x?: number | null;
   y?: number | null;
   name?: string;
@@ -24,6 +25,7 @@ export function newMapObject(input: {
     floorId: input.floorId,
     kind: input.kind,
     polygon: input.polygon ?? null,
+    path: input.path ?? null,
     x: input.x ?? null,
     y: input.y ?? null,
     rotation: 0,
