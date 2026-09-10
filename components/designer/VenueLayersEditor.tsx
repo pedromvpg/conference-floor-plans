@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronRight, Eye, EyeOff, Group, GripVertical, Lock, LockOpen, Trash2, Ungroup } from "lucide-react";
+import { ChevronRight, Eye, EyeOff, Globe, GlobeOff, GripVertical, Lock, LockOpen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { SvgLayer } from "@/lib/svg-layers";
@@ -15,13 +15,13 @@ type Props = {
   onSelect: (id: string, additive?: boolean) => void;
   onToggleHidden: (id: string, hidden: boolean) => void;
   onToggleLocked: (id: string, locked: boolean) => void;
+  onTogglePrivate: (id: string, nextPrivate: boolean) => void;
   onDelete: (id: string) => void;
   onReorder: (parentId: string | null, frontToBackIds: string[]) => void;
   onReparent: (id: string, newParentId: string | null, beforeId: string | null) => void;
   onRename: (id: string, name: string) => void;
   onRenameText: (id: string, text: string) => void;
-  onGroup: () => void;
-  onUngroup: (id: string) => void;
+  onOpacity: (id: string, opacity: number) => void;
 };
 
 function isNestable(kind: string) {
@@ -63,6 +63,7 @@ function LayerRows({
   onSelect,
   onToggleHidden,
   onToggleLocked,
+  onTogglePrivate,
   onDelete,
   onReorder,
   onReparent,
@@ -88,6 +89,7 @@ function LayerRows({
   onSelect: (id: string, additive?: boolean) => void;
   onToggleHidden: (id: string, hidden: boolean) => void;
   onToggleLocked: (id: string, locked: boolean) => void;
+  onTogglePrivate: (id: string, nextPrivate: boolean) => void;
   onDelete: (id: string) => void;
   onReorder: (parentId: string | null, frontToBackIds: string[]) => void;
   onReparent: (id: string, newParentId: string | null, beforeId: string | null) => void;
@@ -186,14 +188,15 @@ function LayerRows({
                 selected && "border-primary bg-muted",
                 overId === layer.id && dragId && dragId !== layer.id && "border-primary",
                 layer.hidden && "opacity-50",
-                layer.locked && !layer.hidden && "opacity-70",
+                layer.private && !layer.hidden && "opacity-70",
+                layer.locked && !layer.hidden && !layer.private && "opacity-70",
               )}
-              style={{ paddingLeft: 2 + depth * 8 }}
+              style={{ paddingLeft: depth * 12 }}
             >
               {hasKids ? (
                 <button
                   type="button"
-                  className="flex size-4 items-center justify-center text-muted-foreground"
+                  className="-ml-0.5 flex size-4 shrink-0 items-center justify-center text-muted-foreground"
                   aria-label={open ? "Collapse" : "Expand"}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -205,9 +208,7 @@ function LayerRows({
                 >
                   <ChevronRight className={cn("size-4 shrink-0 transition-transform", open && "rotate-90")} strokeWidth={1.5} />
                 </button>
-              ) : (
-                <span className="size-4" />
-              )}
+              ) : null}
               <span className="cursor-grab text-muted-foreground active:cursor-grabbing" aria-hidden>
                 <GripVertical className="size-4 shrink-0" strokeWidth={1.5} />
               </span>
@@ -247,6 +248,18 @@ function LayerRows({
                 type="button"
                 size="icon-xs"
                 variant="ghost"
+                aria-label={layer.private ? `Show ${layer.name} on the published map` : `Hide ${layer.name} from the published map`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTogglePrivate(layer.id, !layer.private);
+                }}
+              >
+                {layer.private ? <GlobeOff strokeWidth={1.5} /> : <Globe strokeWidth={1.5} />}
+              </Button>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
                 aria-label={layer.locked ? `Unlock ${layer.name}` : `Lock ${layer.name}`}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -281,7 +294,7 @@ function LayerRows({
               </Button>
             </div>
             {hasKids && open ? (
-              <ul>
+              <ul className="pl-0">
                 <LayerRows
                   layers={layer.children}
                   allLayers={allLayers}
@@ -303,6 +316,7 @@ function LayerRows({
                   onSelect={onSelect}
                   onToggleHidden={onToggleHidden}
                   onToggleLocked={onToggleLocked}
+                  onTogglePrivate={onTogglePrivate}
                   onDelete={onDelete}
                   onReorder={onReorder}
                   onReparent={onReparent}
@@ -325,13 +339,13 @@ export function VenueLayersEditor({
   onSelect,
   onToggleHidden,
   onToggleLocked,
+  onTogglePrivate,
   onDelete,
   onReorder,
   onReparent,
   onRename,
   onRenameText,
-  onGroup,
-  onUngroup,
+  onOpacity,
 }: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -340,7 +354,6 @@ export function VenueLayersEditor({
   const [draftName, setDraftName] = useState("");
   const selectedId = selectedIds[selectedIds.length - 1] ?? null;
   const selected = selectedId ? findLayer(layers, selectedId) : null;
-  const canUngroup = selected ? isNestable(selected.kind) : false;
 
   useEffect(() => {
     if (!selectedId) return;
@@ -367,22 +380,7 @@ export function VenueLayersEditor({
 
   return (
     <div className="mt-2">
-      <div className="mb-1.5 flex items-center gap-1">
-        <Button size="sm" variant="outline" disabled={selectedIds.length < 1} onClick={onGroup}>
-          <Group strokeWidth={1.5} />
-          Group
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!canUngroup}
-          onClick={() => selected && onUngroup(selected.id)}
-        >
-          <Ungroup strokeWidth={1.5} />
-          Ungroup
-        </Button>
-      </div>
-      <ul className="space-y-0.5" aria-label="Venue drawing layers">
+      <ul className="space-y-0.5 pl-0" aria-label="Venue drawing layers">
         <LayerRows
           layers={layers}
           allLayers={layers}
@@ -404,6 +402,7 @@ export function VenueLayersEditor({
           onSelect={onSelect}
           onToggleHidden={onToggleHidden}
           onToggleLocked={onToggleLocked}
+          onTogglePrivate={onTogglePrivate}
           onDelete={onDelete}
           onReorder={onReorder}
           onReparent={onReparent}
@@ -441,6 +440,21 @@ export function VenueLayersEditor({
               Shift-click to select several layers. Drag onto a group to nest. Double-click a name to rename.
             </p>
           )}
+          <div>
+            <label className="text-[10px] text-muted-foreground" htmlFor="venue-layer-opacity">
+              Opacity {Math.round(selected.opacity * 100)}%
+            </label>
+            <input
+              id="venue-layer-opacity"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={selected.opacity}
+              onChange={(e) => onOpacity(selected.id, Number(e.target.value))}
+              className="mt-0.5 w-full accent-primary"
+            />
+          </div>
           <Button
             size="sm"
             variant="destructive"
