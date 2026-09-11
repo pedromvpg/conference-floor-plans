@@ -20,8 +20,6 @@ type Props = {
   onReorder: (parentId: string | null, frontToBackIds: string[]) => void;
   onReparent: (id: string, newParentId: string | null, beforeId: string | null) => void;
   onRename: (id: string, name: string) => void;
-  onRenameText: (id: string, text: string) => void;
-  onOpacity: (id: string, opacity: number) => void;
 };
 
 function isNestable(kind: string) {
@@ -344,8 +342,6 @@ export function VenueLayersEditor({
   onReorder,
   onReparent,
   onRename,
-  onRenameText,
-  onOpacity,
 }: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -353,7 +349,6 @@ export function VenueLayersEditor({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const selectedId = selectedIds[selectedIds.length - 1] ?? null;
-  const selected = selectedId ? findLayer(layers, selectedId) : null;
 
   useEffect(() => {
     if (!selectedId) return;
@@ -409,64 +404,6 @@ export function VenueLayersEditor({
           onRename={onRename}
         />
       </ul>
-      {selected ? (
-        <div className="mt-2 space-y-1.5 border-t border-border pt-2">
-          <p className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">{selected.kind}</p>
-          <div>
-            <label className="text-[10px] text-muted-foreground" htmlFor="venue-layer-name">
-              Name
-            </label>
-            <Input
-              id="venue-layer-name"
-              className="mt-0.5"
-              value={selected.name}
-              onChange={(e) => onRename(selected.id, e.target.value)}
-            />
-          </div>
-          {selected.text != null ? (
-            <div>
-              <label className="text-[10px] text-muted-foreground" htmlFor="venue-layer-text">
-                Label
-              </label>
-              <Input
-                id="venue-layer-text"
-                className="mt-0.5"
-                value={selected.text}
-                onChange={(e) => onRenameText(selected.id, e.target.value)}
-              />
-            </div>
-          ) : (
-            <p className="text-[11px] text-muted-foreground">
-              Shift-click to select several layers. Drag onto a group to nest. Double-click a name to rename.
-            </p>
-          )}
-          <div>
-            <label className="text-[10px] text-muted-foreground" htmlFor="venue-layer-opacity">
-              Opacity {Math.round(selected.opacity * 100)}%
-            </label>
-            <input
-              id="venue-layer-opacity"
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={selected.opacity}
-              onChange={(e) => onOpacity(selected.id, Number(e.target.value))}
-              className="mt-0.5 w-full accent-primary"
-            />
-          </div>
-          <Button
-            size="sm"
-            variant="destructive"
-            className="mt-1"
-            onClick={() => onDelete(selected.id)}
-          >
-            Delete
-          </Button>
-        </div>
-      ) : (
-        <p className="mt-2 text-[11px] text-muted-foreground">Click a layer or an element on the drawing to edit it.</p>
-      )}
     </div>
   );
 }

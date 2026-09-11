@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -41,7 +41,7 @@ import {
 import { AMENITIES, amenityLabel } from "@/lib/amenities";
 import { STAGE_PRESET_METERS, hallDefaults, resolveAppearance } from "@/lib/appearance";
 import { displayLogoUrl } from "@/lib/hall";
-import { DEFAULT_FLOOR_BASEMAP, BASEMAP_COORD_STEP, bearingSliderValue, roundBasemapCoord, wrapBearingDeg } from "@/lib/basemap";
+import { DEFAULT_FLOOR_BASEMAP, BASEMAP_COORD_STEP, bearingSliderValue, parseLatLngPaste, roundBasemapCoord, wrapBearingDeg } from "@/lib/basemap";
 import { withInheritedFloorSettings, inheritedSettingsTargetId } from "@/lib/floor-settings";
 import { floorSizeMeters, metersFromPixels, ringBounds, scaleRingToSize } from "@/lib/geometry";
 import { commitShape, objectShape, rotateBezier, translateBezier, type BezierNode } from "@/lib/bezier";
@@ -200,10 +200,21 @@ function isTypingTarget(el: EventTarget | null) {
 function paintToHex(value: string, fallback: string): string {
   const v = value.trim();
   if (/^#[0-9a-fA-F]{6}$/.test(v)) return v;
+  if (/^#[0-9a-fA-F]{8}$/.test(v)) return v.slice(0, 7);
   if (/^#[0-9a-fA-F]{3}$/.test(v)) {
     return `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`;
   }
+  const rgb = v.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (rgb) {
+    const hex = (n: string) => Number(n).toString(16).padStart(2, "0");
+    return `#${hex(rgb[1])}${hex(rgb[2])}${hex(rgb[3])}`;
+  }
   return fallback;
+}
+
+function paintIsNone(value: string): boolean {
+  const v = value.trim().toLowerCase();
+  return v === "" || v === "none" || v === "transparent";
 }
 
 function parseCopiedObjects(text: string): MapObject[] | null {
@@ -320,6 +331,12 @@ function parseDim(raw: string): number {
   return Number(raw.trim().replace(",", "."));
 }
 
+function sliderRangeStyle(min: number, max: number, value: number): CSSProperties {
+  const t = (Number(value) - min) / (max - min);
+  const pct = Number.isFinite(t) ? Math.min(100, Math.max(0, t * 100)) : 0;
+  return { "--range": `${pct}%` } as CSSProperties;
+}
+
 export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
@@ -347,14 +364,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"objects" | "furniture" | "venue" | "map">("objects");
-  const [derivedMapZoom, setDerivedMapZoom] = useState<number | null>(null);
-  const [mapZoomTo, setMapZoomTo] = useState<{ zoom: number; nonce: number } | null>(null);
   const [alignDrawingToMap, setAlignDrawingToMap] = useState(false);
-  const onBasemapDerivedZoom = useCallback((z: number) => {
-    if (!Number.isFinite(z)) return;
-    const next = Math.round(z * 100) / 100;
-    setDerivedMapZoom((prev) => (prev === next ? prev : next));
-  }, []);
   const [objectFilter, setObjectFilter] = useState<ObjectFilter>("all");
   const [objectSort, setObjectSort] = useState<ObjectSort>("name");
   const [objectSortDir, setObjectSortDir] = useState<SortDir>("asc");
@@ -666,6 +676,14 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     }
   }
 
+  function onBasemapCoordPaste(e: ClipboardEvent<HTMLInputElement>) {
+    const pair = parseLatLngPaste(e.clipboardData.getData("text"));
+    if (!pair) return;
+    e.preventDefault();
+    const prev = floor?.basemap ?? DEFAULT_FLOOR_BASEMAP;
+    void patchBasemap({ ...prev, enabled: true, lat: pair.lat, lng: pair.lng });
+  }
+
   async function undo() {
     if (coalesceRef.current) {
       clearTimeout(coalesceRef.current);
@@ -754,7 +772,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     });
   }, [bundle.sponsors, sponsorQuery, sponsorFilter, sponsorSort, sponsorSortDir, placedBoothBySponsorId]);
 
-  const hasSelection = selectedIds.length > 0 || Boolean(selectedVenueEl);
+  const hasSelection =
+    selectedIds.length > 0 || (sidebarTab === "venue" && Boolean(selectedVenueEl));
 
   const patchObject = useCallback(async (obj: MapObject) => {
     markHistory();
@@ -1352,6 +1371,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       }
       if (e.key === "v" || e.key === "V") {
         setSidebarTab("objects");
+        selectVenueLayer(null);
         if (selectedId === VENUE_ID) setSelectedIds([]);
         setTool("select");
       }
@@ -1378,6 +1398,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           return;
         }
         setSidebarTab("objects");
+        selectVenueLayer(null);
         setStampAppearance(null);
         setStampModelId(null);
         setPresetId("none");
@@ -1389,6 +1410,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           return;
         }
         setSidebarTab("objects");
+        selectVenueLayer(null);
         setTool("polygon");
       }
       if (e.key === "e" || e.key === "E") {
@@ -1397,6 +1419,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           return;
         }
         setSidebarTab("objects");
+        selectVenueLayer(null);
         setStampAppearance(null);
         setStampModelId(null);
         setPresetId("none");
@@ -1408,6 +1431,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       }
       if (e.key === "i" || e.key === "I") {
         setSidebarTab("objects");
+        selectVenueLayer(null);
         setPinKind("amenity");
         setTool("icon");
       }
@@ -1660,21 +1684,22 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 onClick={() => {
                   setSidebarTab(id);
                   if (id === "venue") {
-                    setSelectedIds([VENUE_ID]);
+                    if (selectedId === VENUE_ID) setSelectedIds([]);
                     setTool("select");
                     setPresetId("none");
-                  } else if (id === "map") {
-                    if (selectedId === VENUE_ID) setSelectedIds([]);
-                    if (tool === "calibrate" || tool === "rect" || tool === "ellipse" || tool === "polygon" || tool === "label" || tool === "image") setTool("select");
-                    if (tool === "icon" && pinKind === "amenity") setTool("select");
-                  } else if (id === "furniture") {
-                    if (selectedId === VENUE_ID) setSelectedIds([]);
-                    if (tool === "calibrate" || tool === "rect" || tool === "ellipse" || tool === "polygon" || tool === "label" || tool === "image") setTool("select");
-                    if (tool === "icon") setTool("select");
                   } else {
+                    selectVenueLayer(null);
                     if (selectedId === VENUE_ID) setSelectedIds([]);
-                    if (tool === "calibrate") setTool("select");
-                    if (tool === "icon" && pinKind !== "amenity") setTool("select");
+                    if (id === "map") {
+                      if (tool === "calibrate" || tool === "rect" || tool === "ellipse" || tool === "polygon" || tool === "label" || tool === "image") setTool("select");
+                      if (tool === "icon" && pinKind === "amenity") setTool("select");
+                    } else if (id === "furniture") {
+                      if (tool === "calibrate" || tool === "rect" || tool === "ellipse" || tool === "polygon" || tool === "label" || tool === "image") setTool("select");
+                      if (tool === "icon") setTool("select");
+                    } else {
+                      if (tool === "calibrate") setTool("select");
+                      if (tool === "icon" && pinKind !== "amenity") setTool("select");
+                    }
                   }
                 }}
               >
@@ -1854,7 +1879,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   <p className="text-[11px] text-primary">
                     {viewMode === "hall"
                       ? "Switch to Plan to trace a polygon. Esc cancels."
-                      : "Click a corner; drag for Bézier handles. Click the first point or Enter to close. Alt-drag breaks handle symmetry."}
+                      : "Click a corner; drag for Bézier handles. Hold Shift to lock 0° / 45° / 90°. Click the first point to close, or Enter / double-click to leave it open. Alt-drag breaks handle symmetry."}
                   </p>
                 ) : null}
                 {tool === "icon" && pinKind === "amenity" ? (
@@ -1965,6 +1990,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                           type="button"
                           data-active={selectedIds.includes(o.id)}
                           onClick={(e) => {
+                            selectVenueLayer(null);
                             if (e.shiftKey) {
                               setSelectedIds((ids) =>
                                 ids.includes(o.id) ? ids.filter((id) => id !== o.id) : [...ids.filter((id) => id !== VENUE_ID), o.id],
@@ -2038,16 +2064,17 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   <input
                     id="basemap-opacity"
                     type="range"
-                    min="0.15"
+                    min="0"
                     max="1"
                     step="0.05"
                     disabled={!floor?.basemap?.enabled}
                     value={floor?.basemap?.opacity ?? DEFAULT_FLOOR_BASEMAP.opacity}
+                    style={sliderRangeStyle(0, 1, floor?.basemap?.opacity ?? DEFAULT_FLOOR_BASEMAP.opacity)}
                     onChange={(e) => {
                       const prev = floor?.basemap ?? DEFAULT_FLOOR_BASEMAP;
                       void patchBasemap({ ...prev, enabled: true, opacity: Number(e.target.value) });
                     }}
-                    className="mt-1 w-full accent-primary"
+                    className="chrome-slider mt-1 w-full"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-1">
@@ -2061,6 +2088,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       step={BASEMAP_COORD_STEP}
                       disabled={!floor?.basemap?.enabled}
                       value={floor?.basemap?.lat ?? ""}
+                      onPaste={onBasemapCoordPaste}
                       onChange={(e) => {
                         const prev = floor?.basemap ?? DEFAULT_FLOOR_BASEMAP;
                         const lat = Number(e.target.value);
@@ -2079,6 +2107,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       step={BASEMAP_COORD_STEP}
                       disabled={!floor?.basemap?.enabled}
                       value={floor?.basemap?.lng ?? ""}
+                      onPaste={onBasemapCoordPaste}
                       onChange={(e) => {
                         const prev = floor?.basemap ?? DEFAULT_FLOOR_BASEMAP;
                         const lng = Number(e.target.value);
@@ -2105,43 +2134,13 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     step="0.5"
                     disabled={!floor?.basemap?.enabled}
                     value={bearingSliderValue(floor?.basemap?.bearing ?? 0)}
+                    style={sliderRangeStyle(-180, 180, bearingSliderValue(floor?.basemap?.bearing ?? 0))}
                     onChange={(e) => {
                       const prev = floor?.basemap ?? DEFAULT_FLOOR_BASEMAP;
                       const bearing = wrapBearingDeg(Number(e.target.value));
                       void patchBasemap({ ...prev, enabled: true, bearing });
                     }}
-                    className="mt-1 w-full accent-primary"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="basemap-zoom" className="text-[10px] text-muted-foreground">
-                    Zoom
-                  </Label>
-                  <Input
-                    id="basemap-zoom"
-                    type="number"
-                    min="1"
-                    max="22"
-                    step="0.1"
-                    className="tabular-nums"
-                    disabled={!floor?.basemap?.enabled}
-                    value={derivedMapZoom ?? floor?.basemap?.zoom ?? ""}
-                    onChange={(e) => {
-                      const zoom = Number(e.target.value);
-                      if (!Number.isFinite(zoom)) return;
-                      setDerivedMapZoom(zoom);
-                    }}
-                    onBlur={(e) => {
-                      const zoom = Number(e.target.value);
-                      if (!Number.isFinite(zoom)) return;
-                      setMapZoomTo((n) => ({ zoom: Math.min(22, Math.max(1, zoom)), nonce: (n?.nonce ?? 0) + 1 }));
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key !== "Enter") return;
-                      const zoom = Number((e.target as HTMLInputElement).value);
-                      if (!Number.isFinite(zoom)) return;
-                      setMapZoomTo((n) => ({ zoom: Math.min(22, Math.max(1, zoom)), nonce: (n?.nonce ?? 0) + 1 }));
-                    }}
+                    className="chrome-slider mt-1 w-full"
                   />
                 </div>
                 <div className="space-y-2 border-t border-border pt-3">
@@ -2392,12 +2391,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     onRename={(id, name) => {
                       if (venueSvg) commitVenueSvg(setSvgLayerName(venueSvg, id, name));
                     }}
-                    onRenameText={(id, text) => {
-                      if (venueSvg) commitVenueSvg(setSvgLayerText(venueSvg, id, text));
-                    }}
-                    onOpacity={(id, opacity) => {
-                      if (venueSvg) commitVenueSvg(setSvgElementOpacity(venueSvg, id, opacity));
-                    }}
                   />
                 </div>
               </div>
@@ -2427,7 +2420,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 showGrid={showGrid}
                 showRulers={showRulers}
                 orthographic={orthographic}
-                onSelect={(id) => setSelectedIds(id ? [id] : [])}
+                venueSvg={venueSvg}
+                onSelect={(id) => {
+                  selectVenueLayer(null);
+                  setSelectedIds(id ? [id] : []);
+                }}
                 onChangeObject={(o) => void patchObject(o)}
                 onCreateObject={(o) => {
                   void createObject(o);
@@ -2464,10 +2461,14 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   const prev = floor.basemap ?? DEFAULT_FLOOR_BASEMAP;
                   void patchBasemap({ ...prev, enabled: true, ...next });
                 }}
-                onBasemapDerivedZoom={onBasemapDerivedZoom}
-                basemapZoomTo={mapZoomTo}
-                onSelect={(id) => setSelectedIds(id ? [id] : [])}
-                onSelectIds={setSelectedIds}
+                onSelect={(id) => {
+                  if (id) selectVenueLayer(null);
+                  setSelectedIds(id ? [id] : []);
+                }}
+                onSelectIds={(ids) => {
+                  if (ids.length) selectVenueLayer(null);
+                  setSelectedIds(ids);
+                }}
                 onChangeObject={(o) => void patchObject(o)}
                 onChangeObjects={(objs) => void patchObjects(objs)}
                 onCreateObject={(o) => {
@@ -2520,7 +2521,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           {sidebarTab === "venue" && (tool === "rect" || tool === "ellipse" || tool === "polygon") ? (
             <div className="pointer-events-none absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-md border border-primary/40 bg-background/80 px-3 py-1.5 text-xs text-foreground">
               {tool === "polygon"
-                ? "Click to add a corner; click-drag for curves. Enter closes. Hold Space to pan."
+                ? "Click to add a corner; click-drag for curves. Shift locks 0° / 45° / 90°. Click first point to close, Enter or double-click to leave open. Hold Space to pan."
                 : tool === "ellipse"
                   ? "Drag an ellipse on the venue. Hold Shift for a circle. Hold Space to pan."
                   : "Drag a rectangle on the venue. Hold Space to pan."}
@@ -2532,7 +2533,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           <ScrollArea className="min-h-0 min-w-0 w-full flex-1">
           <div className="w-full min-w-0 max-w-full overflow-x-hidden border-b border-border p-3">
             <p className="chrome-kicker">Inspector</p>
-            {selectedVenueLayer && venueSvg ? (
+            {sidebarTab === "venue" && selectedVenueLayer && venueSvg ? (
               <div className="mt-2 min-w-0 space-y-2">
                 <p className="font-mono text-[10px] text-muted-foreground uppercase">{selectedVenueLayer.kind}</p>
                 <div>
@@ -2546,16 +2547,20 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   />
                 </div>
                 {selectedVenueMetrics ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <p className="text-[10px] text-muted-foreground">Size</p>
-                      <p className="text-sm tabular-nums">{formatSize(selectedVenueMetrics.w, selectedVenueMetrics.h, units, 2)}</p>
+                  <dl className="space-y-1">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <dt className="shrink-0 text-[10px] text-muted-foreground">Size</dt>
+                      <dd className="min-w-0 text-right font-mono text-[11px] tabular-nums">
+                        {formatSize(selectedVenueMetrics.w, selectedVenueMetrics.h, units, 2)}
+                      </dd>
                     </div>
-                    <div>
-                      <p className="text-[10px] text-muted-foreground">Area</p>
-                      <p className="text-sm tabular-nums">{formatArea(selectedVenueMetrics.area, units, 2)}</p>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <dt className="shrink-0 text-[10px] text-muted-foreground">Area</dt>
+                      <dd className="min-w-0 text-right font-mono text-[11px] tabular-nums">
+                        {formatArea(selectedVenueMetrics.area, units, 2)}
+                      </dd>
                     </div>
-                  </div>
+                  </dl>
                 ) : null}
                 {selectedVenueLayer.text != null ? (
                   <div>
@@ -2590,49 +2595,126 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 ) : null}
                 {selectedVenueLayer.kind !== "image" && selectedVenuePaint ? (
                   <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Label className="w-12 text-[10px] font-normal text-muted-foreground">Fill</Label>
-                      <input
-                        type="color"
-                        aria-label="Fill color"
-                        value={paintToHex(selectedVenuePaint.fill, "#f4f0e6")}
-                        onChange={(e) =>
-                          commitVenueSvg(setSvgElementPaint(venueSvg, selectedVenueLayer.id, { fill: e.target.value }))
-                        }
-                        className="size-8 shrink-0 cursor-pointer border border-input bg-background p-0.5"
-                      />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          commitVenueSvg(setSvgElementPaint(venueSvg, selectedVenueLayer.id, { fill: "none" }))
-                        }
-                      >
-                        None
-                      </Button>
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Label className="w-12 shrink-0 text-[10px] font-normal text-muted-foreground">Fill</Label>
+                        <input
+                          type="color"
+                          aria-label="Fill color"
+                          value={paintToHex(selectedVenuePaint.fill, "#f4f0e6")}
+                          onChange={(e) =>
+                            commitVenueSvg(
+                              setSvgElementPaint(venueSvg, selectedVenueLayer.id, {
+                                fill: e.target.value,
+                                fillOpacity: selectedVenuePaint.fillOpacity,
+                              }),
+                            )
+                          }
+                          className="size-8 shrink-0 cursor-pointer border border-input bg-background p-0.5"
+                        />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            commitVenueSvg(setSvgElementPaint(venueSvg, selectedVenueLayer.id, { fill: "none" }))
+                          }
+                        >
+                          None
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-2 pl-14">
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.05"
+                          aria-label="Fill opacity"
+                          disabled={paintIsNone(selectedVenuePaint.fill)}
+                          value={selectedVenuePaint.fillOpacity}
+                          style={sliderRangeStyle(0, 1, selectedVenuePaint.fillOpacity)}
+                          onChange={(e) =>
+                            commitVenueSvg(
+                              setSvgElementPaint(venueSvg, selectedVenueLayer.id, {
+                                fillOpacity: Number(e.target.value),
+                              }),
+                            )
+                          }
+                          className="chrome-slider w-full disabled:opacity-40"
+                        />
+                        <span className="w-8 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
+                          {Math.round(selectedVenuePaint.fillOpacity * 100)}%
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Label className="w-12 text-[10px] font-normal text-muted-foreground">Stroke</Label>
-                      <input
-                        type="color"
-                        aria-label="Stroke color"
-                        value={paintToHex(selectedVenuePaint.stroke, "#1a1a1a")}
-                        onChange={(e) =>
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Label className="w-12 shrink-0 text-[10px] font-normal text-muted-foreground">Stroke</Label>
+                        <input
+                          type="color"
+                          aria-label="Stroke color"
+                          value={paintToHex(selectedVenuePaint.stroke, "#1a1a1a")}
+                          onChange={(e) =>
+                            commitVenueSvg(
+                              setSvgElementPaint(venueSvg, selectedVenueLayer.id, {
+                                stroke: e.target.value,
+                                strokeOpacity: selectedVenuePaint.strokeOpacity,
+                              }),
+                            )
+                          }
+                          className="size-8 shrink-0 cursor-pointer border border-input bg-background p-0.5"
+                        />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            commitVenueSvg(setSvgElementPaint(venueSvg, selectedVenueLayer.id, { stroke: "none" }))
+                          }
+                        >
+                          None
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-2 pl-14">
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.05"
+                          aria-label="Stroke opacity"
+                          disabled={paintIsNone(selectedVenuePaint.stroke)}
+                          value={selectedVenuePaint.strokeOpacity}
+                          style={sliderRangeStyle(0, 1, selectedVenuePaint.strokeOpacity)}
+                          onChange={(e) =>
+                            commitVenueSvg(
+                              setSvgElementPaint(venueSvg, selectedVenueLayer.id, {
+                                strokeOpacity: Number(e.target.value),
+                              }),
+                            )
+                          }
+                          className="chrome-slider w-full disabled:opacity-40"
+                        />
+                        <span className="w-8 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
+                          {Math.round(selectedVenuePaint.strokeOpacity * 100)}%
+                        </span>
+                      </div>
+                    </div>
+                    <div>
+                      <Label htmlFor="insp-venue-stroke-w" className="text-[10px] text-muted-foreground">
+                        Stroke thickness
+                      </Label>
+                      <Input
+                        id="insp-venue-stroke-w"
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={selectedVenuePaint.strokeWidth}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          if (!Number.isFinite(n) || n < 0) return;
                           commitVenueSvg(
-                            setSvgElementPaint(venueSvg, selectedVenueLayer.id, { stroke: e.target.value }),
-                          )
-                        }
-                        className="size-8 shrink-0 cursor-pointer border border-input bg-background p-0.5"
+                            setSvgElementPaint(venueSvg, selectedVenueLayer.id, { strokeWidth: n }),
+                          );
+                        }}
                       />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          commitVenueSvg(setSvgElementPaint(venueSvg, selectedVenueLayer.id, { stroke: "none" }))
-                        }
-                      >
-                        None
-                      </Button>
                     </div>
                   </div>
                 ) : null}
@@ -2648,12 +2730,13 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       max="1"
                       step="0.05"
                       value={selectedVenueLayer.opacity}
+                      style={sliderRangeStyle(0, 1, selectedVenueLayer.opacity)}
                       onChange={(e) =>
                         commitVenueSvg(
                           setSvgElementOpacity(venueSvg, selectedVenueLayer.id, Number(e.target.value)),
                         )
                       }
-                      className="w-full accent-primary"
+                      className="chrome-slider w-full"
                     />
                     <span className="w-8 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
                       {Math.round(selectedVenueLayer.opacity * 100)}%
@@ -2745,10 +2828,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   />
                   Reference only (hidden on the published map)
                 </label>
-                <p className="text-xs text-muted-foreground">
-                  Double-click a point to add or remove Bézier handles. Delete or Backspace removes the selected point, or the
-                  element if none is selected. Hold Shift while rotating to snap to 15°.
-                </p>
                 <Button size="sm" variant="destructive" onClick={deleteSelectedVenueElement}>
                   {hasSelectedVertex ? "Delete point" : "Delete"}
                 </Button>
@@ -2762,13 +2841,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 <Button size="sm" variant="destructive" onClick={() => void deleteSelected()}>
                   Delete
                 </Button>
-              </div>
-            ) : venueSelected && floor?.calibration ? (
-              <div className="mt-2 min-w-0 space-y-2">
-                <p className="text-sm font-medium">Venue drawing</p>
-                <p className="text-xs text-muted-foreground">
-                  Hold Space and drag to pan. Drag orange handles to stretch. Shift-drag the hall to slide the drawing.
-                </p>
               </div>
             ) : selected ? (
               <div className="mt-2 min-w-0 space-y-2">
@@ -3014,8 +3086,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 ) : null}
                 {selected.polygon ? (
                   <p className="text-xs text-muted-foreground">
-                    Double-click a point to add or remove Bézier handles. Delete removes the selected point, or the object if none is
-                    selected.
+                    Drag the orange handles to resize. Double-click the shape to edit points; double-click a point to add or remove
+                    Bézier handles. Escape leaves point editing. Delete removes the selected point, or the object if none is selected.
                   </p>
                 ) : null}
                 <Button size="sm" variant="destructive" onClick={() => void deleteSelected()}>
