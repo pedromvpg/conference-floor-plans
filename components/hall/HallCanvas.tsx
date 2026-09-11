@@ -7,6 +7,7 @@ import { MapControls } from "@react-three/drei";
 import { useTheme } from "@/components/theme-provider";
 import { HALL_THEME, type MapTone } from "@/lib/colors";
 import { isometricPose } from "@/lib/hall";
+import { ApplyMeshShadows, HallAO, HallEnvironment, HallPathTrace } from "./HallLook";
 import type {
   AmenityType,
   Appearance,
@@ -43,6 +44,13 @@ export type HallCanvasProps = {
   showGrid?: boolean;
   showRulers?: boolean;
   orthographic?: boolean;
+  cuboids?: boolean;
+  fog?: boolean;
+  ao?: boolean;
+  shadows?: boolean;
+  environment?: boolean;
+  pathTracing?: boolean;
+  venueSvg?: string | null;
 };
 
 export function HallCanvas({
@@ -68,10 +76,40 @@ export function HallCanvas({
   showGrid = mode === "edit",
   showRulers = false,
   orthographic = false,
+  cuboids = false,
+  fog = true,
+  ao = false,
+  shadows = false,
+  environment = false,
+  pathTracing = false,
+  venueSvg,
 }: HallCanvasProps) {
   const { resolvedTheme } = useTheme();
   const tone: MapTone = resolvedTheme === "light" ? "light" : "dark";
   const hall = HALL_THEME[tone];
+  const [fetchedSvg, setFetchedSvg] = useState<string | null>(null);
+  useEffect(() => {
+    if (venueSvg !== undefined) return;
+    const url = floor.underlayUrl;
+    if (!url) {
+      setFetchedSvg(null);
+      return;
+    }
+    let cancelled = false;
+    void fetch(url)
+      .then((res) => (res.ok ? res.text() : Promise.reject(new Error("drawing"))))
+      .then((text) => {
+        if (cancelled || !text.includes("<svg")) return;
+        setFetchedSvg(text);
+      })
+      .catch(() => {
+        if (!cancelled) setFetchedSvg(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [venueSvg, floor.underlayUrl]);
+
   const [spacePan, setSpacePan] = useState(false);
   const [navLocked, setNavLocked] = useState(false);
   const placing = mode === "edit" && tool !== "select" && tool !== "calibrate";
@@ -158,49 +196,88 @@ export function HallCanvas({
     tone,
     showGrid,
     showRulers,
+    cuboids,
+    venueSvg: venueSvg !== undefined ? venueSvg : fetchedSvg,
   };
+
+  const span = Math.max(extent.w, extent.h, 24);
+  const shaded = shadows && !pathTracing;
+  const occlude = ao && !pathTracing;
+  const envLit = environment || pathTracing;
 
   return (
     <div className="absolute inset-0 h-full w-full bg-[var(--map-bg)]">
       <Canvas
-        gl={{ antialias: true }}
+        shadows={shaded ? "percentage" : false}
+        gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: envLit ? 0.95 : 1 }}
         camera={{ fov: 42, near: 0.08, far: 800, position: isometricPose(extent.cx, extent.cy, Math.max(extent.w, extent.h)).position }}
         onPointerMissed={() => {
           if (!placing && !spacePan) onSelect?.(null);
         }}
       >
-        <color attach="background" args={[hall.bg]} />
-        <fog attach="fog" args={[hall.bg, 55, 220]} />
-        <hemisphereLight args={[hall.sky, hall.ground, 0.85]} />
-        <ambientLight intensity={tone === "light" ? 0.45 : 0.22} />
-        <directionalLight position={[48, 70, 28]} intensity={tone === "light" ? 0.95 : 1.15} />
-        <HallScene {...sceneProps} />
-        <HallCamera orthographic={orthographic} targetRef={orbitTarget} />
-        <OrbitTargetKeep controlsRef={controlsRef} targetRef={orbitTarget} />
-        <MapControls
-          ref={controlsRef}
-          makeDefault
-          enableDamping
-          dampingFactor={0.12}
-          screenSpacePanning
-          enablePan={mode === "view" || spacePan}
-          minPolarAngle={0.12}
-          maxPolarAngle={Math.PI / 2 - 0.08}
-          minDistance={6}
-          maxDistance={280}
-          minZoom={0.15}
-          maxZoom={80}
-          enabled={!navLocked && !placing}
-        />
-        <CameraRig controlsRef={controlsRef} focus={focus} nonce={camNonce} orthographic={orthographic} />
-        <RestoreOrbitTarget controlsRef={controlsRef} targetRef={orbitTarget} />
+        <HallPathTrace
+          enabled={pathTracing}
+          sceneKey={`${floor.id}:${cuboids ? "c" : "w"}:${orthographic ? "o" : "p"}:${objects.length}`}
+        >
+          <color attach="background" args={[hall.bg]} />
+          <HallFog enabled={fog && !pathTracing} color={hall.bg} />
+          <HallEnvironment enabled={envLit} />
+          <hemisphereLight args={[hall.sky, hall.ground, shaded || envLit ? 0.28 : 0.85]} />
+          <ambientLight intensity={tone === "light" ? (shaded || envLit ? 0.16 : 0.45) : shaded || envLit ? 0.08 : 0.22} />
+          <directionalLight
+            castShadow={shaded}
+            position={[extent.cx + span * 0.42, Math.max(48, span * 0.7), extent.cy + span * 0.22]}
+            intensity={tone === "light" ? (shaded ? 1.35 : 0.95) : shaded ? 1.55 : 1.15}
+            shadow-mapSize={[2048, 2048]}
+            shadow-bias={-0.0002}
+            shadow-normalBias={0.035}
+            shadow-camera-near={1}
+            shadow-camera-far={span * 4}
+            shadow-camera-left={-span * 0.9}
+            shadow-camera-right={span * 0.9}
+            shadow-camera-top={span * 0.9}
+            shadow-camera-bottom={-span * 0.9}
+          />
+          <HallScene {...sceneProps} />
+          <ApplyMeshShadows enabled={shaded} revision={objects.length} />
+          <HallCamera orthographic={orthographic} targetRef={orbitTarget} />
+          <OrbitTargetKeep controlsRef={controlsRef} targetRef={orbitTarget} />
+          <MapControls
+            ref={controlsRef}
+            makeDefault
+            enableDamping
+            dampingFactor={0.12}
+            screenSpacePanning
+            enablePan={mode === "view" || spacePan}
+            minPolarAngle={0.12}
+            maxPolarAngle={Math.PI / 2 - 0.08}
+            minDistance={6}
+            maxDistance={280}
+            minZoom={0.15}
+            maxZoom={80}
+            enabled={!navLocked && !placing}
+          />
+          <CameraRig controlsRef={controlsRef} focus={focus} nonce={camNonce} orthographic={orthographic} />
+          <RestoreOrbitTarget controlsRef={controlsRef} targetRef={orbitTarget} />
+          <HallAO enabled={occlude} />
+        </HallPathTrace>
       </Canvas>
     </div>
   );
 }
 
+function HallFog({ enabled, color }: { enabled: boolean; color: string }) {
+  const scene = useThree((s) => s.scene);
+  useLayoutEffect(() => {
+    if (!enabled) scene.fog = null;
+  }, [enabled, scene]);
+  if (!enabled) return null;
+  return <fog attach="fog" args={[color, 55, 220]} />;
+}
+
 const HALL_FOV = 42;
 const HALL_NEAR = 0.08;
+const HALL_ORTHO_NEAR = -800;
 const HALL_FAR = 800;
 const HALL_MIN_DIST = 6;
 const HALL_MAX_DIST = 280;
@@ -218,7 +295,7 @@ function applyOrthoFrustum(cam: THREE.OrthographicCamera, width: number, height:
   cam.right = width / 2;
   cam.top = height / 2;
   cam.bottom = height / -2;
-  cam.near = HALL_NEAR;
+  cam.near = HALL_ORTHO_NEAR;
   cam.far = HALL_FAR;
   cam.updateProjectionMatrix();
 }
@@ -296,7 +373,7 @@ function HallCamera({
   const lastOrtho = useRef<boolean | null>(null);
 
   if (!persp.current) persp.current = new THREE.PerspectiveCamera(HALL_FOV, 1, HALL_NEAR, HALL_FAR);
-  if (!ortho.current) ortho.current = new THREE.OrthographicCamera(-1, 1, 1, -1, HALL_NEAR, HALL_FAR);
+  if (!ortho.current) ortho.current = new THREE.OrthographicCamera(-1, 1, 1, -1, HALL_ORTHO_NEAR, HALL_FAR);
 
   useLayoutEffect(() => {
     const p = persp.current!;

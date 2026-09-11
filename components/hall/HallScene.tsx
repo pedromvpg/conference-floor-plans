@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { Grid, useTexture } from "@react-three/drei";
+import { Grid } from "@react-three/drei";
 import { useThree, type ThreeEvent } from "@react-three/fiber";
 import { AMENITY_COLOR } from "@/lib/amenities";
 import { hallDefaults, resolveAppearance } from "@/lib/appearance";
@@ -12,6 +12,7 @@ import { displayLogoUrl, objectUrls, snapWorld, yawRad } from "@/lib/hall";
 import { commitShape, ellipseFromCorners, objectShape, rotateBezier, tessellate, translateBezier } from "@/lib/bezier";
 import { stampPinObject, newMapObject } from "@/lib/new-object";
 import { gridSize } from "@/lib/units";
+import { svgVenueWorldPolylines } from "@/lib/svg-layers";
 import type {
   AmenityType,
   Appearance,
@@ -23,6 +24,7 @@ import type {
   Sponsor,
   Tool,
   Units,
+  Calibration,
 } from "@/lib/types";
 import { isPinObject, isMapPinObject, MAP_PIN_META } from "@/lib/types";
 import { BoothKit } from "./BoothKit";
@@ -53,6 +55,8 @@ export type HallSceneProps = {
   tone?: MapTone;
   showGrid?: boolean;
   showRulers?: boolean;
+  cuboids?: boolean;
+  venueSvg?: string | null;
 };
 
 export type HallExtent = {
@@ -162,6 +166,8 @@ export function HallScene({
   tone = "dark",
   showGrid = true,
   showRulers = false,
+  cuboids = false,
+  venueSvg = null,
 }: HallSceneProps) {
   const hall = HALL_THEME[tone];
   const canEdit = mode === "edit";
@@ -431,22 +437,15 @@ export function HallScene({
     <>
       <mesh
         rotation={[-Math.PI / 2, 0, 0]}
-        position={[extent.cx, -0.04, extent.cy]}
+        position={[extent.cx, 0, extent.cy]}
         onPointerDown={onGroundDown}
         onPointerMove={(e) => setHover(hitToWorld(e.point, grid))}
       >
         <planeGeometry args={[Math.max(extent.w, 24) * 1.6, Math.max(extent.h, 24) * 1.6]} />
-        <meshStandardMaterial color={hall.floor} roughness={1} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
-      {floor.underlayUrl ? (
-        <Suspense fallback={null}>
-          <UnderlayPlane
-            url={floor.underlayUrl}
-            extent={extent}
-            invert={tone === "dark"}
-            onPointerDown={onGroundDown}
-          />
-        </Suspense>
+      {floor.calibration && venueSvg ? (
+        <HallVenuePaths markup={venueSvg} calibration={floor.calibration} color={tone === "light" ? "#6a6a64" : "#a8a8a0"} />
       ) : null}
       {showGrid ? (
         <Grid
@@ -488,7 +487,7 @@ export function HallScene({
                 passThroughNav.current = true;
               }}
             >
-              <HallPlot object={o} sponsor={sponsor} assets={assets} selected={selected} tone={tone} />
+              <HallPlot object={o} sponsor={sponsor} assets={assets} selected={selected} tone={tone} cuboid={cuboids} />
             </group>
           );
         })}
@@ -512,7 +511,7 @@ export function HallScene({
                 passThroughNav.current = true;
               }}
             >
-              <HallPlot object={o} selected={selected} tone={tone} />
+              <HallPlot object={o} selected={selected} tone={tone} cuboid={cuboids} />
             </group>
           );
         })}
@@ -541,6 +540,7 @@ export function HallScene({
           assets={assets}
           selected={false}
           tone={tone}
+          cuboid={cuboids}
         />
       ) : null}
       {canEdit && tool === "select" && selectedObj && !isMapPinObject(selectedObj) ? (
@@ -563,45 +563,38 @@ export function HallScene({
   );
 }
 
-function UnderlayPlane({
-  url,
-  extent,
-  invert,
-  onPointerDown,
+function HallVenuePaths({
+  markup,
+  calibration,
+  color,
 }: {
-  url: string;
-  extent: HallExtent;
-  invert: boolean;
-  onPointerDown: (e: ThreeEvent<PointerEvent>) => void;
+  markup: string;
+  calibration: Calibration;
+  color: string;
 }) {
-  const tex = useTexture(url);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
+  const geom = useMemo(() => {
+    const strokes = svgVenueWorldPolylines(markup, calibration);
+    const positions: number[] = [];
+    for (const stroke of strokes) {
+      const pts =
+        stroke.closed && stroke.points.length > 2 ? [...stroke.points, stroke.points[0]] : stroke.points;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i];
+        const b = pts[i + 1];
+        if (!Number.isFinite(a[0] + a[1] + b[0] + b[1])) continue;
+        positions.push(a[0], 0.03, a[1], b[0], 0.03, b[1]);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    return g;
+  }, [markup, calibration]);
+  useEffect(() => () => geom.dispose(), [geom]);
+  if (!geom.getAttribute("position")?.count) return null;
   return (
-    <mesh
-      key={invert ? "inv" : "raw"}
-      rotation={[-Math.PI / 2, 0, 0]}
-      position={[extent.cx, -0.02, extent.cy]}
-      onPointerDown={onPointerDown}
-    >
-      <planeGeometry args={[extent.w, extent.h]} />
-      <meshStandardMaterial
-        map={tex}
-        roughness={1}
-        metalness={0}
-        onBeforeCompile={
-          invert
-            ? (shader) => {
-                shader.fragmentShader = shader.fragmentShader.replace(
-                  "#include <map_fragment>",
-                  `#include <map_fragment>
-                   diffuseColor.rgb = vec3(1.0) - diffuseColor.rgb;`,
-                );
-              }
-            : undefined
-        }
-      />
-    </mesh>
+    <lineSegments geometry={geom} frustumCulled={false}>
+      <lineBasicMaterial color={color} />
+    </lineSegments>
   );
 }
 
@@ -653,12 +646,14 @@ function HallPlot({
   assets = [],
   selected,
   tone = "dark",
+  cuboid = false,
 }: {
   object: MapObject;
   sponsor?: Sponsor;
   assets?: LibraryAsset[];
   selected: boolean;
   tone?: MapTone;
+  cuboid?: boolean;
 }) {
   if (isPinObject(object) && object.x != null && object.y != null) {
     return (
@@ -676,7 +671,7 @@ function HallPlot({
   const appearance = resolveAppearance(object);
   const urls = objectUrls(object, assets);
   const rug = boothFillHex(object.color, sponsor?.tier ?? "", tone);
-  if (appearance === "custom" && urls.modelUrl) {
+  if (appearance === "custom" && urls.modelUrl && !cuboid) {
     return (
       <Suspense
         fallback={
@@ -709,6 +704,7 @@ function HallPlot({
         fillUrl={fillUrl}
         logoUrl={logoUrl}
         selected={selected}
+        cuboid={cuboid}
       />
     );
   }
@@ -722,6 +718,7 @@ function HallPlot({
       wallUrl={urls.wallTextureUrl || undefined}
       logoUrl={logoUrl}
       selected={selected}
+      cuboid={cuboid}
     />
   );
 }
@@ -747,7 +744,7 @@ function AmenityTotem({
   const h = selected ? 1.45 : 1.2;
   return (
     <group position={[x, 0, y]} rotation={[0, yawRad(rotation), 0]}>
-      <mesh position={[0, h / 2, 0]}>
+      <mesh position={[0, h / 2, 0]} castShadow receiveShadow>
         <cylinderGeometry args={[0.28, 0.34, h, 10]} />
         <meshStandardMaterial color={fill} roughness={0.45} transparent={ghost} opacity={ghost ? 0.5 : 1} />
       </mesh>

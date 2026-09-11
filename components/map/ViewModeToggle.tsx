@@ -1,7 +1,15 @@
 "use client";
 
-import { Box, Cuboid, Grid3x3, Ruler, Square } from "lucide-react";
+import { Aperture, Box, Boxes, CloudFog, Cuboid, Grid3x3, Ruler, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { ViewMode } from "@/lib/types";
 
 export function GridToggle({
@@ -80,12 +88,37 @@ export function ViewModeToggle({
   onChange,
   orthographic,
   onOrthographicChange,
+  cuboids,
+  onCuboidsChange,
+  fog,
+  onFogChange,
+  ao,
+  onAoChange,
+  shadows,
+  onShadowsChange,
+  environment,
+  onEnvironmentChange,
+  pathTracing,
+  onPathTracingChange,
 }: {
   value: ViewMode;
   onChange: (mode: ViewMode) => void;
   orthographic?: boolean;
   onOrthographicChange?: (ortho: boolean) => void;
+  cuboids?: boolean;
+  onCuboidsChange?: (cuboids: boolean) => void;
+  fog?: boolean;
+  onFogChange?: (fog: boolean) => void;
+  ao?: boolean;
+  onAoChange?: (ao: boolean) => void;
+  shadows?: boolean;
+  onShadowsChange?: (shadows: boolean) => void;
+  environment?: boolean;
+  onEnvironmentChange?: (environment: boolean) => void;
+  pathTracing?: boolean;
+  onPathTracingChange?: (pathTracing: boolean) => void;
 }) {
+  const lookActive = Boolean(ao || shadows || environment || pathTracing);
   return (
     <div className="inline-flex items-center" role="group" aria-label="View mode">
       <Button
@@ -122,6 +155,87 @@ export function ViewModeToggle({
         >
           <Cuboid strokeWidth={1.5} />
         </Button>
+      ) : null}
+      {value === "hall" && onCuboidsChange ? (
+        <Button
+          size="icon-sm"
+          variant={cuboids ? "secondary" : "ghost"}
+          className="size-8"
+          title={cuboids ? "Show back walls" : "Show cuboids"}
+          aria-label={cuboids ? "Switch to back walls" : "Switch to cuboids"}
+          aria-pressed={Boolean(cuboids)}
+          onClick={() => onCuboidsChange(!cuboids)}
+        >
+          <Boxes strokeWidth={1.5} />
+        </Button>
+      ) : null}
+      {value === "hall" && onFogChange ? (
+        <Button
+          size="icon-sm"
+          variant={fog ? "secondary" : "ghost"}
+          className="size-8"
+          title={fog ? "Hide fog" : "Show fog"}
+          aria-label={fog ? "Hide fog" : "Show fog"}
+          aria-pressed={Boolean(fog)}
+          onClick={() => onFogChange(!fog)}
+        >
+          <CloudFog strokeWidth={1.5} />
+        </Button>
+      ) : null}
+      {value === "hall" && onAoChange && onShadowsChange && onEnvironmentChange && onPathTracingChange ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="icon-sm"
+              variant={lookActive ? "secondary" : "ghost"}
+              className="size-8"
+              title="3D look"
+              aria-label="3D look"
+            >
+              <Aperture strokeWidth={1.5} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="center" className="min-w-48">
+            <DropdownMenuLabel>Look</DropdownMenuLabel>
+            <DropdownMenuItem
+              onSelect={(e) => {
+                e.preventDefault();
+                onAoChange(!ao);
+              }}
+            >
+              Ambient occlusion
+              {ao ? <span className="ml-auto text-muted-foreground">On</span> : null}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={(e) => {
+                e.preventDefault();
+                onShadowsChange(!shadows);
+              }}
+            >
+              Shadows
+              {shadows ? <span className="ml-auto text-muted-foreground">On</span> : null}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={(e) => {
+                e.preventDefault();
+                onEnvironmentChange(!environment);
+              }}
+            >
+              Environment light
+              {environment ? <span className="ml-auto text-muted-foreground">On</span> : null}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={(e) => {
+                e.preventDefault();
+                onPathTracingChange(!pathTracing);
+              }}
+            >
+              Path tracing
+              {pathTracing ? <span className="ml-auto text-muted-foreground">On</span> : null}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       ) : null}
     </div>
   );

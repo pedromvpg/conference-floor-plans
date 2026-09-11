@@ -293,6 +293,12 @@ export function ViewerApp({
   const [objectSortDir, setObjectSortDir] = useState<SortDir>("asc");
   const [viewMode, setViewMode] = useState<ViewMode>("plan");
   const [orthographic, setOrthographic] = useState(false);
+  const [cuboids, setCuboids] = useState(false);
+  const [fog, setFog] = useState(false);
+  const [ao, setAo] = useState(false);
+  const [shadows, setShadows] = useState(false);
+  const [environment, setEnvironment] = useState(false);
+  const [pathTracing, setPathTracing] = useState(false);
 
   useEffect(() => {
     if (window.matchMedia("(min-width: 768px)").matches) setViewMode("hall");
@@ -540,6 +546,12 @@ export function ViewerApp({
               frameNonce={frameNonce}
               units={units}
               orthographic={orthographic}
+              cuboids={cuboids}
+              fog={fog}
+              ao={ao}
+              shadows={shadows}
+              environment={environment}
+              pathTracing={pathTracing}
               onSelect={selectFromMap}
             />
           ) : (
@@ -563,15 +575,27 @@ export function ViewerApp({
       </main>
 
       <div className="pointer-events-none absolute top-4 right-4 z-20 text-[12px] text-muted-foreground">
-        <p>{doc.event.name}</p>
+        <p suppressHydrationWarning>{doc.event.name}</p>
       </div>
 
-      <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-background/80 p-1 shadow-sm backdrop-blur-md">
+      <div className="pointer-events-auto absolute bottom-4 left-1/2 z-50 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-background/80 p-1 shadow-sm backdrop-blur-md">
         <ViewModeToggle
           value={viewMode}
           onChange={setViewMode}
           orthographic={orthographic}
           onOrthographicChange={setOrthographic}
+          cuboids={cuboids}
+          onCuboidsChange={setCuboids}
+          fog={fog}
+          onFogChange={setFog}
+          ao={ao}
+          onAoChange={setAo}
+          shadows={shadows}
+          onShadowsChange={setShadows}
+          environment={environment}
+          onEnvironmentChange={setEnvironment}
+          pathTracing={pathTracing}
+          onPathTracingChange={setPathTracing}
         />
         <FloorSwitcher
           floors={[...doc.floors].sort((a, b) => a.order - b.order)}

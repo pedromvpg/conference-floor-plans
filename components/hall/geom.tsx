@@ -78,11 +78,11 @@ export function PolygonSlab({
   }, [ring, facingDeg]);
   return (
     <group>
-      <mesh geometry={geom} position={[0, y, 0]}>
+      <mesh geometry={geom} position={[0, y, 0]} castShadow receiveShadow>
         <ColorOrMap color={color} url={mapUrl} fit={mapFit} aspect={aspect} />
       </mesh>
       {selected ? (
-        <lineSegments geometry={edges} position={[0, y + thickness + 0.01, 0]}>
+        <lineSegments geometry={edges} position={[0, y, 0]}>
           <lineBasicMaterial color="#f97316" />
         </lineSegments>
       ) : null}
