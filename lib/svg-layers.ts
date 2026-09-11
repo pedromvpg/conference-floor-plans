@@ -1748,4 +1748,4 @@ export function layerAttrSelector(id: string): string {
   return `[${LAYER_ATTR}="${CSS.escape(id)}"]`;
 }
 
-export { LAYER_ATTR, LOCK_ATTR, PRIVATE_ATTR };
+export { LAYER_ATTR, LOCK_ATTR, NAME_ATTR, PRIVATE_ATTR };

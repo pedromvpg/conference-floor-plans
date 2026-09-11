@@ -10,6 +10,7 @@ import { ObjectMediaFields } from "@/components/designer/ObjectMediaFields";
 import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
 import { VenueLayersEditor } from "@/components/designer/VenueLayersEditor";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
+import { MapExportMenu } from "@/components/map/MapExportMenu";
 import { FloorSwitcher, GridToggle, HallViewAside, RulersToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -1641,6 +1642,19 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               if (mode === "hall" && (tool === "calibrate" || tool === "label" || tool === "image")) setTool("select");
             }}
           />
+          {floor ? (
+            <>
+              <span className="h-5 w-px bg-border" aria-hidden />
+              <MapExportMenu
+                floor={floor}
+                objects={objects}
+                sponsors={bundle.sponsors}
+                assets={bundle.assets}
+                venueSvg={venueSvg}
+                filename={`${bundle.event.slug}-${floor.name || "floor"}-plan.svg`}
+              />
+            </>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
           <div className="group relative">
