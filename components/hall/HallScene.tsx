@@ -80,6 +80,7 @@ export function hallExtent(floor: Floor, objects: MapObject[]): HallExtent {
   let maxX = 40;
   let maxY = 40;
   for (const o of objects) {
+    if (isMapPinObject(o)) continue;
     if (o.polygon?.length) {
       const b = ringBounds(o.polygon);
       minX = Math.min(minX, b.minX);
@@ -112,16 +113,18 @@ export function hallFocus(
 ): { cx: number; cz: number; span: number } {
   if (id) {
     const o = objects.find((x) => x.id === id);
-    if (o?.polygon?.length) {
-      const b = ringBounds(o.polygon);
-      return {
-        cx: (b.minX + b.maxX) / 2,
-        cz: (b.minY + b.maxY) / 2,
-        span: Math.max(b.w, b.h, 6) * 2.2,
-      };
-    }
-    if (o?.x != null && o.y != null) {
-      return { cx: o.x, cz: o.y, span: 12 };
+    if (o && !isMapPinObject(o)) {
+      if (o.polygon?.length) {
+        const b = ringBounds(o.polygon);
+        return {
+          cx: (b.minX + b.maxX) / 2,
+          cz: (b.minY + b.maxY) / 2,
+          span: Math.max(b.w, b.h, 6) * 2.2,
+        };
+      }
+      if (o.x != null && o.y != null) {
+        return { cx: o.x, cz: o.y, span: 12 };
+      }
     }
   }
   return { cx: extent.cx, cz: extent.cy, span: Math.max(extent.w, extent.h, 20) };

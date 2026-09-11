@@ -6,7 +6,8 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { MapControls } from "@react-three/drei";
 import { useTheme } from "@/components/theme-provider";
 import { HALL_THEME, type MapTone } from "@/lib/colors";
-import { isometricPose } from "@/lib/hall";
+import { isometricPose, sunPosition } from "@/lib/hall";
+import { DEFAULT_HALL_VIEW, fogRange } from "@/lib/hall-view";
 import { ApplyMeshShadows, HallAO, HallEnvironment, HallPathTrace } from "./HallLook";
 import type {
   AmenityType,
@@ -41,15 +42,25 @@ export type HallCanvasProps = {
   onCreateObject?: (obj: MapObject) => void;
   frameNonce?: number;
   fitNonce?: number;
+  venueNonce?: number;
   showGrid?: boolean;
   showRulers?: boolean;
   orthographic?: boolean;
   cuboids?: boolean;
   fog?: boolean;
+  fogIntensity?: number;
   ao?: boolean;
   shadows?: boolean;
   environment?: boolean;
   pathTracing?: boolean;
+  azimuth?: number;
+  elevation?: number;
+  distance?: number;
+  lightAzimuth?: number;
+  lightElevation?: number;
+  lightDistance?: number;
+  lightIntensity?: number;
+  fill?: number;
   venueSvg?: string | null;
 };
 
@@ -73,15 +84,25 @@ export function HallCanvas({
   onCreateObject,
   frameNonce = 0,
   fitNonce = 0,
+  venueNonce = 0,
   showGrid = mode === "edit",
   showRulers = false,
   orthographic = false,
   cuboids = false,
-  fog = true,
+  fog = DEFAULT_HALL_VIEW.fog,
+  fogIntensity = DEFAULT_HALL_VIEW.fogIntensity,
   ao = false,
   shadows = false,
   environment = false,
   pathTracing = false,
+  azimuth = DEFAULT_HALL_VIEW.azimuth,
+  elevation = DEFAULT_HALL_VIEW.elevation,
+  distance = DEFAULT_HALL_VIEW.distance,
+  lightAzimuth = DEFAULT_HALL_VIEW.lightAzimuth,
+  lightElevation = DEFAULT_HALL_VIEW.lightElevation,
+  lightDistance = DEFAULT_HALL_VIEW.lightDistance,
+  lightIntensity = DEFAULT_HALL_VIEW.lightIntensity,
+  fill = DEFAULT_HALL_VIEW.fill,
   venueSvg,
 }: HallCanvasProps) {
   const { resolvedTheme } = useTheme();
@@ -118,25 +139,45 @@ export function HallCanvas({
   const orbitTarget = useRef(new THREE.Vector3(extent.cx, 0, extent.cy));
 
   const [camNonce, setCamNonce] = useState(0);
-  const [focusId, setFocusId] = useState<string | null>(highlightId ?? null);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const prevSelectedId = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     setFocusId(highlightId ?? null);
     if (highlightId) setCamNonce((n) => n + 1);
   }, [highlightId]);
 
+  const seenFrameNonce = useRef(frameNonce);
+  const seenFitNonce = useRef(fitNonce);
+
   useEffect(() => {
+    if (frameNonce === seenFrameNonce.current) return;
+    seenFrameNonce.current = frameNonce;
+    if (!frameNonce) return;
     setFocusId(selectedId);
     setCamNonce((n) => n + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameNonce]);
 
   useEffect(() => {
+    if (fitNonce === seenFitNonce.current) return;
+    seenFitNonce.current = fitNonce;
+    if (!fitNonce) return;
     setFocusId(null);
     setCamNonce((n) => n + 1);
   }, [fitNonce]);
 
   useEffect(() => {
+    if (!venueNonce) return;
+    setFocusId(null);
+    setCamNonce((n) => n + 1);
+  }, [venueNonce]);
+
+  useEffect(() => {
+    const prev = prevSelectedId.current;
+    prevSelectedId.current = selectedId;
     if (mode !== "view" || !selectedId) return;
+    if (prev === undefined || prev === selectedId) return;
     setFocusId(selectedId);
     setCamNonce((n) => n + 1);
   }, [mode, selectedId]);
@@ -204,13 +245,23 @@ export function HallCanvas({
   const shaded = shadows && !pathTracing;
   const occlude = ao && !pathTracing;
   const envLit = environment || pathTracing;
+  const pose = { azimuth, elevation, distance };
+  const startPose = isometricPose(extent.cx, extent.cy, Math.max(extent.w, extent.h), pose);
+  const sun = sunPosition(extent.cx, extent.cy, span, {
+    azimuth: lightAzimuth,
+    elevation: lightElevation,
+    distance: lightDistance,
+  });
+  const haze = fogRange(span, fogIntensity);
+  const fillMul = Math.max(0, fill);
+  const sunMul = Math.max(0, lightIntensity);
 
   return (
     <div className="absolute inset-0 h-full w-full bg-[var(--map-bg)]">
       <Canvas
         shadows={shaded ? "percentage" : false}
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: envLit ? 0.95 : 1 }}
-        camera={{ fov: 42, near: 0.08, far: 800, position: isometricPose(extent.cx, extent.cy, Math.max(extent.w, extent.h)).position }}
+        camera={{ fov: 42, near: 0.08, far: 800, position: startPose.position }}
         onPointerMissed={() => {
           if (!placing && !spacePan) onSelect?.(null);
         }}
@@ -220,14 +271,14 @@ export function HallCanvas({
           sceneKey={`${floor.id}:${cuboids ? "c" : "w"}:${orthographic ? "o" : "p"}:${objects.length}`}
         >
           <color attach="background" args={[hall.bg]} />
-          <HallFog enabled={fog && !pathTracing} color={hall.bg} />
+          <HallFog enabled={fog && !pathTracing} color={hall.bg} near={haze.near} far={haze.far} />
           <HallEnvironment enabled={envLit} />
-          <hemisphereLight args={[hall.sky, hall.ground, shaded || envLit ? 0.28 : 0.85]} />
-          <ambientLight intensity={tone === "light" ? (shaded || envLit ? 0.16 : 0.45) : shaded || envLit ? 0.08 : 0.22} />
+          <hemisphereLight args={[hall.sky, hall.ground, (shaded || envLit ? 0.28 : 0.85) * fillMul]} />
+          <ambientLight intensity={(tone === "light" ? (shaded || envLit ? 0.16 : 0.45) : shaded || envLit ? 0.08 : 0.22) * fillMul} />
           <directionalLight
             castShadow={shaded}
-            position={[extent.cx + span * 0.42, Math.max(48, span * 0.7), extent.cy + span * 0.22]}
-            intensity={tone === "light" ? (shaded ? 1.35 : 0.95) : shaded ? 1.55 : 1.15}
+            position={sun}
+            intensity={(tone === "light" ? (shaded ? 1.35 : 0.95) : shaded ? 1.55 : 1.15) * sunMul}
             shadow-mapSize={[2048, 2048]}
             shadow-bias={-0.0002}
             shadow-normalBias={0.035}
@@ -257,7 +308,13 @@ export function HallCanvas({
             maxZoom={80}
             enabled={!navLocked && !placing}
           />
-          <CameraRig controlsRef={controlsRef} focus={focus} nonce={camNonce} orthographic={orthographic} />
+          <CameraRig
+            controlsRef={controlsRef}
+            focus={focus}
+            nonce={camNonce}
+            orthographic={orthographic}
+            pose={pose}
+          />
           <RestoreOrbitTarget controlsRef={controlsRef} targetRef={orbitTarget} />
           <HallAO enabled={occlude} />
         </HallPathTrace>
@@ -266,13 +323,23 @@ export function HallCanvas({
   );
 }
 
-function HallFog({ enabled, color }: { enabled: boolean; color: string }) {
+function HallFog({
+  enabled,
+  color,
+  near,
+  far,
+}: {
+  enabled: boolean;
+  color: string;
+  near: number;
+  far: number;
+}) {
   const scene = useThree((s) => s.scene);
   useLayoutEffect(() => {
     if (!enabled) scene.fog = null;
   }, [enabled, scene]);
   if (!enabled) return null;
-  return <fog attach="fog" args={[color, 55, 220]} />;
+  return <fog attach="fog" args={[color, near, far]} />;
 }
 
 const HALL_FOV = 42;
@@ -419,11 +486,13 @@ function CameraRig({
   focus,
   nonce,
   orthographic,
+  pose,
 }: {
   controlsRef: RefObject<ComponentRef<typeof MapControls> | null>;
   focus: { cx: number; cz: number; span: number };
   nonce: number;
   orthographic: boolean;
+  pose: { azimuth: number; elevation: number; distance: number };
 }) {
   const size = useThree((s) => s.size);
   const anim = useRef(0);
@@ -437,11 +506,11 @@ function CameraRig({
   useEffect(() => {
     const c = controlsRef.current;
     if (!c) return;
-    const pose = isometricPose(focus.cx, focus.cz, focus.span);
+    const next = isometricPose(focus.cx, focus.cz, focus.span, pose);
     fromP.current.copy(c.object.position);
     fromT.current.copy(c.target);
-    toP.current.set(...pose.position);
-    toT.current.set(...pose.target);
+    toP.current.set(...next.position);
+    toT.current.set(...next.target);
     if (c.object instanceof THREE.OrthographicCamera) {
       fromZoom.current = c.object.zoom;
       toZoom.current = orthoZoomForSpan(focus.span, size.height);
@@ -450,6 +519,21 @@ function CameraRig({
     // Animate only when nonce changes (fit / frame / floor), not when the hall is dragged.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nonce]);
+
+  useLayoutEffect(() => {
+    const c = controlsRef.current;
+    if (!c) return;
+    const next = isometricPose(focus.cx, focus.cz, focus.span, pose);
+    c.object.position.set(...next.position);
+    c.target.set(...next.target);
+    if (orthographic && c.object instanceof THREE.OrthographicCamera) {
+      c.object.zoom = orthoZoomForSpan(focus.span, size.height);
+      c.object.updateProjectionMatrix();
+    }
+    c.update();
+    anim.current = 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pose.azimuth, pose.elevation, pose.distance]);
 
   useFrame((_, dt) => {
     if (anim.current <= 0) return;
