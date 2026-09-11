@@ -6,8 +6,11 @@ import {
   parseSvgPath,
   resizeRectangleCorner,
   svgPathD,
+  tessellate,
   type BezierNode,
 } from "./bezier";
+import { metersFromPixels } from "./geometry";
+import type { Calibration, Ring } from "./types";
 
 const LAYER_ATTR = "data-cm-layer";
 const NAME_ATTR = "data-cm-name";
@@ -98,7 +101,7 @@ export function wrapRasterAsSvg(href: string, widthPx: number, heightPx: number)
 }
 
 const SHAPE_STROKE = "#1a1a1a";
-const SHAPE_FILL = "rgba(0,0,0,0.06)";
+const SHAPE_FILL = "#f4f0e6";
 
 export function appendSvgRect(markup: string, x: number, y: number, w: number, h: number): string {
   const root = parseRoot(markup);
@@ -156,9 +159,11 @@ export function appendSvgBezier(markup: string, nodes: BezierNode[], closed = tr
   const root = parseRoot(markup);
   const el = root.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
   el.setAttribute("d", svgPathD(nodes, closed));
-  el.setAttribute("fill", SHAPE_FILL);
+  el.setAttribute("fill", closed ? SHAPE_FILL : "none");
   el.setAttribute("stroke", SHAPE_STROKE);
   el.setAttribute("stroke-width", "2");
+  el.setAttribute("stroke-linecap", "round");
+  el.setAttribute("stroke-linejoin", "round");
   root.appendChild(el);
   ensureLayerIds(root);
   return new XMLSerializer().serializeToString(root);
@@ -421,8 +426,36 @@ export function findSvgLayer(layers: SvgLayer[], id: string): SvgLayer | null {
   return null;
 }
 
-export function svgViewBox(markup: string): { x: number; y: number; w: number; h: number } | null {
-  const root = parseRoot(markup);
+export function svgVenueWorldPolylines(markup: string, cal: Calibration): { points: Ring; closed: boolean }[] {
+  try {
+    const root = parseRoot(markup);
+    const vb = viewBoxFromRoot(root);
+    if (!vb || !(vb.w > 0) || !(vb.h > 0) || !(cal.widthPx > 0) || !(cal.heightPx > 0)) return [];
+    const out: { points: Ring; closed: boolean }[] = [];
+    for (const el of collectNodes(root)) {
+      if (skippedForHall(el, root, vb)) continue;
+      const local = elementPolyline(el);
+      if (!local || local.points.length < 2) continue;
+      out.push({
+        closed: local.closed,
+        points: local.points.map(([x, y]) => {
+          const [sx, sy] = svgLocalToRoot(el, x, y);
+          const p = metersFromPixels(
+            ((sx - vb.x) / vb.w) * cal.widthPx,
+            ((sy - vb.y) / vb.h) * cal.heightPx,
+            cal,
+          );
+          return [p.x, p.y];
+        }),
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function viewBoxFromRoot(root: SVGSVGElement): { x: number; y: number; w: number; h: number } | null {
   const vb = root.getAttribute("viewBox");
   if (vb) {
     const p = vb.trim().split(/[\s,]+/).map(Number);
@@ -432,6 +465,129 @@ export function svgViewBox(markup: string): { x: number; y: number; w: number; h
   const h = Number.parseFloat(root.getAttribute("height") || "");
   if (w > 0 && h > 0) return { x: 0, y: 0, w, h };
   return null;
+}
+
+export function svgViewBox(markup: string): { x: number; y: number; w: number; h: number } | null {
+  try {
+    return viewBoxFromRoot(parseRoot(markup));
+  } catch {
+    return null;
+  }
+}
+
+function svgLocalToRoot(el: Element, x: number, y: number): [number, number] {
+  let cx = x;
+  let cy = y;
+  let n: Element | null = el;
+  while (n) {
+    const t = n.getAttribute("transform") || "";
+    const m = t.match(/translate\(\s*([-.\d]+)(?:[,\s]+|\s+)([-.\d]+)/);
+    if (m) {
+      cx += Number(m[1]);
+      cy += Number(m[2]);
+    }
+    if (localName(n) === "svg") break;
+    n = n.parentElement;
+  }
+  return [cx, cy];
+}
+
+function skippedForHall(
+  el: Element,
+  root: SVGSVGElement,
+  vb: { x: number; y: number; w: number; h: number },
+): boolean {
+  const kind = localName(el);
+  if (kind === "g" || kind === "a" || kind === "svg" || kind === "text" || kind === "image" || kind === "use") {
+    return true;
+  }
+  let n: Element | null = el;
+  while (n) {
+    if (isHidden(n) || isPrivate(n)) return true;
+    if (n === root) break;
+    n = n.parentElement;
+  }
+  if (kind !== "rect") return false;
+  const box = rectBox(el);
+  const area = box.w * box.h;
+  const va = vb.w * vb.h;
+  return va > 0 && area / va > 0.82;
+}
+
+function elementPolyline(el: Element): { points: Ring; closed: boolean } | null {
+  const kind = localName(el);
+  if (kind === "line") {
+    return {
+      closed: false,
+      points: [
+        [Number(el.getAttribute("x1") || 0), Number(el.getAttribute("y1") || 0)],
+        [Number(el.getAttribute("x2") || 0), Number(el.getAttribute("y2") || 0)],
+      ],
+    };
+  }
+  if (kind === "rect") {
+    const b = rectBox(el);
+    return {
+      closed: true,
+      points: [
+        [b.x, b.y],
+        [b.x + b.w, b.y],
+        [b.x + b.w, b.y + b.h],
+        [b.x, b.y + b.h],
+      ],
+    };
+  }
+  if (kind === "circle") {
+    const cx = Number(el.getAttribute("cx") || 0);
+    const cy = Number(el.getAttribute("cy") || 0);
+    const r = Number(el.getAttribute("r") || 0);
+    return { closed: true, points: ellipseRing(cx, cy, r, r) };
+  }
+  if (kind === "ellipse") {
+    const cx = Number(el.getAttribute("cx") || 0);
+    const cy = Number(el.getAttribute("cy") || 0);
+    const rx = Number(el.getAttribute("rx") || 0);
+    const ry = Number(el.getAttribute("ry") || 0);
+    return { closed: true, points: ellipseRing(cx, cy, rx, ry) };
+  }
+  if (kind === "polygon" || kind === "polyline") {
+    const pts = parsePoints(el.getAttribute("points") || "");
+    if (pts.length < 2) return null;
+    return { closed: kind === "polygon", points: pts.map((p) => [p.x, p.y]) };
+  }
+  if (kind === "path") {
+    const d = el.getAttribute("d") || "";
+    const parsed = parseSvgPath(d);
+    if (parsed && parsed.nodes.length >= 2) {
+      return { closed: parsed.closed, points: tessellate(parsed.nodes, parsed.closed) };
+    }
+    return samplePathD(d);
+  }
+  return null;
+}
+
+function ellipseRing(cx: number, cy: number, rx: number, ry: number, n = 48): Ring {
+  const out: Ring = [];
+  for (let i = 0; i < n; i++) {
+    const t = (i / n) * Math.PI * 2;
+    out.push([cx + Math.cos(t) * rx, cy + Math.sin(t) * ry]);
+  }
+  return out;
+}
+
+function samplePathD(d: string): { points: Ring; closed: boolean } | null {
+  if (!d.trim() || typeof document === "undefined") return null;
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  const len = path.getTotalLength();
+  if (!(len > 0)) return null;
+  const n = Math.min(400, Math.max(8, Math.round(len / 6)));
+  const points: Ring = [];
+  for (let i = 0; i <= n; i++) {
+    const p = path.getPointAtLength((i / n) * len);
+    points.push([p.x, p.y]);
+  }
+  return { points, closed: /z\s*$/i.test(d.trim()) };
 }
 
 export function svgInnerMarkup(
@@ -477,15 +633,17 @@ export function setSvgLayerPrivate(markup: string, id: string, nextPrivate: bool
   return new XMLSerializer().serializeToString(root);
 }
 
+/** DOM-free so the underlay PUT route can run this on the server. */
 export function svgForPublishedUnderlay(markup: string): string {
-  const root = parseRoot(markup);
-  root.querySelector(`#${PRIVATE_STYLE_ID}`)?.remove();
-  const ns = root.namespaceURI || "http://www.w3.org/2000/svg";
-  const style = root.ownerDocument.createElementNS(ns, "style");
-  style.setAttribute("id", PRIVATE_STYLE_ID);
-  style.textContent = PRIVATE_STYLE_CSS;
-  root.insertBefore(style, root.firstChild);
-  return new XMLSerializer().serializeToString(root);
+  const stripped = markup.replace(
+    new RegExp(`<style\\b[^>]*\\bid=["']${PRIVATE_STYLE_ID}["'][^>]*>[\\s\\S]*?<\\/style>`, "i"),
+    "",
+  );
+  const open = stripped.match(/<svg\b[^>]*>/i);
+  if (!open || open.index == null) throw new Error("Not a valid SVG drawing");
+  const style = `<style id="${PRIVATE_STYLE_ID}">${PRIVATE_STYLE_CSS}</style>`;
+  const at = open.index + open[0].length;
+  return stripped.slice(0, at) + style + stripped.slice(at);
 }
 
 export function setSvgLayerLocked(markup: string, id: string, locked: boolean): string {
@@ -947,6 +1105,44 @@ export function setSvgElementBezier(markup: string, id: string, nodes: BezierNod
   return new XMLSerializer().serializeToString(root);
 }
 
+export function setSvgElementBox(
+  markup: string,
+  id: string,
+  box: { x: number; y: number; w: number; h: number },
+): string {
+  const root = parseRoot(markup);
+  const el = findLayer(root, id);
+  if (!el) return markup;
+  const kind = localName(el);
+  const w = Math.max(1, box.w);
+  const h = Math.max(1, box.h);
+  if (kind === "rect" || kind === "image") {
+    el.setAttribute("x", String(box.x));
+    el.setAttribute("y", String(box.y));
+    el.setAttribute("width", String(w));
+    el.setAttribute("height", String(h));
+  } else if (kind === "circle") {
+    el.setAttribute("cx", String(box.x + w / 2));
+    el.setAttribute("cy", String(box.y + h / 2));
+    el.setAttribute("r", String(Math.max(1, Math.min(w, h) / 2)));
+  } else if (kind === "ellipse") {
+    el.setAttribute("cx", String(box.x + w / 2));
+    el.setAttribute("cy", String(box.y + h / 2));
+    el.setAttribute("rx", String(Math.max(1, w / 2)));
+    el.setAttribute("ry", String(Math.max(1, h / 2)));
+  } else if (kind === "text") {
+    const fs = Math.max(1, h / 1.25);
+    el.setAttribute("font-size", String(fs));
+    el.setAttribute("x", String(box.x + w / 2));
+    el.setAttribute("y", String(box.y + h / 2));
+    el.setAttribute("text-anchor", "middle");
+    el.setAttribute("dominant-baseline", "middle");
+  } else {
+    return markup;
+  }
+  return new XMLSerializer().serializeToString(root);
+}
+
 export function svgElementPoints(markup: string, id: string): SvgPoint[] | null {
   const root = parseRoot(markup);
   const el = findLayer(root, id);
@@ -1221,31 +1417,153 @@ export function setSvgElementOpacity(markup: string, id: string, opacity: number
   return new XMLSerializer().serializeToString(root);
 }
 
-export function svgElementPaint(markup: string, id: string): { fill: string; stroke: string } | null {
+function parseStrokeWidth(raw: string | null): number {
+  if (!raw) return 2;
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 2;
+}
+
+function clamp01(n: number): number {
+  return Math.min(1, Math.max(0, n));
+}
+
+function opacityFromAttr(raw: string | null): number | null {
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  return clamp01(n);
+}
+
+function opacityFromColor(value: string): number | null {
+  const v = value.trim();
+  const rgba = v.match(/^rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(?:,\s*([\d.]+)\s*)?\)/i);
+  if (rgba) {
+    if (rgba[1] == null) return 1;
+    const n = Number(rgba[1]);
+    return Number.isFinite(n) ? clamp01(n) : 1;
+  }
+  if (/^#[0-9a-fA-F]{8}$/.test(v)) return clamp01(Number.parseInt(v.slice(7, 9), 16) / 255);
+  return null;
+}
+
+function channelOpacity(color: string, attr: string | null): number {
+  return opacityFromAttr(attr) ?? opacityFromColor(color) ?? 1;
+}
+
+function parseStyle(el: Element): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const part of (el.getAttribute("style") || "").split(";")) {
+    const i = part.indexOf(":");
+    if (i < 0) continue;
+    const k = part.slice(0, i).trim().toLowerCase();
+    const v = part.slice(i + 1).trim();
+    if (k && v) map.set(k, v);
+  }
+  return map;
+}
+
+function writeStyle(el: Element, map: Map<string, string>) {
+  const s = [...map.entries()].map(([k, v]) => `${k}:${v}`).join(";");
+  if (s) el.setAttribute("style", s);
+  else el.removeAttribute("style");
+}
+
+function paintFromEl(el: Element, name: "fill" | "stroke"): string {
+  const attr = el.getAttribute(name);
+  if (attr) return attr;
+  return parseStyle(el).get(name) || "";
+}
+
+function opacityAttr(el: Element, name: "fill-opacity" | "stroke-opacity"): string | null {
+  return el.getAttribute(name) || parseStyle(el).get(name) || null;
+}
+
+function setPaintProp(
+  el: Element,
+  name: "fill" | "stroke" | "stroke-width" | "fill-opacity" | "stroke-opacity",
+  value: string | null,
+) {
+  const styles = parseStyle(el);
+  if (value == null || value === "") {
+    el.removeAttribute(name);
+    styles.delete(name);
+  } else {
+    el.setAttribute(name, value);
+    if (styles.has(name)) styles.set(name, value);
+  }
+  writeStyle(el, styles);
+}
+
+function writeOpacityAttr(el: Element, name: "fill-opacity" | "stroke-opacity", value: number) {
+  const n = clamp01(Number.isFinite(value) ? value : 1);
+  setPaintProp(el, name, n >= 1 ? null : String(n));
+}
+
+function opaqueColor(value: string): string | null {
+  const v = value.trim();
+  if (/^#[0-9a-fA-F]{8}$/.test(v)) return v.slice(0, 7);
+  const rgb = v.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (!rgb) return null;
+  const hex = (n: string) => Number(n).toString(16).padStart(2, "0");
+  return `#${hex(rgb[1])}${hex(rgb[2])}${hex(rgb[3])}`;
+}
+
+export type SvgElementPaint = {
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+  fillOpacity: number;
+  strokeOpacity: number;
+};
+
+export function svgElementPaint(markup: string, id: string): SvgElementPaint | null {
   const root = parseRoot(markup);
   const el = findLayer(root, id);
   if (!el) return null;
+  const fill = paintFromEl(el, "fill");
+  const stroke = paintFromEl(el, "stroke");
   return {
-    fill: el.getAttribute("fill") || "",
-    stroke: el.getAttribute("stroke") || "",
+    fill,
+    stroke,
+    strokeWidth: parseStrokeWidth(el.getAttribute("stroke-width") || parseStyle(el).get("stroke-width") || null),
+    fillOpacity: channelOpacity(fill, opacityAttr(el, "fill-opacity")),
+    strokeOpacity: channelOpacity(stroke, opacityAttr(el, "stroke-opacity")),
   };
 }
 
 export function setSvgElementPaint(
   markup: string,
   id: string,
-  paint: { fill?: string; stroke?: string },
+  paint: {
+    fill?: string;
+    stroke?: string;
+    strokeWidth?: number;
+    fillOpacity?: number;
+    strokeOpacity?: number;
+  },
 ): string {
   const root = parseRoot(markup);
   const el = findLayer(root, id);
   if (!el) return markup;
   if (paint.fill !== undefined) {
-    if (paint.fill === "") el.removeAttribute("fill");
-    else el.setAttribute("fill", paint.fill);
+    setPaintProp(el, "fill", paint.fill === "" ? "none" : paint.fill);
   }
   if (paint.stroke !== undefined) {
-    if (paint.stroke === "") el.removeAttribute("stroke");
-    else el.setAttribute("stroke", paint.stroke);
+    setPaintProp(el, "stroke", paint.stroke === "" ? "none" : paint.stroke);
+  }
+  if (paint.strokeWidth !== undefined) {
+    const n = Number.isFinite(paint.strokeWidth) ? Math.max(0, paint.strokeWidth) : 2;
+    setPaintProp(el, "stroke-width", String(n));
+  }
+  if (paint.fillOpacity !== undefined) {
+    writeOpacityAttr(el, "fill-opacity", paint.fillOpacity);
+    const next = opaqueColor(paintFromEl(el, "fill"));
+    if (next) setPaintProp(el, "fill", next);
+  }
+  if (paint.strokeOpacity !== undefined) {
+    writeOpacityAttr(el, "stroke-opacity", paint.strokeOpacity);
+    const next = opaqueColor(paintFromEl(el, "stroke"));
+    if (next) setPaintProp(el, "stroke", next);
   }
   return new XMLSerializer().serializeToString(root);
 }
