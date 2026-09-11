@@ -872,6 +872,54 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     });
   }
 
+  function rotateSelectedGroup(delta: number) {
+    const ids = new Set(selectedIds.filter((id) => id !== VENUE_ID));
+    const sel = objects.filter((o) => ids.has(o.id));
+    if (sel.length < 2 || !Number.isFinite(delta) || !delta) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const o of sel) {
+      if (o.polygon?.length) {
+        const b = ringBounds(o.polygon);
+        minX = Math.min(minX, b.minX);
+        minY = Math.min(minY, b.minY);
+        maxX = Math.max(maxX, b.maxX);
+        maxY = Math.max(maxY, b.maxY);
+      } else if (isPinObject(o) && o.x != null && o.y != null) {
+        minX = Math.min(minX, o.x);
+        minY = Math.min(minY, o.y);
+        maxX = Math.max(maxX, o.x);
+        maxY = Math.max(maxY, o.y);
+      }
+    }
+    if (!Number.isFinite(minX)) return;
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const next = sel.map((o) => {
+      if (isPinObject(o) && o.x != null && o.y != null) {
+        const path = rotateBezier(
+          [{ x: o.x, y: o.y, inDx: 0, inDy: 0, outDx: 0, outDy: 0 }],
+          delta,
+          { x: cx, y: cy },
+        )[0];
+        const rot = (o.rotation ?? o.facingDeg ?? 0) + delta;
+        return { ...o, x: path.x, y: path.y, rotation: rot, facingDeg: rot };
+      }
+      if (!o.polygon) return o;
+      const rotated = commitShape(rotateBezier(objectShape(o), delta, { x: cx, y: cy }));
+      return {
+        ...o,
+        polygon: rotated.polygon,
+        path: rotated.path,
+        facingDeg: (o.facingDeg ?? 0) + delta,
+        rotation: (o.rotation ?? 0) + delta,
+      };
+    });
+    void patchObjects(next);
+  }
+
   function applyBoothPreset(id: string) {
     if (!selected?.polygon || id === "custom") return;
     const size = id === "stage" ? STAGE_PRESET_METERS : presetSize(id);
@@ -2966,8 +3014,20 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               <div className="mt-2 min-w-0 space-y-2">
                 <p className="text-sm font-medium">{selectedIds.filter((id) => id !== VENUE_ID).length} objects selected</p>
                 <p className="text-xs text-muted-foreground">
-                  Drag to move the group. Shift-click or shift-drag to add. Delete removes all.
+                  Drag to move the group. Drag the top handle to rotate around the selection center. Shift snaps to 15°. Delete
+                  removes all.
                 </p>
+                <div>
+                  <Label className="text-[10px] text-muted-foreground">Rotation</Label>
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+                    <Button size="sm" variant="outline" className="shrink-0 px-2" onClick={() => rotateSelectedGroup(-45)}>
+                      −45
+                    </Button>
+                    <Button size="sm" variant="outline" className="shrink-0 px-2" onClick={() => rotateSelectedGroup(45)}>
+                      +45
+                    </Button>
+                  </div>
+                </div>
                 <Button size="sm" variant="destructive" onClick={() => void deleteSelected()}>
                   Delete
                 </Button>
