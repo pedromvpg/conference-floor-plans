@@ -2,9 +2,10 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { ChevronDown, ChevronLeft, LayoutGrid, MapPin, Search, Square, Theater } from "lucide-react";
+import { ChevronDown, ChevronLeft, LayoutGrid, MapPin, Search, SlidersHorizontal, Square, Theater } from "lucide-react";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
-import { FloorSwitcher, ViewModeToggle } from "@/components/map/ViewModeToggle";
+import { FloorSwitcher, HALL_VIEW_ASIDE_W, HallViewAside, ViewModeToggle } from "@/components/map/ViewModeToggle";
+import { DEFAULT_HALL_VIEW, type HallView } from "@/lib/hall-view";
 import { UnitsToggle } from "@/components/units-toggle";
 import {
   Dialog,
@@ -24,6 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
   Tooltip,
@@ -285,6 +287,7 @@ export function ViewerApp({
   const [tier, setTier] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [frameNonce, setFrameNonce] = useState(0);
+  const [venueNonce, setVenueNonce] = useState(0);
   const [units, setUnits] = useUnits();
   const [detailOpen, setDetailOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -292,13 +295,8 @@ export function ViewerApp({
   const [objectSort, setObjectSort] = useState<ObjectSort>("name");
   const [objectSortDir, setObjectSortDir] = useState<SortDir>("asc");
   const [viewMode, setViewMode] = useState<ViewMode>("plan");
-  const [orthographic, setOrthographic] = useState(false);
-  const [cuboids, setCuboids] = useState(false);
-  const [fog, setFog] = useState(false);
-  const [ao, setAo] = useState(false);
-  const [shadows, setShadows] = useState(false);
-  const [environment, setEnvironment] = useState(false);
-  const [pathTracing, setPathTracing] = useState(false);
+  const [hallView, setHallView] = useState<HallView>(DEFAULT_HALL_VIEW);
+  const [hallSettingsOpen, setHallSettingsOpen] = useState(false);
 
   useEffect(() => {
     if (window.matchMedia("(min-width: 768px)").matches) setViewMode("hall");
@@ -531,8 +529,11 @@ export function ViewerApp({
   return (
     <div className="relative h-dvh overflow-clip bg-background">
       <main
-        className="absolute inset-y-0 right-0 overflow-clip"
-        style={{ left: sidebarOpen ? 260 : 40 }}
+        className="absolute inset-y-0 overflow-clip transition-[right] duration-200 ease-in-out"
+        style={{
+          left: sidebarOpen ? 260 : 40,
+          right: hallSettingsOpen ? HALL_VIEW_ASIDE_W : 0,
+        }}
       >
         {floor ? (
           viewMode === "hall" ? (
@@ -544,14 +545,24 @@ export function ViewerApp({
               selectedId={selected?.id ?? null}
               highlightId={highlightId}
               frameNonce={frameNonce}
+              venueNonce={venueNonce}
               units={units}
-              orthographic={orthographic}
-              cuboids={cuboids}
-              fog={fog}
-              ao={ao}
-              shadows={shadows}
-              environment={environment}
-              pathTracing={pathTracing}
+              orthographic={hallView.orthographic}
+              cuboids={hallView.cuboids}
+              fog={hallView.fog}
+              fogIntensity={hallView.fogIntensity}
+              ao={hallView.ao}
+              shadows={hallView.shadows}
+              environment={hallView.environment}
+              pathTracing={hallView.pathTracing}
+              azimuth={hallView.azimuth}
+              elevation={hallView.elevation}
+              distance={hallView.distance}
+              lightAzimuth={hallView.lightAzimuth}
+              lightElevation={hallView.lightElevation}
+              lightDistance={hallView.lightDistance}
+              lightIntensity={hallView.lightIntensity}
+              fill={hallView.fill}
               onSelect={selectFromMap}
             />
           ) : (
@@ -562,6 +573,7 @@ export function ViewerApp({
               sponsors={sponsors}
               selectedId={selectedId}
               frameNonce={frameNonce}
+              venueNonce={venueNonce}
               highlightId={highlightId}
               units={units}
               onSelect={selectFromMap}
@@ -572,51 +584,58 @@ export function ViewerApp({
             Map has not been published yet.
           </div>
         )}
-      </main>
 
-      <div className="pointer-events-none absolute top-4 right-4 z-20 text-[12px] text-muted-foreground">
-        <p suppressHydrationWarning>{doc.event.name}</p>
-      </div>
-
-      <div className="pointer-events-auto absolute bottom-4 left-1/2 z-50 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-background/80 p-1 shadow-sm backdrop-blur-md">
-        <ViewModeToggle
-          value={viewMode}
-          onChange={setViewMode}
-          orthographic={orthographic}
-          onOrthographicChange={setOrthographic}
-          cuboids={cuboids}
-          onCuboidsChange={setCuboids}
-          fog={fog}
-          onFogChange={setFog}
-          ao={ao}
-          onAoChange={setAo}
-          shadows={shadows}
-          onShadowsChange={setShadows}
-          environment={environment}
-          onEnvironmentChange={setEnvironment}
-          pathTracing={pathTracing}
-          onPathTracingChange={setPathTracing}
-        />
-        <FloorSwitcher
-          floors={[...doc.floors].sort((a, b) => a.order - b.order)}
-          value={floorId}
-          onChange={(id) => {
-            setFloorId(id);
-            setSelectedId(null);
-          }}
-        />
-        <UnitsToggle units={units} onChange={setUnits} />
-        <div className="md:hidden">
+        <div className="pointer-events-auto absolute bottom-4 left-1/2 z-50 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-background/80 p-1 shadow-sm backdrop-blur-md">
+          <ViewModeToggle
+            value={viewMode}
+            onChange={(mode) => {
+              setViewMode(mode);
+              setFrameNonce(0);
+              setVenueNonce((n) => n + 1);
+            }}
+          />
+          {viewMode === "hall" ? (
+            <Button
+              size="icon-sm"
+              variant={hallSettingsOpen ? "secondary" : "ghost"}
+              className="size-8"
+              title="3D view"
+              aria-label="3D view settings"
+              aria-pressed={hallSettingsOpen}
+              onClick={() => setHallSettingsOpen((open) => !open)}
+            >
+              <SlidersHorizontal strokeWidth={1.5} />
+            </Button>
+          ) : null}
+          <span className="mx-0.5 hidden h-5 w-px bg-border sm:block" aria-hidden />
+          <FloorSwitcher
+            floors={[...doc.floors].sort((a, b) => a.order - b.order)}
+            value={floorId}
+            onChange={(id) => {
+              setFloorId(id);
+              setSelectedId(null);
+            }}
+          />
+          <UnitsToggle units={units} onChange={setUnits} />
           <ThemeToggle />
         </div>
-      </div>
+      </main>
+
+      {hallSettingsOpen ? (
+        <div className="absolute inset-y-0 right-0 z-10">
+          <HallViewAside
+            hallView={hallView}
+            onHallViewChange={(patch) => setHallView((prev) => ({ ...prev, ...patch }))}
+            onClose={() => setHallSettingsOpen(false)}
+          />
+        </div>
+      ) : null}
 
       <aside
         className="absolute top-0 left-0 bottom-0 z-10 flex flex-col border-r border-border bg-background"
         style={{ width: sidebarOpen ? 260 : 40 }}
       >
         <div className="flex h-10 shrink-0 items-center border-b border-border px-1">
-          {sidebarOpen ? <ThemeToggle /> : null}
           <button
             type="button"
             className="ml-auto flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground hover:bg-muted"
