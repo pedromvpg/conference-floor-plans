@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { Grid, Html } from "@react-three/drei";
+import { Grid, Html, Text } from "@react-three/drei";
 import { useThree, type ThreeEvent } from "@react-three/fiber";
 import { AMENITY_COLOR } from "@/lib/amenities";
 import { pinLucideIcon } from "@/lib/pin-icons";
@@ -13,7 +13,6 @@ import { displayLogoUrl, objectUrls, snapWorld, yawRad } from "@/lib/hall";
 import { commitShape, ellipseFromCorners, objectShape, rotateBezier, tessellate, translateBezier } from "@/lib/bezier";
 import { stampPinObject, newMapObject } from "@/lib/new-object";
 import { gridSize } from "@/lib/units";
-import { Text } from "@react-three/drei";
 import { svgVenueWorldLabels, svgVenueWorldPolylines } from "@/lib/svg-layers";
 import type {
   AmenityType,
@@ -677,7 +676,7 @@ function HallVenuePaths({
         <Text
           key={`${label.x}:${label.y}:${i}:${label.text}`}
           position={[label.x, 0.04, label.y]}
-          rotation={[-Math.PI / 2, 0, -label.rotation]}
+          rotation={[-Math.PI / 2, 0, label.rotation]}
           fontSize={Math.max(0.25, label.fontSize)}
           color={color}
           anchorX={label.align === "left" ? "left" : label.align === "right" ? "right" : "center"}
