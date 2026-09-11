@@ -19,24 +19,12 @@ import type {
 import { isPinObject, isMapPinObject, MAP_PIN_META, VENUE_ID } from "@/lib/types";
 import { PlanStage } from "@/components/map/PlanStage";
 import { leafletViewFromPlan, floorDeltaToEnu, offsetLatLng, roundBasemapCoord } from "@/lib/basemap";
-
-function calibrationNearlyEqual(a: Calibration, b: Calibration): boolean {
-  const ay = a.metersPerPixelY ?? a.metersPerPixel;
-  const by = b.metersPerPixelY ?? b.metersPerPixel;
-  return (
-    Math.abs(a.metersPerPixel - b.metersPerPixel) < 1e-12 &&
-    Math.abs(ay - by) < 1e-12 &&
-    Math.abs(a.originX - b.originX) < 1e-6 &&
-    Math.abs(a.originY - b.originY) < 1e-6
-  );
-}
 import {
   alignmentTargets,
   angleDeg,
   applyBoundsToRing,
   axisScale,
   calibrationFromTwoClicks,
-  calibrationFromWorldRect,
   floorSizeMeters,
   handleCursor,
   hypot,
@@ -50,6 +38,7 @@ import {
   rotateHandlePos,
   rotateRing,
   snapDeg,
+  constrainToOctant,
   snapToPixel,
   snapScalar,
   snapToShapeNodes,
@@ -98,6 +87,7 @@ import {
   lastSvgLayerId,
   layerAttrSelector,
   setSvgElementBezier,
+  setSvgElementBox,
   setSvgElementPoint,
   setSvgElementRotation,
   svgElementBezier,
@@ -149,8 +139,6 @@ type Props = {
   /** Slide the hall on Earth (lat/lng) instead of panning the shared camera. */
   basemapAlignMode?: boolean;
   onBasemapAnchorChange?: (next: Pick<FloorBasemap, "lat" | "lng">) => void;
-  onBasemapDerivedZoom?: (zoom: number) => void;
-  basemapZoomTo?: { zoom: number; nonce: number } | null;
   /** Inline SVG markup so venue layers can be hidden/reordered live. */
   underlaySvg?: string | null;
   underlayHoverLayerId?: string | null;
@@ -309,6 +297,80 @@ function amenityBounds(
   return { minX: x - r, minY: y - r, maxX: x + r, maxY: y + r, w: r * 2, h: r * 2 };
 }
 
+function rotateAround(
+  cx: number,
+  cy: number,
+  deg: number,
+  x: number,
+  y: number,
+): [number, number] {
+  const r = (deg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  const dx = x - cx;
+  const dy = y - cy;
+  return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos];
+}
+
+/** Front is local +Y after un-yaw (matches 3D +Z / back wall at local −Y). */
+function FacingHint({
+  cx,
+  cy,
+  facingDeg,
+  local,
+  strokeWidth,
+  selected,
+}: {
+  cx: number;
+  cy: number;
+  facingDeg: number;
+  local: { minX: number; minY: number; maxX: number; maxY: number; w: number; h: number };
+  strokeWidth: number;
+  selected: boolean;
+}) {
+  const rot = (x: number, y: number) => rotateAround(cx, cy, facingDeg, x, y);
+  const [bx1, by1] = rot(local.minX, local.minY);
+  const [bx2, by2] = rot(local.maxX, local.minY);
+  const midX = (local.minX + local.maxX) / 2;
+  const [fx, fy] = rot(midX, local.maxY);
+  const [bx, by] = rot(midX, local.minY);
+  const span = Math.min(local.w, local.h);
+  const chevron = Math.max(span * 0.12, strokeWidth * 4);
+  if (!(span > 0)) return null;
+  const vx = fx - bx;
+  const vy = fy - by;
+  const len = Math.hypot(vx, vy) || 1;
+  const ux = vx / len;
+  const uy = vy / len;
+  const px = -uy;
+  const py = ux;
+  const tipX = fx + ux * chevron * 0.15;
+  const tipY = fy + uy * chevron * 0.15;
+  const baseX = tipX - ux * chevron;
+  const baseY = tipY - uy * chevron;
+  const hw = chevron * 0.42;
+  const color = selected ? "#f97316" : "var(--map-stroke)";
+  return (
+    <g pointerEvents="none">
+      <line
+        x1={bx1}
+        y1={by1}
+        x2={bx2}
+        y2={by2}
+        stroke={color}
+        strokeWidth={strokeWidth * (selected ? 2.4 : 1.8)}
+        strokeLinecap="square"
+        opacity={selected ? 0.95 : 0.7}
+      />
+      <polygon
+        points={`${tipX},${tipY} ${baseX + px * hw},${baseY + py * hw} ${baseX - px * hw},${baseY - py * hw}`}
+        fill={color}
+        opacity={selected ? 0.95 : 0.55}
+      />
+    </g>
+  );
+}
+
 function RotateKnob({
   box,
   handleR,
@@ -370,8 +432,6 @@ export function FloorCanvas({
   basemapInteractive = false,
   basemapAlignMode = false,
   onBasemapAnchorChange,
-  onBasemapDerivedZoom,
-  basemapZoomTo = null,
   underlaySvg,
   underlayHoverLayerId,
   editVenueElements = false,
@@ -393,7 +453,7 @@ export function FloorCanvas({
   const lastVenuePreview = useRef<string | null>(null);
   const svgElDrag = useRef<{
     id: string;
-    mode: "move" | "vertex" | "handle-in" | "handle-out" | "rotate";
+    mode: "move" | "vertex" | "handle-in" | "handle-out" | "rotate" | "resize";
     vertex?: number;
     startMarkup: string;
     ox: number;
@@ -402,6 +462,9 @@ export function FloorCanvas({
     closed?: boolean;
     startAngle?: number;
     startRot?: number;
+    handle?: BoundsHandle;
+    startBounds?: { minX: number; minY: number; maxX: number; maxY: number; w: number; h: number };
+    ctm?: DOMMatrix;
   } | null>(null);
   const svgElPending = useRef<{
     id: string;
@@ -427,9 +490,19 @@ export function FloorCanvas({
   const [pulseId, setPulseId] = useState<string | null>(null);
   const [draftRect, setDraftRect] = useState<Ring | null>(null);
   const [draftNodes, setDraftNodes] = useState<BezierNode[]>([]);
+  const draftNodesRef = useRef(draftNodes);
+  draftNodesRef.current = draftNodes;
+  const discardPolygonRef = useRef(false);
+  const polygonVenueRef = useRef(false);
+  const skipPolygonFinishRef = useRef(false);
+  const vertexClickRef = useRef<{ key: string; t: number } | null>(null);
   const [draftCursor, setDraftCursor] = useState<{ x: number; y: number } | null>(null);
   const [editAnchor, setEditAnchor] = useState<number | null>(null);
+  const [editingPoints, setEditingPoints] = useState(false);
   const [venueAnchor, setVenueAnchor] = useState<number | null>(null);
+  const [editingVenuePoints, setEditingVenuePoints] = useState(false);
+  const keepEditingPointsRef = useRef(false);
+  const keepEditingVenuePointsRef = useRef(false);
   const penPress = useRef<{ index: number; x: number; y: number } | null>(null);
   const [calPts, setCalPts] = useState<{ x: number; y: number }[]>([]);
   const [calCursor, setCalCursor] = useState<{ x: number; y: number } | null>(null);
@@ -470,7 +543,6 @@ export function FloorCanvas({
   const altSnapOff = useRef(false);
   const [guides, setGuides] = useState<{ gx: number[]; gy: number[] }>({ gx: [], gy: [] });
   const [hoverHandle, setHoverHandle] = useState<BoundsHandle | "rotate" | null>(null);
-  const [previewCal, setPreviewCal] = useState<Calibration | null>(null);
 
   function cancelCamAnim() {
     if (camAnim.current != null) {
@@ -557,7 +629,7 @@ export function FloorCanvas({
   }, [tool]);
 
   const sponsorById = useMemo(() => new Map(sponsors.map((s) => [s.id, s])), [sponsors]);
-  const liveCal = previewCal ?? cal;
+  const liveCal = cal;
   const px = liveCal ? axisScale(liveCal) : { x: 0.01, y: 0.01 };
   const venueRect = liveCal ? venueWorldRect(liveCal) : null;
   const canEditVenue = mode === "edit" && editLayer === "venue";
@@ -702,11 +774,12 @@ export function FloorCanvas({
     return true;
   }
 
-  function commitVenuePath(nodes: BezierNode[]) {
+  function commitVenuePath(nodes: BezierNode[], closed = true) {
     if (!underlaySvg) return false;
     const svgNodes = worldNodesToSvg(nodes);
-    if (!svgNodes || svgNodes.length < 3) return false;
-    const next = appendSvgBezier(underlaySvg, svgNodes, true);
+    const min = closed ? 3 : 2;
+    if (!svgNodes || svgNodes.length < min) return false;
+    const next = appendSvgBezier(underlaySvg, svgNodes, closed);
     onCommitVenueSvg?.(next);
     onSelectVenueElement?.(lastSvgLayerId(next));
     return true;
@@ -782,6 +855,56 @@ export function FloorCanvas({
     return { x: p.x, y: p.y };
   }
 
+  function localWithCtm(ctm: DOMMatrix, x: number, y: number) {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const svgCtm = svg.getScreenCTM();
+    if (!svgCtm) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = x;
+    pt.y = y;
+    const screen = pt.matrixTransform(ctm);
+    pt.x = screen.x;
+    pt.y = screen.y;
+    const world = pt.matrixTransform(svgCtm.inverse());
+    return { x: world.x, y: world.y };
+  }
+
+  function worldWithCtm(ctm: DOMMatrix, x: number, y: number) {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const svgCtm = svg.getScreenCTM();
+    if (!svgCtm) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = x;
+    pt.y = y;
+    const screen = pt.matrixTransform(svgCtm);
+    pt.x = screen.x;
+    pt.y = screen.y;
+    const local = pt.matrixTransform(ctm.inverse());
+    return { x: local.x, y: local.y };
+  }
+
+  function scaleBezierToWorldBounds(
+    nodes: BezierNode[],
+    ctm: DOMMatrix,
+    start: { minX: number; minY: number; w: number; h: number },
+    next: { minX: number; minY: number; maxX: number; maxY: number },
+  ) {
+    const worldNodes = nodes.map((n) => {
+      const p = localWithCtm(ctm, n.x, n.y);
+      const pin = localWithCtm(ctm, n.x + n.inDx, n.y + n.inDy);
+      const pout = localWithCtm(ctm, n.x + n.outDx, n.y + n.outDy);
+      return { ...n, x: p.x, y: p.y, inDx: pin.x - p.x, inDy: pin.y - p.y, outDx: pout.x - p.x, outDy: pout.y - p.y };
+    });
+    return applyBoundsToBezier(worldNodes, start, next).map((n) => {
+      const p = worldWithCtm(ctm, n.x, n.y);
+      const pin = worldWithCtm(ctm, n.x + n.inDx, n.y + n.inDy);
+      const pout = worldWithCtm(ctm, n.x + n.outDx, n.y + n.outDy);
+      return { ...n, x: p.x, y: p.y, inDx: pin.x - p.x, inDy: pin.y - p.y, outDx: pout.x - p.x, outDy: pout.y - p.y };
+    });
+  }
+
   function venueElFromEvent(e: React.PointerEvent): string | null {
     let node: Element | null = e.target instanceof Element ? e.target : null;
     while (node) {
@@ -839,14 +962,16 @@ export function FloorCanvas({
     }
     function onUp(e: KeyboardEvent) {
       if (e.code !== "Space") return;
+      if (typing(e.target)) return;
+      e.preventDefault();
       clearSpace();
     }
-    window.addEventListener("keydown", onDown);
-    window.addEventListener("keyup", onUp);
+    window.addEventListener("keydown", onDown, true);
+    window.addEventListener("keyup", onUp, true);
     window.addEventListener("blur", clearSpace);
     return () => {
-      window.removeEventListener("keydown", onDown);
-      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("keydown", onDown, true);
+      window.removeEventListener("keyup", onUp, true);
       window.removeEventListener("blur", clearSpace);
     };
   }, []);
@@ -899,6 +1024,31 @@ export function FloorCanvas({
     if (sx != null) gx.push(sx);
     if (sy != null) gy.push(sy);
     return { x: sx ?? pix.x, y: sy ?? pix.y, gx, gy };
+  }
+
+  function isRepeatClick(key: string, detail: number) {
+    const now = performance.now();
+    const last = vertexClickRef.current;
+    const dbl = detail >= 2 || (last != null && last.key === key && now - last.t < 450);
+    vertexClickRef.current = { key, t: now };
+    return dbl;
+  }
+
+  function polygonDraftPoint(x: number, y: number, shiftKey: boolean) {
+    const p = snapPoint(x, y, null);
+    const last = draftNodes[draftNodes.length - 1];
+    if (!shiftKey || !last) return p;
+    const c = constrainToOctant(last.x, last.y, p.x, p.y);
+    const ang = ((snapDeg(angleDeg(last.x, last.y, c.x, c.y), 45) % 180) + 180) % 180;
+    const gx = [...p.gx];
+    const gy = [...p.gy];
+    if (ang === 0) gy.push(last.y);
+    else if (ang === 90) gx.push(last.x);
+    else {
+      gx.push(last.x);
+      gy.push(last.y);
+    }
+    return { x: c.x, y: c.y, gx, gy };
   }
 
   function svgElPointToWorld(el: SVGGraphicsElement, x: number, y: number) {
@@ -960,7 +1110,7 @@ export function FloorCanvas({
       const svg = svgRef.current;
       const aspect =
         svg && svg.clientHeight > 0 ? svg.clientWidth / svg.clientHeight : c.w / Math.max(c.h, 1e-9);
-      const scene = sceneBounds(liveCal, objects);
+      const scene = sceneBounds(cal, objects);
       const span = Math.max(
         size.w,
         size.h,
@@ -984,7 +1134,7 @@ export function FloorCanvas({
   }
 
   function worldToImagePx(p: { x: number; y: number }) {
-    const use = liveCal;
+    const use = cal;
     if (!use) return { x: p.x, y: p.y };
     const r = pixelsFromMeters(p.x, p.y, use);
     return { x: r.px, y: r.py };
@@ -1086,34 +1236,7 @@ export function FloorCanvas({
 
     if (tool === "select") {
       const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
-      const hr = screenPx(HANDLE_HALF_PX, ppm);
-      const venueSelected = selectedSet.has(VENUE_ID) && selectedSet.size === 1;
-      if (canEditVenue && tool === "select" && venueSelected && venueRect && liveCal) {
-        let handle: BoundsHandle | null = null;
-        for (const h of HANDLES) {
-          const [hx, hy] = handleXY(venueRect, h);
-          if (hypot(w.x - hx, w.y - hy) <= hr * 1.6) {
-            handle = h;
-            break;
-          }
-        }
-        if (handle) {
-          drag.current = {
-            id: VENUE_ID,
-            mode: "resize",
-            handle,
-            ox: w.x,
-            oy: w.y,
-            polygon: null,
-            x: null,
-            y: null,
-            startBounds: venueRect,
-          };
-          return;
-        }
-      }
       if (canEditVenue && editVenueElements && tool === "select" && underlaySvg) {
-        const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
         const hrEl = screenPx(HANDLE_HALF_PX, ppm);
         if (!e.shiftKey && selectedVenueElementId && elFrameRef.current) {
           const live = nestLayerEl(selectedVenueElementId);
@@ -1135,7 +1258,46 @@ export function FloorCanvas({
             }
           }
         }
-        if (!e.shiftKey && selectedVenueElementId) {
+        if (!e.shiftKey && selectedVenueElementId && elFrameRef.current && !editingVenuePoints) {
+          const live = nestLayerEl(selectedVenueElementId);
+          const selectedLocked = live?.getAttribute(LOCK_ATTR) === "1";
+          if (!selectedLocked) {
+            const frame = elFrameRef.current;
+            let handle: BoundsHandle | null = null;
+            for (const h of HANDLES) {
+              const [hx, hy] = handleXY(frame, h);
+              if (hypot(w.x - hx, w.y - hy) <= hrEl * 1.6) {
+                handle = h;
+                break;
+              }
+            }
+            if (handle) {
+              const parsed = svgElementBezier(underlaySvg, selectedVenueElementId);
+              svgElDrag.current = {
+                id: selectedVenueElementId,
+                mode: "resize",
+                handle,
+                startMarkup: underlaySvg,
+                ox: w.x,
+                oy: w.y,
+                nodes: parsed?.nodes,
+                closed: parsed?.closed,
+                startBounds: {
+                  minX: frame.minX,
+                  minY: frame.minY,
+                  maxX: frame.maxX,
+                  maxY: frame.maxY,
+                  w: frame.maxX - frame.minX,
+                  h: frame.maxY - frame.minY,
+                },
+                ctm: live?.getScreenCTM() ?? undefined,
+              };
+              lastVenuePreview.current = underlaySvg;
+              return;
+            }
+          }
+        }
+        if (!e.shiftKey && selectedVenueElementId && editingVenuePoints) {
           const live = nestLayerEl(selectedVenueElementId);
           const selectedLocked = live?.getAttribute(LOCK_ATTR) === "1";
           const parsed = !selectedLocked ? svgElementBezier(underlaySvg, selectedVenueElementId) : null;
@@ -1150,13 +1312,19 @@ export function FloorCanvas({
               const screen = pt.matrixTransform(ctm);
               return toWorld(screen.x, screen.y);
             };
-            if (venueAnchor != null && parsed.nodes[venueAnchor] && nodeHasHandles(parsed.nodes[venueAnchor]) && e.detail !== 2) {
+            if (venueAnchor != null && parsed.nodes[venueAnchor] && nodeHasHandles(parsed.nodes[venueAnchor])) {
               const n = parsed.nodes[venueAnchor];
               for (const which of ["out", "in"] as const) {
                 const hx = n.x + (which === "out" ? n.outDx : n.inDx);
                 const hy = n.y + (which === "out" ? n.outDy : n.inDy);
                 const world = toW(hx, hy);
                 if (hypot(w.x - world.x, w.y - world.y) <= hrEl * 1.8) {
+                  if (isRepeatClick(`venue:${selectedVenueElementId}:${venueAnchor}:h`, e.detail)) {
+                    const nextNodes = toggleSmooth(parsed.nodes, venueAnchor, parsed.closed);
+                    const next = setSvgElementBezier(underlaySvg, selectedVenueElementId, nextNodes, parsed.closed);
+                    onCommitVenueSvg?.(next);
+                    return;
+                  }
                   svgElDrag.current = {
                     id: selectedVenueElementId,
                     mode: which === "out" ? "handle-out" : "handle-in",
@@ -1178,7 +1346,7 @@ export function FloorCanvas({
               const world = toW(parsed.nodes[i].x, parsed.nodes[i].y);
               if (hypot(w.x - world.x, w.y - world.y) <= vertexSlop) {
                 setVenueAnchor(i);
-                if (e.detail === 2) {
+                if (isRepeatClick(`venue:${selectedVenueElementId}:${i}`, e.detail)) {
                   const nextNodes = toggleSmooth(parsed.nodes, i, parsed.closed);
                   const next = setSvgElementBezier(underlaySvg, selectedVenueElementId, nextNodes, parsed.closed);
                   onCommitVenueSvg?.(next);
@@ -1199,24 +1367,27 @@ export function FloorCanvas({
                 return;
               }
             }
-            if (e.detail !== 2) {
-              const local = clientToSvgEl(live, e.clientX, e.clientY);
-              const near = closestOnPath(parsed.nodes, local.x, local.y, parsed.closed);
-              if (near && near.t > 0.04 && near.t < 0.96) {
-                const worldHit = toW(near.x, near.y);
-                if (hypot(w.x - worldHit.x, w.y - worldHit.y) <= strokeSlop) {
-                  if (isRectangleShape(parsed.nodes) && !e.altKey) return;
-                  const nextNodes = insertNode(parsed.nodes, near.index, near.t, parsed.closed);
-                  const next = setSvgElementBezier(underlaySvg, selectedVenueElementId, nextNodes, parsed.closed);
-                  onCommitVenueSvg?.(next);
-                  setVenueAnchor(near.index + 1);
+            const local = clientToSvgEl(live, e.clientX, e.clientY);
+            const near = closestOnPath(parsed.nodes, local.x, local.y, parsed.closed);
+            if (near && near.t > 0.04 && near.t < 0.96) {
+              const worldHit = toW(near.x, near.y);
+              if (hypot(w.x - worldHit.x, w.y - worldHit.y) <= strokeSlop) {
+                if (isRectangleShape(parsed.nodes) && !e.altKey) return;
+                if (isRepeatClick(`venue-edit:${selectedVenueElementId}`, e.detail)) {
+                  setEditingVenuePoints(false);
+                  setVenueAnchor(null);
                   return;
                 }
+                const nextNodes = insertNode(parsed.nodes, near.index, near.t, parsed.closed);
+                const next = setSvgElementBezier(underlaySvg, selectedVenueElementId, nextNodes, parsed.closed);
+                onCommitVenueSvg?.(next);
+                setVenueAnchor(near.index + 1);
+                return;
               }
             }
           }
         }
-        if (!e.shiftKey && selectedVenueElementId) {
+        if (!e.shiftKey && selectedVenueElementId && editingVenuePoints) {
           const live = nestLayerEl(selectedVenueElementId);
           const selectedLocked = live?.getAttribute(LOCK_ATTR) === "1";
           const boxPts = !selectedLocked ? svgElementPoints(underlaySvg, selectedVenueElementId) : null;
@@ -1252,6 +1423,19 @@ export function FloorCanvas({
         }
         const elId = venueElFromEvent(e);
         if (elId) {
+          if (!e.shiftKey && isRepeatClick(`venue-edit:${elId}`, e.detail)) {
+            if (editingVenuePoints && elId === selectedVenueElementId) {
+              setEditingVenuePoints(false);
+              setVenueAnchor(null);
+              return;
+            }
+            if (elId !== selectedVenueElementId) keepEditingVenuePointsRef.current = true;
+            onSelectVenueElement?.(elId, false);
+            setEditingVenuePoints(true);
+            setVenueAnchor(null);
+            svgElPending.current = null;
+            return;
+          }
           onSelectVenueElement?.(elId, e.shiftKey);
           setVenueAnchor(null);
           if (!e.shiftKey) {
@@ -1322,16 +1506,45 @@ export function FloorCanvas({
           };
           return;
         }
-        if (editAnchor != null && shape[editAnchor] && nodeHasHandles(shape[editAnchor]) && e.detail !== 2) {
-          const n = shape[editAnchor];
-          for (const which of ["out", "in"] as const) {
-            const hx = n.x + (which === "out" ? n.outDx : n.inDx);
-            const hy = n.y + (which === "out" ? n.outDy : n.inDy);
-            if (hypot(w.x - hx, w.y - hy) <= hrV * 1.8) {
+        if (editingPoints) {
+          if (editAnchor != null && shape[editAnchor] && nodeHasHandles(shape[editAnchor])) {
+            const n = shape[editAnchor];
+            for (const which of ["out", "in"] as const) {
+              const hx = n.x + (which === "out" ? n.outDx : n.inDx);
+              const hy = n.y + (which === "out" ? n.outDy : n.inDy);
+              if (hypot(w.x - hx, w.y - hy) <= hrV * 1.8) {
+                if (isRepeatClick(`obj:${sole.id}:${editAnchor}:h`, e.detail)) {
+                  const next = commitShape(toggleSmooth(shape, editAnchor, true));
+                  onChangeObject?.({ ...sole, ...next });
+                  return;
+                }
+                drag.current = {
+                  id: sole.id,
+                  mode: which === "out" ? "handle-out" : "handle-in",
+                  vertex: editAnchor,
+                  ox: w.x,
+                  oy: w.y,
+                  polygon: sole.polygon,
+                  path: shape.map((node) => ({ ...node })),
+                  x: sole.x,
+                  y: sole.y,
+                };
+                return;
+              }
+            }
+          }
+          for (let i = 0; i < shape.length; i++) {
+            if (hypot(w.x - shape[i].x, w.y - shape[i].y) <= vertexSlop) {
+              setEditAnchor(i);
+              if (isRepeatClick(`obj:${sole.id}:${i}`, e.detail)) {
+                const next = commitShape(toggleSmooth(shape, i, true));
+                onChangeObject?.({ ...sole, ...next });
+                return;
+              }
               drag.current = {
                 id: sole.id,
-                mode: which === "out" ? "handle-out" : "handle-in",
-                vertex: editAnchor,
+                mode: "vertex",
+                vertex: i,
                 ox: w.x,
                 oy: w.y,
                 polygon: sole.polygon,
@@ -1342,30 +1555,11 @@ export function FloorCanvas({
               return;
             }
           }
-        }
-        for (let i = 0; i < shape.length; i++) {
-          if (hypot(w.x - shape[i].x, w.y - shape[i].y) <= vertexSlop) {
-            setEditAnchor(i);
-            if (e.detail === 2) {
-              const next = commitShape(toggleSmooth(shape, i, true));
-              onChangeObject?.({ ...sole, ...next });
-              return;
-            }
-            drag.current = {
-              id: sole.id,
-              mode: "vertex",
-              vertex: i,
-              ox: w.x,
-              oy: w.y,
-              polygon: sole.polygon,
-              path: shape.map((node) => ({ ...node })),
-              x: sole.x,
-              y: sole.y,
-            };
+          if (isRepeatClick(`obj-edit:${sole.id}`, e.detail) && hitTest(w.x, w.y)?.id === sole.id) {
+            setEditingPoints(false);
+            setEditAnchor(null);
             return;
           }
-        }
-        if (e.detail !== 2) {
           const near = closestOnPath(shape, w.x, w.y, true);
           if (near && near.t > 0.04 && near.t < 0.96 && near.dist <= strokeSlop) {
             if (isRectangleShape(shape) && !e.altKey) return;
@@ -1375,30 +1569,35 @@ export function FloorCanvas({
             setEditAnchor(near.index + 1);
             return;
           }
-        }
-        const b = ringBounds(sole.polygon);
-        let handle: BoundsHandle | null = null;
-        for (const h of HANDLES) {
-          const [hx, hy] = handleXY(b, h);
-          if (hypot(w.x - hx, w.y - hy) <= hr * 1.6) {
-            handle = h;
-            break;
+        } else {
+          const b = ringBounds(sole.polygon);
+          let handle: BoundsHandle | null = null;
+          for (const h of HANDLES) {
+            const [hx, hy] = handleXY(b, h);
+            if (hypot(w.x - hx, w.y - hy) <= hrV * 1.6) {
+              handle = h;
+              break;
+            }
           }
-        }
-        if (handle) {
-          drag.current = {
-            id: sole.id,
-            mode: "resize",
-            handle,
-            ox: w.x,
-            oy: w.y,
-            polygon: sole.polygon.map((p) => [...p] as [number, number]),
-            path: shape.map((node) => ({ ...node })),
-            x: sole.x,
-            y: sole.y,
-            startBounds: b,
-          };
-          return;
+          if (handle) {
+            drag.current = {
+              id: sole.id,
+              mode: "resize",
+              handle,
+              ox: w.x,
+              oy: w.y,
+              polygon: sole.polygon.map((p) => [...p] as [number, number]),
+              path: shape.map((node) => ({ ...node })),
+              x: sole.x,
+              y: sole.y,
+              startBounds: b,
+            };
+            return;
+          }
+          if (isRepeatClick(`obj-edit:${sole.id}`, e.detail) && hitTest(w.x, w.y)?.id === sole.id) {
+            setEditingPoints(true);
+            return;
+          }
         }
       }
       const hit = canEditObjects ? hitTest(w.x, w.y) : null;
@@ -1410,6 +1609,18 @@ export function FloorCanvas({
           ids = [hit.id];
         }
         emitSelect(ids);
+        if (
+          !e.shiftKey &&
+          ids.length === 1 &&
+          ids[0] === hit.id &&
+          sole?.id !== hit.id &&
+          objects.find((o) => o.id === hit.id)?.polygon &&
+          isRepeatClick(`obj-edit:${hit.id}`, e.detail)
+        ) {
+          keepEditingPointsRef.current = true;
+          setEditingPoints(true);
+          return;
+        }
         if (canEditObjects && tool === "select" && ids.includes(hit.id)) {
           pendingMove.current = {
             clientX: e.clientX,
@@ -1429,18 +1640,6 @@ export function FloorCanvas({
         w.y <= venueRect.maxY;
       if (canEditVenue && tool === "select" && onVenue && liveCal) {
         emitSelect([VENUE_ID]);
-        if (e.shiftKey) {
-          drag.current = {
-            id: VENUE_ID,
-            mode: "move",
-            ox: w.x,
-            oy: w.y,
-            polygon: null,
-            x: null,
-            y: null,
-            startBounds: venueRect,
-          };
-        }
         return;
       }
       if (canEditObjects && tool === "select") {
@@ -1520,16 +1719,37 @@ export function FloorCanvas({
 
     if (tool === "polygon") {
       if (!canEditObjects && !drawVenueShapes) return;
-      const p = snapPoint(w.x, w.y, null);
+      const p = polygonDraftPoint(w.x, w.y, e.shiftKey);
       setGuides({ gx: p.gx, gy: p.gy });
       const first = draftNodes[0];
       const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
       const closeR = screenPx(10, ppm);
       if (first && draftNodes.length >= 3 && hypot(p.x - first.x, p.y - first.y) <= closeR) {
-        closePolygon();
+        if (isRepeatClick("draft:0", e.detail) && (nodeHasHandles(first) || first.mode !== "none")) {
+          setDraftNodes((nodes) => nodes.map((n, i) => (i === 0 ? corner(n.x, n.y) : n)));
+          skipPolygonFinishRef.current = true;
+          return;
+        }
+        finishPolygon(true);
         return;
       }
+      for (let i = draftNodes.length - 1; i >= 0; i--) {
+        const n = draftNodes[i];
+        if (hypot(p.x - n.x, p.y - n.y) > closeR) continue;
+        if (isRepeatClick(`draft:${i}`, e.detail) && (nodeHasHandles(n) || n.mode !== "none")) {
+          setDraftNodes((nodes) => nodes.map((node, j) => (j === i ? corner(n.x, n.y) : node)));
+          skipPolygonFinishRef.current = true;
+          return;
+        }
+        if (i === draftNodes.length - 1) {
+          penPress.current = { index: i, x: n.x, y: n.y };
+          return;
+        }
+        break;
+      }
+      if (e.detail >= 2) return;
       const node = corner(p.x, p.y);
+      if (!draftNodes.length) polygonVenueRef.current = drawVenueShapes;
       setDraftNodes((prev) => [...prev, node]);
       penPress.current = { index: draftNodes.length, x: p.x, y: p.y };
       return;
@@ -1546,6 +1766,33 @@ export function FloorCanvas({
       const factor = pinch.current.dist / Math.max(1, dist);
       zoomAt(pinch.current.mid.x, pinch.current.mid.y, factor);
       pinch.current = { dist, mid: pinch.current.mid };
+      return;
+    }
+    if (panLast.current && pointers.current.size === 1) {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const dx = e.clientX - panLast.current.x;
+      const dy = e.clientY - panLast.current.y;
+      if (viewPress.current && hypot(e.clientX - viewPress.current.x, e.clientY - viewPress.current.y) > 6) {
+        viewPress.current.moved = true;
+      }
+      panLast.current = { x: e.clientX, y: e.clientY };
+      const ppm = svgUserToScreen(svg, cam.w, cam.h);
+      cancelCamAnim();
+      if (basemapAlignMode && onBasemapAnchorChange) {
+        const bm = basemapRef.current;
+        if (!bm?.enabled) return;
+        const dxm = dx / ppm;
+        const dym = dy / ppm;
+        const { east, north } = floorDeltaToEnu(dxm, dym, bm.bearing ?? 0);
+        const next = offsetLatLng(bm.lat, bm.lng, east, north);
+        const lat = roundBasemapCoord(next.lat);
+        const lng = roundBasemapCoord(next.lng);
+        basemapRef.current = { ...bm, lat, lng };
+        onBasemapAnchorChange({ lat, lng });
+        return;
+      }
+      setCam((c) => ({ ...c, x: c.x - dx / ppm, y: c.y - dy / ppm }));
       return;
     }
     if (svgElPending.current && !svgElDrag.current) {
@@ -1619,6 +1866,35 @@ export function FloorCanvas({
         const next = setSvgElementRotation(d.startMarkup, d.id, nextDeg);
         lastVenuePreview.current = next;
         onPreviewVenueSvg?.(next);
+      } else if (d.mode === "resize" && d.handle && d.startBounds && d.ctm) {
+        const lock = e.shiftKey ? !constrainProportions : constrainProportions;
+        const cursor = toWorld(e.clientX, e.clientY);
+        const nextB = resizeBounds(
+          d.startBounds,
+          d.handle,
+          cursor.x,
+          cursor.y,
+          snapToUnits ? gridSize(units) : 0,
+          lock,
+        );
+        if (d.nodes) {
+          const nextNodes = scaleBezierToWorldBounds(d.nodes, d.ctm, d.startBounds, nextB);
+          const next = setSvgElementBezier(d.startMarkup, d.id, nextNodes, d.closed ?? true);
+          lastVenuePreview.current = next;
+          onPreviewVenueSvg?.(next);
+        } else {
+          const a = worldWithCtm(d.ctm, nextB.minX, nextB.minY);
+          const b = worldWithCtm(d.ctm, nextB.maxX, nextB.maxY);
+          const next = setSvgElementBox(d.startMarkup, d.id, {
+            x: Math.min(a.x, b.x),
+            y: Math.min(a.y, b.y),
+            w: Math.abs(b.x - a.x),
+            h: Math.abs(b.y - a.y),
+          });
+          lastVenuePreview.current = next;
+          onPreviewVenueSvg?.(next);
+        }
+        setGuides({ gx: [nextB.minX, nextB.maxX], gy: [nextB.minY, nextB.maxY] });
       }
       return;
     }
@@ -1653,14 +1929,18 @@ export function FloorCanvas({
       const hr = screenPx(HANDLE_HALF_PX, ppm);
       if (editVenueElements && selectedVenueElementId && elFrameRef.current) {
         const rh = rotateHandlePos(elFrameRef.current, hr * 3.2);
-        setHoverHandle(hypot(w.x - rh.hx, w.y - rh.hy) <= hr * 1.8 ? "rotate" : null);
-      } else if (selectedSet.size === 1 && selectedSet.has(VENUE_ID) && venueRect && canEditVenue) {
-        let handle: BoundsHandle | null = null;
-        for (const h of HANDLES) {
-          const [hx, hy] = handleXY(venueRect, h);
-          if (hypot(w.x - hx, w.y - hy) <= hr * 1.6) handle = h;
+        if (hypot(w.x - rh.hx, w.y - rh.hy) <= hr * 1.8) {
+          setHoverHandle("rotate");
+        } else if (editingVenuePoints) {
+          setHoverHandle(null);
+        } else {
+          let handle: BoundsHandle | null = null;
+          for (const h of HANDLES) {
+            const [hx, hy] = handleXY(elFrameRef.current, h);
+            if (hypot(w.x - hx, w.y - hy) <= hr * 1.6) handle = h;
+          }
+          setHoverHandle(handle);
         }
-        setHoverHandle(handle);
       } else if (canEditObjects && selectedSet.size === 1) {
         const selected = objects.find((o) => selectedSet.has(o.id));
         if (selected?.polygon) {
@@ -1670,6 +1950,8 @@ export function FloorCanvas({
           const rh = rotateHandlePos(b, hrH * 3.2);
           if (hypot(w.x - rh.hx, w.y - rh.hy) <= hrH * 1.8) {
             setHoverHandle("rotate");
+          } else if (editingPoints) {
+            setHoverHandle(null);
           } else {
             let handle: BoundsHandle | null = null;
             for (const h of HANDLES) {
@@ -1701,39 +1983,6 @@ export function FloorCanvas({
       const d = drag.current;
       if (d.starts?.length && d.mode === "move") {
         commitGroupMove(d.starts, w.x - d.ox, w.y - d.oy);
-        return;
-      }
-      if (d.id === VENUE_ID && d.startBounds && liveCal) {
-        const lock = e.shiftKey ? !constrainProportions : constrainProportions;
-        let nextB = d.startBounds;
-        if (d.mode === "resize" && d.handle) {
-          const cursor = snapBase(w.x, w.y);
-          nextB = { ...resizeBounds(d.startBounds, d.handle, cursor.x, cursor.y, snapToUnits ? gridSize(units) : 0, lock), w: 0, h: 0 };
-          nextB = {
-            minX: nextB.minX,
-            minY: nextB.minY,
-            maxX: nextB.maxX,
-            maxY: nextB.maxY,
-            w: nextB.maxX - nextB.minX,
-            h: nextB.maxY - nextB.minY,
-          };
-        } else {
-          const dx = w.x - d.ox;
-          const dy = w.y - d.oy;
-          nextB = {
-            minX: d.startBounds.minX + dx,
-            minY: d.startBounds.minY + dy,
-            maxX: d.startBounds.maxX + dx,
-            maxY: d.startBounds.maxY + dy,
-            w: d.startBounds.w,
-            h: d.startBounds.h,
-          };
-        }
-        const src = cal ?? liveCal;
-        setPreviewCal(
-          calibrationFromWorldRect(nextB, src.widthPx, src.heightPx, src.rotationDeg),
-        );
-        setGuides({ gx: [nextB.minX, nextB.maxX], gy: [nextB.minY, nextB.maxY] });
         return;
       }
       const obj = objects.find((o) => o.id === d.id);
@@ -1875,7 +2124,7 @@ export function FloorCanvas({
       return;
     }
     if (tool === "polygon" && (draftNodes.length || penPress.current)) {
-      const p = snapPoint(w.x, w.y, null);
+      const p = polygonDraftPoint(w.x, w.y, e.shiftKey);
       setDraftCursor({ x: p.x, y: p.y });
       setGuides({ gx: p.gx, gy: p.gy });
       if (penPress.current) {
@@ -1888,32 +2137,6 @@ export function FloorCanvas({
         }
       }
       return;
-    }
-    if (panLast.current && pointers.current.size === 1) {
-      const svg = svgRef.current;
-      if (!svg) return;
-      const dx = e.clientX - panLast.current.x;
-      const dy = e.clientY - panLast.current.y;
-      if (viewPress.current && hypot(e.clientX - viewPress.current.x, e.clientY - viewPress.current.y) > 6) {
-        viewPress.current.moved = true;
-      }
-      panLast.current = { x: e.clientX, y: e.clientY };
-      const ppm = svgUserToScreen(svg, cam.w, cam.h);
-      cancelCamAnim();
-      if (basemapAlignMode && onBasemapAnchorChange) {
-        const bm = basemapRef.current;
-        if (!bm?.enabled) return;
-        const dxm = dx / ppm;
-        const dym = dy / ppm;
-        const { east, north } = floorDeltaToEnu(dxm, dym, bm.bearing ?? 0);
-        const next = offsetLatLng(bm.lat, bm.lng, east, north);
-        const lat = roundBasemapCoord(next.lat);
-        const lng = roundBasemapCoord(next.lng);
-        basemapRef.current = { ...bm, lat, lng };
-        onBasemapAnchorChange({ lat, lng });
-        return;
-      }
-      setCam((c) => ({ ...c, x: c.x - dx / ppm, y: c.y - dy / ppm }));
     }
   }
 
@@ -2023,12 +2246,6 @@ export function FloorCanvas({
         commitVenueImageAt(drawing.current.x, drawing.current.y);
       }
     }
-    if (previewCal && cal && !calibrationNearlyEqual(previewCal, cal)) {
-      onCalibrated?.(previewCal, cal);
-      setPreviewCal(null);
-    } else if (previewCal) {
-      setPreviewCal(null);
-    }
     drawing.current = null;
     setDraftRect(null);
     penPress.current = null;
@@ -2043,20 +2260,23 @@ export function FloorCanvas({
     setGuides({ gx: [], gy: [] });
   }
 
-  function closePolygon() {
-    if (draftNodes.length < 3) {
+  function finishPolygon(closed: boolean, nodes = draftNodes) {
+    const min = closed ? 3 : 2;
+    if (nodes.length < min) {
+      polygonVenueRef.current = false;
       setDraftNodes([]);
       setDraftCursor(null);
       return;
     }
-    if (drawVenueShapes) {
-      commitVenuePath(draftNodes);
+    if (polygonVenueRef.current) {
+      commitVenuePath(nodes, closed);
+      polygonVenueRef.current = false;
       setDraftNodes([]);
       setDraftCursor(null);
       return;
     }
     const t = nowIso();
-    const shape = commitShape(draftNodes);
+    const shape = commitShape(nodes, closed);
     onCreateObject?.({
       id: newId(),
       floorId: floor.id,
@@ -2082,9 +2302,25 @@ export function FloorCanvas({
   }
 
   useEffect(() => {
+    if (tool === "polygon") return;
+    if (discardPolygonRef.current) {
+      discardPolygonRef.current = false;
+      setDraftNodes([]);
+      setDraftCursor(null);
+      return;
+    }
+    const nodes = draftNodesRef.current;
+    if (nodes.length >= 2) finishPolygon(false, nodes);
+    else {
+      setDraftNodes([]);
+      setDraftCursor(null);
+    }
+  }, [tool]);
+
+  useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === "Enter" && draftNodes.length) closePolygon();
+      if (e.key === "Enter" && draftNodes.length) finishPolygon(false);
       if ((e.key === "Backspace" || e.key === "Delete") && tool === "polygon" && draftNodes.length) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -2097,6 +2333,15 @@ export function FloorCanvas({
         return;
       }
       if (e.key === "Escape") {
+        if (editingPoints || editingVenuePoints) {
+          setEditingPoints(false);
+          setEditingVenuePoints(false);
+          setEditAnchor(null);
+          setVenueAnchor(null);
+          return;
+        }
+        discardPolygonRef.current = true;
+        polygonVenueRef.current = false;
         setDraftNodes([]);
         setDraftCursor(null);
         setDraftRect(null);
@@ -2109,20 +2354,6 @@ export function FloorCanvas({
         const step = e.shiftKey ? 10 : 1;
         const dx = (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0) * px.x;
         const dy = (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0) * px.y;
-        if (selectedSet.has(VENUE_ID) && selectedSet.size === 1 && liveCal && venueRect) {
-          if (!canEditVenue) return;
-          const next = {
-            minX: venueRect.minX + dx,
-            minY: venueRect.minY + dy,
-            maxX: venueRect.maxX + dx,
-            maxY: venueRect.maxY + dy,
-          };
-          onCalibrated?.(
-            calibrationFromWorldRect(next, liveCal.widthPx, liveCal.heightPx, liveCal.rotationDeg),
-            cal,
-          );
-          return;
-        }
         const moveIds = [...selectedSet].filter((id) => id !== VENUE_ID);
         if (!moveIds.length || !canEditObjects) return;
         commitGroupMove(snapshotsFor(moveIds), dx, dy);
@@ -2143,16 +2374,28 @@ export function FloorCanvas({
 
   useEffect(() => {
     setEditAnchor(null);
+    if (keepEditingPointsRef.current) {
+      keepEditingPointsRef.current = false;
+      return;
+    }
+    setEditingPoints(false);
   }, [selectedId, selectedIds?.join("|")]);
 
   useEffect(() => {
     setVenueAnchor(null);
+    if (keepEditingVenuePointsRef.current) {
+      keepEditingVenuePointsRef.current = false;
+      return;
+    }
+    setEditingVenuePoints(false);
   }, [selectedVenueElementId]);
 
   useEffect(() => {
     if (tool !== "select") {
       setEditAnchor(null);
       setVenueAnchor(null);
+      setEditingPoints(false);
+      setEditingVenuePoints(false);
     }
   }, [tool]);
 
@@ -2217,6 +2460,10 @@ export function FloorCanvas({
       maxX: Math.max(...corners.map((p) => p.x)),
       maxY: Math.max(...corners.map((p) => p.y)),
     });
+    if (!editingVenuePoints) {
+      setElHandles([]);
+      return;
+    }
     const parsed = svgElementBezier(underlaySvg, selectedVenueElementId);
     const boxPts = svgElementPoints(underlaySvg, selectedVenueElementId);
     if (!parsed && boxPts?.length) {
@@ -2237,7 +2484,7 @@ export function FloorCanvas({
       }
     });
     setElHandles(next);
-  }, [editVenueElements, selectedVenueElementId, underlaySvg, cam, underlayW, underlayH, viewportTick, venueAnchor]);
+  }, [editVenueElements, selectedVenueElementId, underlaySvg, cam, underlayW, underlayH, viewportTick, venueAnchor, editingVenuePoints]);
 
   const hallX = underlayX + (underlayW || size.w) / 2;
   const hallY = underlayY + (underlayH || size.h) / 2;
@@ -2260,31 +2507,6 @@ export function FloorCanvas({
     hallY,
     pxPerMeterScreen,
   ]);
-  const leafletCamRef = useRef(leafletCam);
-  leafletCamRef.current = leafletCam;
-  const onBasemapDerivedZoomRef = useRef(onBasemapDerivedZoom);
-  onBasemapDerivedZoomRef.current = onBasemapDerivedZoom;
-  const lastDerivedZoom = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!leafletCam || !Number.isFinite(leafletCam.zoom)) return;
-    const z = Math.round(leafletCam.zoom * 100) / 100;
-    if (lastDerivedZoom.current === z) return;
-    lastDerivedZoom.current = z;
-    onBasemapDerivedZoomRef.current?.(z);
-  }, [leafletCam]);
-
-  const zoomToNonce = useRef(0);
-  useEffect(() => {
-    if (!basemapZoomTo || basemapZoomTo.nonce === zoomToNonce.current) return;
-    zoomToNonce.current = basemapZoomTo.nonce;
-    const currentZ = leafletCamRef.current?.zoom;
-    if (currentZ == null || !Number.isFinite(basemapZoomTo.zoom)) return;
-    const factor = 2 ** (currentZ - basemapZoomTo.zoom);
-    if (!Number.isFinite(factor) || Math.abs(factor - 1) < 1e-6) return;
-    const c = camRef.current;
-    zoomAt(c.x + c.w / 2, c.y + c.h / 2, factor);
-  }, [basemapZoomTo]);
 
   const underlayHref = floor.underlayUrl;
   let underlayVb: { x: number; y: number; w: number; h: number } | null = null;
@@ -2349,7 +2571,11 @@ export function FloorCanvas({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={() => {
-        if (tool === "polygon") closePolygon();
+        if (skipPolygonFinishRef.current) {
+          skipPolygonFinishRef.current = false;
+          return;
+        }
+        if (tool === "polygon") finishPolygon(false);
       }}
     >
       <defs>
@@ -2373,9 +2599,8 @@ export function FloorCanvas({
         })}
       </defs>
       {showUnderlay && underlayInner && underlayVb ? (
-        <g
-          className="map-underlay"
-          opacity={underlayOpacity}
+          <g
+          className="map-venue-svg"
           pointerEvents={editVenueElements && canEditVenue && tool === "select" ? "auto" : "none"}
         >
           <svg
@@ -2387,12 +2612,14 @@ export function FloorCanvas({
             viewBox={`${underlayVb.x} ${underlayVb.y} ${underlayVb.w} ${underlayVb.h}`}
             preserveAspectRatio="none"
             overflow="visible"
+            colorInterpolation="sRGB"
             pointerEvents={editVenueElements && canEditVenue && tool === "select" ? "all" : "none"}
+            style={{ colorScheme: "only light", filter: "none" }}
           >
             <style>{`
+            :scope { color-scheme: only light; }
+            * { outline: none; }
             [data-cm-hover="1"] { outline: 3px solid #ff6a00; outline-offset: 2px; }
-            [data-cm-selected="1"] { outline: 2px solid #ff6a00; outline-offset: 1px; }
-            [data-cm-private="1"] { opacity: 0.4; }
           `}</style>
             <g dangerouslySetInnerHTML={{ __html: underlayInner }} />
           </svg>
@@ -2428,21 +2655,6 @@ export function FloorCanvas({
           fill="var(--map-void)"
         />
       )}
-      <rect
-        x={underlayX}
-        y={underlayY}
-        width={underlayW || size.w}
-        height={underlayH || size.h}
-        fill="none"
-        stroke={canEditVenue && selectedSet.has(VENUE_ID) ? "#f97316" : "var(--map-venue-stroke)"}
-        strokeWidth={canEditVenue && selectedSet.has(VENUE_ID) ? strokeSelected : strokeDefault}
-        strokeDasharray={
-          canEditVenue && selectedSet.has(VENUE_ID)
-            ? undefined
-            : `${screenPx(8, pxPerMeterScreen)} ${screenPx(6, pxPerMeterScreen)}`
-        }
-        pointerEvents="none"
-      />
       {editVenueElements &&
         elHandles.map((p) =>
           p.kind === "anchor" ? (
@@ -2471,6 +2683,24 @@ export function FloorCanvas({
             </g>
           ),
         )}
+      {editVenueElements && elFrame && !editingVenuePoints
+        ? HANDLES.map((h) => {
+            const [x, y] = handleXY(elFrame, h);
+            return (
+              <rect
+                key={`vh-box-${h}`}
+                x={x - handleR}
+                y={y - handleR}
+                width={handleR * 2}
+                height={handleR * 2}
+                fill="#fff"
+                stroke="#f97316"
+                strokeWidth={screenPx(1.5, pxPerMeterScreen)}
+                pointerEvents="none"
+              />
+            );
+          })
+        : null}
       {editVenueElements && elFrame ? <RotateKnob box={elFrame} handleR={handleR} /> : null}
       {showGrid && cal ? <rect x={cam.x} y={cam.y} width={cam.w} height={cam.h} fill="url(#grid)" pointerEvents="none" /> : null}
       {showGrid && showPixelGrid ? (
@@ -2579,6 +2809,16 @@ export function FloorCanvas({
               >
                 {sizeLabel}
               </text>
+            ) : null}
+            {mode === "edit" && Math.min(screenW, screenH) > 18 ? (
+              <FacingHint
+                cx={c.x}
+                cy={c.y}
+                facingDeg={o.facingDeg ?? 0}
+                local={lb}
+                strokeWidth={selected ? strokeSelected : strokeDefault}
+                selected={selected}
+              />
             ) : null}
           </g>
         );
@@ -2758,17 +2998,15 @@ export function FloorCanvas({
             if (selectedSet.size !== 1) return null;
             const selected = objects.find((o) => selectedSet.has(o.id));
             const b =
-              canEditVenue && selectedSet.has(VENUE_ID) && venueRect
-                ? venueRect
-                : canEditObjects && selected?.polygon
-                  ? ringBounds(selected.polygon)
-                  : canEditObjects && selected && isPinObject(selected)
-                    ? amenityBounds(selected, pxPerMeterScreen)
-                    : null;
+              canEditObjects && selected?.polygon
+                ? ringBounds(selected.polygon)
+                : canEditObjects && selected && isPinObject(selected)
+                  ? amenityBounds(selected, pxPerMeterScreen)
+                  : null;
             const shape = canEditObjects && selected?.polygon ? objectShape(selected) : [];
             return (
               <g pointerEvents="none">
-                {b && selected && !isPinObject(selected)
+                {b && selected && !isPinObject(selected) && !editingPoints
                   ? HANDLES.map((h) => {
                       const [x, y] = handleXY(b, h);
                       return (
@@ -2789,27 +3027,29 @@ export function FloorCanvas({
                 {b && canEditObjects && selected && (selected.polygon || isPinObject(selected)) ? (
                   <RotateKnob box={b} handleR={handleR} />
                 ) : null}
-                {shape.map((n, i) => (
-                  <g key={`an-${i}`}>
-                    {editAnchor === i && nodeHasHandles(n) ? (
-                      <>
-                        <line x1={n.x} y1={n.y} x2={n.x + n.inDx} y2={n.y + n.inDy} stroke="#f97316" strokeWidth={handleR * 0.25} />
-                        <line x1={n.x} y1={n.y} x2={n.x + n.outDx} y2={n.y + n.outDy} stroke="#f97316" strokeWidth={handleR * 0.25} />
-                        <circle cx={n.x + n.inDx} cy={n.y + n.inDy} r={handleR * 0.85} fill="#fff" stroke="#f97316" strokeWidth={handleR * 0.3} />
-                        <circle cx={n.x + n.outDx} cy={n.y + n.outDy} r={handleR * 0.85} fill="#fff" stroke="#f97316" strokeWidth={handleR * 0.3} />
-                      </>
-                    ) : null}
-                    <rect
-                      x={n.x - handleR}
-                      y={n.y - handleR}
-                      width={handleR * 2}
-                      height={handleR * 2}
-                      fill={editAnchor === i ? "#f97316" : "#fff"}
-                      stroke="#f97316"
-                      strokeWidth={handleR * 0.35}
-                    />
-                  </g>
-                ))}
+                {editingPoints
+                  ? shape.map((n, i) => (
+                      <g key={`an-${i}`}>
+                        {editAnchor === i && nodeHasHandles(n) ? (
+                          <>
+                            <line x1={n.x} y1={n.y} x2={n.x + n.inDx} y2={n.y + n.inDy} stroke="#f97316" strokeWidth={handleR * 0.25} />
+                            <line x1={n.x} y1={n.y} x2={n.x + n.outDx} y2={n.y + n.outDy} stroke="#f97316" strokeWidth={handleR * 0.25} />
+                            <circle cx={n.x + n.inDx} cy={n.y + n.inDy} r={handleR * 0.85} fill="#fff" stroke="#f97316" strokeWidth={handleR * 0.3} />
+                            <circle cx={n.x + n.outDx} cy={n.y + n.outDy} r={handleR * 0.85} fill="#fff" stroke="#f97316" strokeWidth={handleR * 0.3} />
+                          </>
+                        ) : null}
+                        <rect
+                          x={n.x - handleR}
+                          y={n.y - handleR}
+                          width={handleR * 2}
+                          height={handleR * 2}
+                          fill={editAnchor === i ? "#f97316" : "#fff"}
+                          stroke="#f97316"
+                          strokeWidth={handleR * 0.35}
+                        />
+                      </g>
+                    ))
+                  : null}
               </g>
             );
           })()
