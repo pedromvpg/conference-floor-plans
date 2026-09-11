@@ -51,6 +51,7 @@ import {
 import { formatSize, gridSize, snap } from "@/lib/units";
 import { MapRulers } from "@/components/map/MapRulers";
 import { AMENITY_COLOR } from "@/lib/amenities";
+import { pinLucideIcon } from "@/lib/pin-icons";
 import { tierFill } from "@/lib/colors";
 import { newId, nowIso } from "@/lib/store";
 import { stampPinObject } from "@/lib/new-object";
@@ -525,7 +526,15 @@ export function FloorCanvas({
   const drag = useRef<{
     id: string;
     ids?: string[];
-    starts?: { id: string; polygon: Ring | null; path: BezierNode[] | null; x: number | null; y: number | null }[];
+    starts?: {
+      id: string;
+      polygon: Ring | null;
+      path: BezierNode[] | null;
+      x: number | null;
+      y: number | null;
+      rotation: number;
+      facingDeg: number;
+    }[];
     mode: "move" | "resize" | "vertex" | "handle-in" | "handle-out" | "rotate";
     handle?: BoundsHandle;
     ox: number;
@@ -690,6 +699,87 @@ export function FloorCanvas({
       const b = objectFrameBounds(o);
       return b ? boundsOverlap(b, box) : false;
     });
+  }
+
+  function objectSelectionBounds(ppm: number) {
+    const ids = [...selectedSet].filter((id) => id !== VENUE_ID);
+    if (!ids.length) return null;
+    let acc: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+    for (const id of ids) {
+      const o = objects.find((obj) => obj.id === id);
+      if (!o) continue;
+      const b =
+        o.polygon?.length
+          ? ringBounds(o.polygon)
+          : isPinObject(o) && o.x != null && o.y != null
+            ? amenityBounds(o, ppm)
+            : objectFrameBounds(o);
+      acc = expandBounds(acc, b);
+    }
+    return acc;
+  }
+
+  function commitGroupRotate(
+    starts: {
+      id: string;
+      polygon: Ring | null;
+      path?: BezierNode[] | null;
+      x: number | null;
+      y: number | null;
+      rotation: number;
+      facingDeg: number;
+    }[],
+    cx: number,
+    cy: number,
+    delta: number,
+  ) {
+    if (!delta) {
+      const restored: MapObject[] = [];
+      for (const s of starts) {
+        const obj = objects.find((o) => o.id === s.id);
+        if (!obj) continue;
+        if (isPinObject(obj) && s.x != null && s.y != null) {
+          restored.push({ ...obj, x: s.x, y: s.y, rotation: s.rotation, facingDeg: s.facingDeg });
+        } else if (s.path?.length || s.polygon) {
+          const path = s.path?.length ? s.path : null;
+          restored.push({
+            ...obj,
+            polygon: path ? tessellate(path, true) : s.polygon ?? obj.polygon,
+            path,
+            facingDeg: s.facingDeg,
+            rotation: s.rotation,
+          });
+        }
+      }
+      if (!restored.length) return;
+      if (onChangeObjects) onChangeObjects(restored);
+      else restored.forEach((o) => onChangeObject?.(o));
+      return;
+    }
+    const next: MapObject[] = [];
+    for (const s of starts) {
+      const obj = objects.find((o) => o.id === s.id);
+      if (!obj) continue;
+      if (isPinObject(obj) && s.x != null && s.y != null) {
+        const [x, y] = rotateAround(cx, cy, delta, s.x, s.y);
+        const rot = s.rotation + delta;
+        next.push({ ...obj, x, y, rotation: rot, facingDeg: rot });
+      } else if (s.path?.length || s.polygon) {
+        const path = s.path?.length ? s.path : obj.polygon ? objectShape({ ...obj, polygon: s.polygon, path: s.path }) : [];
+        if (!path.length) continue;
+        const rotated = commitShape(rotateBezier(path, delta, { x: cx, y: cy }));
+        next.push({
+          ...obj,
+          polygon: rotated.polygon,
+          path: rotated.path,
+          facingDeg: s.facingDeg + delta,
+          rotation: s.rotation + delta,
+        });
+      }
+    }
+    if (!next.length) return;
+    if (onChangeObjects) onChangeObjects(next);
+    else next.forEach((o) => onChangeObject?.(o));
   }
 
   function commitGroupMove(
@@ -1025,6 +1115,8 @@ export function FloorCanvas({
         path: o.path ? o.path.map((n) => ({ ...n })) : objectShape(o),
         x: o.x,
         y: o.y,
+        rotation: o.rotation ?? o.facingDeg ?? 0,
+        facingDeg: o.facingDeg ?? o.rotation ?? 0,
       }));
   }
 
@@ -2761,9 +2853,39 @@ export function FloorCanvas({
         const logoUrl = displayLogoUrl(o, assets, sponsor);
         const fillUrl = media.fillTextureUrl;
         const showLogo = Boolean(logoUrl) && !fillUrl && screenW > 56 && screenH > 32;
-        const label = o.boothNumber || sponsor?.name || o.name;
+        const nameLabel = (sponsor?.name || o.name || "").trim();
+        const boothLabel = (o.boothNumber || sponsor?.boothNumber || "").trim();
+        const showName = Boolean(nameLabel) && nameLabel !== boothLabel;
+        const showBooth = Boolean(boothLabel);
+        const hasLabel = showName || showBooth;
+        const twoLine = showName && showBooth;
         const sizeLabel = formatSize(b.w, b.h, units);
         const showSize = screenW > 44 && screenH > 22;
+        const nameFont = Math.min(b.w, b.h) * (showLogo ? 0.12 : twoLine ? 0.13 : 0.18);
+        const boothFont = Math.min(b.w, b.h) * (showLogo ? 0.1 : twoLine ? 0.11 : 0.16);
+        const nameY = showLogo
+          ? b.maxY - b.h * (twoLine ? 0.28 : 0.22)
+          : showSize
+            ? c.y - b.h * (twoLine ? 0.16 : 0.08)
+            : twoLine
+              ? c.y - b.h * 0.08
+              : c.y;
+        const boothY = showName
+          ? showLogo
+            ? b.maxY - b.h * 0.16
+            : showSize
+              ? c.y
+              : c.y + b.h * 0.1
+          : showLogo
+            ? b.maxY - b.h * 0.22
+            : showSize
+              ? c.y - b.h * 0.08
+              : c.y;
+        const sizeY = hasLabel
+          ? showLogo
+            ? b.maxY - b.h * 0.06
+            : c.y + b.h * (twoLine ? 0.18 : 0.14)
+          : c.y;
         const local = rotateRing(o.polygon, -(o.facingDeg ?? 0));
         const lb = ringBounds(local);
         return (
@@ -2820,28 +2942,43 @@ export function FloorCanvas({
                 />
               </>
             ) : null}
-            {label && (mode === "view" || selected) ? (
+            {showName ? (
               <text
                 x={c.x}
-                y={showLogo ? b.maxY - b.h * 0.22 : showSize ? c.y - b.h * 0.08 : c.y}
+                y={nameY}
                 textAnchor="middle"
                 dominantBaseline="middle"
-                fontSize={Math.min(b.w, b.h) * (showLogo ? 0.16 : 0.2)}
+                fontSize={nameFont}
+                fill="var(--map-label)"
+                fontFamily="var(--font-sans), ui-sans-serif, system-ui, sans-serif"
+                fontWeight={700}
+                pointerEvents="none"
+              >
+                {nameLabel}
+              </text>
+            ) : null}
+            {showBooth ? (
+              <text
+                x={c.x}
+                y={boothY}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fontSize={boothFont}
                 fill="var(--map-label)"
                 fontFamily="var(--font-mono), ui-monospace, monospace"
                 fontWeight={700}
                 pointerEvents="none"
               >
-                {label}
+                {boothLabel}
               </text>
             ) : null}
             {showSize ? (
               <text
                 x={c.x}
-                y={label ? (showLogo ? b.maxY - b.h * 0.08 : c.y + b.h * 0.14) : c.y}
+                y={sizeY}
                 textAnchor="middle"
                 dominantBaseline="middle"
-                fontSize={Math.min(b.w, b.h) * 0.12}
+                fontSize={Math.min(b.w, b.h) * 0.1}
                 fill="var(--map-label-muted)"
                 fontFamily="var(--font-mono), ui-monospace, monospace"
                 pointerEvents="none"
@@ -2869,8 +3006,9 @@ export function FloorCanvas({
         const pulsing = o.id === pulseId;
         const mapPin = isMapPinObject(o);
         const color = mapPin ? MAP_PIN_META[o.kind].color : AMENITY_COLOR[o.amenityType ?? "info"];
-        const mark = mapPin ? MAP_PIN_META[o.kind].mark : (o.amenityType ?? "info").slice(0, 1).toUpperCase();
+        const Icon = pinLucideIcon(o.kind, o.amenityType);
         const s = pinWorldScale(pxPerMeterScreen, mapPin);
+        const glyph = mapPin ? 1.05 : 1.15;
         return (
           <g
             key={o.id}
@@ -2895,16 +3033,9 @@ export function FloorCanvas({
                 strokeWidth={selected ? 0.2 : 0.12}
               />
             )}
-            <text
-              textAnchor="middle"
-              y={mapPin ? -0.15 : 0.32}
-              fontSize={0.7}
-              fill="#fff"
-              fontFamily="var(--font-sans), system-ui, sans-serif"
-              fontWeight={700}
-            >
-              {mark}
-            </text>
+            <g transform={`translate(${-glyph / 2} ${mapPin ? -1.28 : -glyph / 2})`}>
+              <Icon width={glyph} height={glyph} color="#fff" strokeWidth={2.35} aria-hidden />
+            </g>
           </g>
         );
       })}
