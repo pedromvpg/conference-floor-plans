@@ -73,12 +73,41 @@ export function displayLogoUrl(
   return objectUrls(o, assets).logoUrl || sponsor?.logoUrl || "";
 }
 
-export function isometricPose(cx: number, cz: number, span: number) {
-  const dist = Math.max(16, span * 0.85);
+export function isometricPose(
+  cx: number,
+  cz: number,
+  span: number,
+  pose?: { azimuth?: number; elevation?: number; distance?: number },
+) {
+  const dist = Math.max(16, span * 0.85) * (pose?.distance ?? 1);
+  const az = ((pose?.azimuth ?? 45) * Math.PI) / 180;
+  const el = ((pose?.elevation ?? 32) * Math.PI) / 180;
+  const horiz = dist * Math.cos(el);
   return {
-    position: [cx + dist * 0.72, dist * 0.62, cz + dist * 0.72] as [number, number, number],
+    position: [cx + horiz * Math.sin(az), dist * Math.sin(el), cz + horiz * Math.cos(az)] as [
+      number,
+      number,
+      number,
+    ],
     target: [cx, 0, cz] as [number, number, number],
   };
+}
+
+export function sunPosition(
+  cx: number,
+  cz: number,
+  span: number,
+  light?: { azimuth?: number; elevation?: number; distance?: number },
+) {
+  const r = Math.max(24, span * 0.85) * (light?.distance ?? 1);
+  const az = ((light?.azimuth ?? 62) * Math.PI) / 180;
+  const el = ((light?.elevation ?? 56) * Math.PI) / 180;
+  const horiz = r * Math.cos(el);
+  return [
+    cx + horiz * Math.sin(az),
+    Math.max(12, r * Math.sin(el)),
+    cz + horiz * Math.cos(az),
+  ] as [number, number, number];
 }
 
 export { translateRing };
