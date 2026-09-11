@@ -132,6 +132,8 @@ type Props = {
   frameNonce?: number;
   /** Increment to frame the drawing and all objects. */
   fitNonce?: number;
+  /** Increment to frame the venue drawing (used when switching 2D/3D). */
+  venueNonce?: number;
   /** Venue tab edits the drawing; objects tab edits booths and icons. */
   editLayer?: "objects" | "venue";
   canvasInteractive?: boolean;
@@ -241,16 +243,23 @@ function expandBounds(
   };
 }
 
+function venueDrawingBounds(
+  cal: Calibration | null,
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  if (!cal) return null;
+  const v = venueWorldRect(cal);
+  return { minX: v.minX, minY: v.minY, maxX: v.maxX, maxY: v.maxY };
+}
+
 function sceneBounds(
   cal: Calibration | null,
   objects: MapObject[],
 ): { minX: number; minY: number; maxX: number; maxY: number } {
-  let acc: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
-  if (cal) {
-    const v = venueWorldRect(cal);
-    acc = expandBounds(acc, { minX: v.minX, minY: v.minY, maxX: v.maxX, maxY: v.maxY });
+  let acc: { minX: number; minY: number; maxX: number; maxY: number } | null = venueDrawingBounds(cal);
+  for (const o of objects) {
+    if (isMapPinObject(o)) continue;
+    acc = expandBounds(acc, objectFrameBounds(o));
   }
-  for (const o of objects) acc = expandBounds(acc, objectFrameBounds(o));
   if (!acc) return { minX: -4, minY: -4, maxX: 76, maxY: 76 };
   return acc;
 }
@@ -427,6 +436,7 @@ export function FloorCanvas({
   snapToUnits = false,
   frameNonce = 0,
   fitNonce = 0,
+  venueNonce = 0,
   editLayer = "objects",
   canvasInteractive = true,
   basemapInteractive = false,
@@ -481,7 +491,9 @@ export function FloorCanvas({
     : imgNat
       ? { w: imgNat.w, h: imgNat.h }
       : { w: 80, h: 80 };
-  const [cam, setCam] = useState<Cam>({ x: -4, y: -4, w: size.w + 8, h: size.h + 8 });
+  const [cam, setCam] = useState<Cam>(() =>
+    camToFrame(venueDrawingBounds(cal) ?? sceneBounds(cal, objects), 1),
+  );
   const camRef = useRef(cam);
   camRef.current = cam;
   const basemapRef = useRef(floor.basemap);
@@ -574,13 +586,40 @@ export function FloorCanvas({
     return camToFrame(sceneBounds(calNow, objects), viewAspect());
   }
 
+  useLayoutEffect(() => {
+    const apply = () => {
+      const svg = svgRef.current;
+      const aspect = svg && svg.clientHeight > 0 ? svg.clientWidth / svg.clientHeight : 1;
+      setCam(camToFrame(venueDrawingBounds(floor.calibration) ?? sceneBounds(floor.calibration, objects), aspect));
+    };
+    apply();
+    const svg = svgRef.current;
+    if (!svg || svg.clientHeight > 0) return;
+    const ro = new ResizeObserver(() => {
+      if (svg.clientHeight <= 0) return;
+      apply();
+      ro.disconnect();
+    });
+    ro.observe(svg);
+    return () => ro.disconnect();
+    // Frame the venue drawing on mount and whenever 2D/3D mode switches.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venueNonce]);
+
+  const seenFitNonce = useRef(fitNonce);
+  const seenFrameNonce = useRef(frameNonce);
+
   useEffect(() => {
+    if (fitNonce === seenFitNonce.current) return;
+    seenFitNonce.current = fitNonce;
     if (!fitNonce) return;
     animateCam(fitSceneCam(floor.calibration));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fitNonce]);
 
   useEffect(() => {
+    if (frameNonce === seenFrameNonce.current) return;
+    seenFrameNonce.current = frameNonce;
     if (!frameNonce) return;
     if (selectedId === VENUE_ID && floor.calibration) {
       const v = venueWorldRect(floor.calibration);
