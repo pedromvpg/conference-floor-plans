@@ -4,6 +4,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { ChevronDown, ChevronLeft, LayoutGrid, MapPin, Search, SlidersHorizontal, Square, Theater } from "lucide-react";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
+import { MapExportMenu } from "@/components/map/MapExportMenu";
 import { FloorSwitcher, HALL_VIEW_ASIDE_W, HallViewAside, ViewModeToggle } from "@/components/map/ViewModeToggle";
 import { DEFAULT_HALL_VIEW, type HallView } from "@/lib/hall-view";
 import { UnitsToggle } from "@/components/units-toggle";
@@ -622,6 +623,16 @@ export function ViewerApp({
             }}
           />
           <UnitsToggle units={units} onChange={setUnits} />
+          {floor ? (
+            <MapExportMenu
+              compact
+              floor={floor}
+              objects={objects}
+              sponsors={sponsors}
+              venueSvg={null}
+              filename={`${doc.event.slug}-${floor.name || "floor"}-plan.svg`}
+            />
+          ) : null}
           <ThemeToggle />
         </div>
       </main>
