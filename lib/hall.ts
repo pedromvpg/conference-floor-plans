@@ -16,13 +16,27 @@ export type FacingObb = {
   w: number;
   d: number;
   facingDeg: number;
+  /** Local X of the back-edge midpoint (un-yawed AABB, relative to centroid). */
+  backX: number;
+  /** Local Z of the back-edge midpoint; 2D local −Y / Three.js −Z. */
+  backZ: number;
 };
 
 export function facingObb(ring: Ring, facingDeg: number): FacingObb {
   const { x: cx, y: cy } = ringCentroid(ring);
   const local = rotateRing(ring, -facingDeg);
   const b = ringBounds(local);
-  return { cx, cy, w: Math.max(0.4, b.w), d: Math.max(0.4, b.h), facingDeg };
+  const w = Math.max(0.4, b.w);
+  const d = Math.max(0.4, b.h);
+  return {
+    cx,
+    cy,
+    w,
+    d,
+    facingDeg,
+    backX: (b.minX + b.maxX) / 2 - cx,
+    backZ: b.minY - cy,
+  };
 }
 
 export function rotatePlot(ring: Ring, facingDeg: number, delta: number): { polygon: Ring; facingDeg: number } {

@@ -5,15 +5,43 @@ export function hypot(dx: number, dy: number): number {
   return Math.hypot(dx, dy);
 }
 
+/** Drop a duplicated closing vertex so averages and rotation stay on the true interior. */
+export function openRing(ring: Ring): Ring {
+  if (ring.length < 2) return ring;
+  const [fx, fy] = ring[0];
+  const [lx, ly] = ring[ring.length - 1];
+  if (Math.abs(fx - lx) < 1e-9 && Math.abs(fy - ly) < 1e-9) return ring.slice(0, -1);
+  return ring;
+}
+
 export function ringCentroid(ring: Ring): { x: number; y: number } {
-  if (!ring.length) return { x: 0, y: 0 };
-  let x = 0;
-  let y = 0;
-  for (const [px, py] of ring) {
-    x += px;
-    y += py;
+  const pts = openRing(ring);
+  if (!pts.length) return { x: 0, y: 0 };
+  if (pts.length === 1) return { x: pts[0][0], y: pts[0][1] };
+  if (pts.length === 2) {
+    return { x: (pts[0][0] + pts[1][0]) / 2, y: (pts[0][1] + pts[1][1]) / 2 };
   }
-  return { x: x / ring.length, y: y / ring.length };
+  let area2 = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x0, y0] = pts[i];
+    const [x1, y1] = pts[(i + 1) % pts.length];
+    const cross = x0 * y1 - x1 * y0;
+    area2 += cross;
+    cx += (x0 + x1) * cross;
+    cy += (y0 + y1) * cross;
+  }
+  if (Math.abs(area2) < 1e-12) {
+    let x = 0;
+    let y = 0;
+    for (const [px, py] of pts) {
+      x += px;
+      y += py;
+    }
+    return { x: x / pts.length, y: y / pts.length };
+  }
+  return { x: cx / (3 * area2), y: cy / (3 * area2) };
 }
 
 export function ringBounds(ring: Ring): { minX: number; minY: number; maxX: number; maxY: number; w: number; h: number } {
@@ -97,6 +125,22 @@ export function angleDeg(cx: number, cy: number, x: number, y: number): number {
 export function snapDeg(deg: number, step: number): number {
   if (step <= 0) return deg;
   return Math.round(deg / step) * step;
+}
+
+/** Snap (x, y) onto the nearest 45° ray from (ox, oy), keeping distance. */
+export function constrainToOctant(
+  ox: number,
+  oy: number,
+  x: number,
+  y: number,
+): { x: number; y: number } {
+  const dx = x - ox;
+  const dy = y - oy;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1e-12) return { x: ox, y: oy };
+  const step = Math.PI / 4;
+  const snapped = Math.round(Math.atan2(dy, dx) / step) * step;
+  return { x: ox + Math.cos(snapped) * dist, y: oy + Math.sin(snapped) * dist };
 }
 
 export function rotateHandlePos(
@@ -216,27 +260,6 @@ export function venueWorldRect(cal: Calibration): {
   const minX = -cal.originX * s.x;
   const minY = -cal.originY * s.y;
   return { minX, minY, maxX: minX + w, maxY: minY + h, w, h };
-}
-
-export function calibrationFromWorldRect(
-  rect: { minX: number; minY: number; maxX: number; maxY: number },
-  widthPx: number,
-  heightPx: number,
-  rotationDeg = 0,
-): Calibration {
-  const w = Math.max(0.3, rect.maxX - rect.minX);
-  const h = Math.max(0.3, rect.maxY - rect.minY);
-  const metersPerPixel = widthPx > 0 ? w / widthPx : 0.1;
-  const metersPerPixelY = heightPx > 0 ? h / heightPx : metersPerPixel;
-  return {
-    originX: metersPerPixel > 0 ? -rect.minX / metersPerPixel : 0,
-    originY: metersPerPixelY > 0 ? -rect.minY / metersPerPixelY : 0,
-    metersPerPixel,
-    metersPerPixelY,
-    rotationDeg,
-    widthPx,
-    heightPx,
-  };
 }
 
 export function metersFromPixels(px: number, py: number, cal: Calibration): { x: number; y: number } {

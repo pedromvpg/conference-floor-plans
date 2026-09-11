@@ -35,6 +35,22 @@ export function roundBasemapCoord(n: number) {
   return Math.round(n * 1e6) / 1e6;
 }
 
+/** Parse a pasted "lat, lng" (or "lng, lat") pair into both coordinates. */
+export function parseLatLngPaste(raw: string): { lat: number; lng: number } | null {
+  const nums = raw.match(/-?\d+(?:\.\d+)?/g);
+  if (!nums || nums.length < 2) return null;
+  const a = Number(nums[0]);
+  const b = Number(nums[1]);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  if (Math.abs(a) <= 90 && Math.abs(b) <= 180) {
+    return { lat: roundBasemapCoord(a), lng: roundBasemapCoord(b) };
+  }
+  if (Math.abs(b) <= 90 && Math.abs(a) <= 180) {
+    return { lat: roundBasemapCoord(b), lng: roundBasemapCoord(a) };
+  }
+  return null;
+}
+
 /** Map 0–360° to the −180…180 slider. */
 export function bearingSliderValue(deg: number) {
   const w = wrapBearingDeg(deg);
