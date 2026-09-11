@@ -1,4 +1,5 @@
 import { AMENITY_COLOR, amenityLabel } from "./amenities";
+import { pinIconSvgMarkup } from "./pin-icons";
 import { objectShape, rectangleCorners, svgPathD } from "./bezier";
 import { boothFillHex, darkenHex } from "./colors";
 import { ringBounds, ringCentroid, rotateRing, venueWorldRect } from "./geometry";
@@ -312,10 +313,8 @@ export function buildFloorPlanSvg(input: FloorPlanExportInput): string {
       const title = objectTitle(o);
       const oid = layerId(title, o.id.slice(0, 8), used);
       const r = 0.55 * S;
-      const mark = isMapPinObject(o)
-        ? MAP_PIN_META[o.kind].mark
-        : (o.amenityType ?? "info").slice(0, 1).toUpperCase();
-      return `<g id="${oid}" inkscape:label="${xmlEscape(title)}"><circle cx="${num(o.x! * S)}" cy="${num(o.y! * S)}" r="${num(r)}" fill="${color}" stroke="#ffffff" stroke-width="2"/><text x="${num(o.x! * S)}" y="${num(o.y! * S)}" text-anchor="middle" dominant-baseline="middle" font-family="Inter, system-ui, sans-serif" font-size="${num(r)}" font-weight="700" fill="#ffffff">${xmlEscape(mark)}</text></g>`;
+      const glyph = pinIconSvgMarkup(o.kind, o.amenityType, o.x! * S, o.y! * S, r * 1.35);
+      return `<g id="${oid}" inkscape:label="${xmlEscape(title)}"><circle cx="${num(o.x! * S)}" cy="${num(o.y! * S)}" r="${num(r)}" fill="${color}" stroke="#ffffff" stroke-width="2"/>${glyph}</g>`;
     });
     parts.push(`<g id="${gid}" inkscape:groupmode="layer" inkscape:label="Icons">${kids.join("")}</g>`);
   }

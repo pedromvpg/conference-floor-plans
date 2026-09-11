@@ -28,8 +28,8 @@ export function isPinObject(o: { kind: ObjectKind }): boolean {
 }
 
 export const MAP_PIN_META = {
-  side_event: { label: "Side event", color: "#ea580c", mark: "E" },
-  hotel: { label: "Hotel", color: "#0f766e", mark: "H" },
+  side_event: { label: "Side event", color: "#ea580c" },
+  hotel: { label: "Hotel", color: "#0f766e" },
 } as const;
 
 export type Appearance = "booth" | "stage" | "custom";

@@ -2222,7 +2222,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   ) : null}
                   <p className="chrome-kicker">Pins</p>
                   <div>
-                    {listedMapPins.map((o) => (
+                    {listedMapPins.map((o) => {
+                      const PinIcon = pinLucideIcon(o.kind);
+                      return (
                       <button
                         key={o.id}
                         type="button"
@@ -2237,17 +2239,15 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                           className="flex size-5 shrink-0 items-center justify-center rounded-full text-white"
                           style={{ background: MAP_PIN_META[o.kind].color }}
                         >
-                          {(() => {
-                            const PinIcon = pinLucideIcon(o.kind);
-                            return <PinIcon className="size-3" strokeWidth={2.25} />;
-                          })()}
+                          <PinIcon className="size-3" strokeWidth={2.25} />
                         </span>
                         <span className="min-w-0 flex-1 truncate">{objectTitle(o)}</span>
                         <span className="shrink-0 text-[10px] text-muted-foreground">
                           {MAP_PIN_META[o.kind].label}
                         </span>
                       </button>
-                    ))}
+                      );
+                    })}
                     {!listedMapPins.length ? (
                       <p className="px-1 py-3 text-xs text-muted-foreground">No side events or hotels yet.</p>
                     ) : null}
