@@ -92,16 +92,22 @@ export function translateBezier(nodes: BezierNode[], dx: number, dy: number): Be
   return nodes.map((n) => ({ ...n, x: n.x + dx, y: n.y + dy }));
 }
 
-export function rotateBezier(nodes: BezierNode[], deg: number): BezierNode[] {
+export function rotateBezier(
+  nodes: BezierNode[],
+  deg: number,
+  origin?: { x: number; y: number },
+): BezierNode[] {
   if (!deg || !nodes.length) return nodes;
-  let cx = 0;
-  let cy = 0;
-  for (const n of nodes) {
-    cx += n.x;
-    cy += n.y;
+  let cx = origin?.x ?? 0;
+  let cy = origin?.y ?? 0;
+  if (!origin) {
+    for (const n of nodes) {
+      cx += n.x;
+      cy += n.y;
+    }
+    cx /= nodes.length;
+    cy /= nodes.length;
   }
-  cx /= nodes.length;
-  cy /= nodes.length;
   const r = (deg * Math.PI) / 180;
   const cos = Math.cos(r);
   const sin = Math.sin(r);
