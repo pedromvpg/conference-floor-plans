@@ -59,6 +59,12 @@ const GRAPHIC = new Set([
   "use",
 ]);
 
+export type SvgTextWeight = "regular" | "bold" | "black";
+export type SvgTextAlign = "left" | "center" | "right";
+
+const TEXT_LINE_EM = 0.95;
+const TEXT_CHAR_W = 0.62;
+
 export type SvgLayer = {
   id: string;
   name: string;
@@ -68,6 +74,8 @@ export type SvgLayer = {
   private: boolean;
   text: string | null;
   fontSize: number | null;
+  fontWeight: SvgTextWeight | null;
+  textAlign: SvgTextAlign | null;
   opacity: number;
   children: SvgLayer[];
 };
@@ -179,11 +187,11 @@ export function appendSvgText(markup: string, x: number, y: number, text = "Labe
   el.setAttribute("fill", SHAPE_STROKE);
   el.setAttribute("font-size", String(fs));
   el.setAttribute("font-family", "system-ui, sans-serif");
-  el.setAttribute("font-weight", "600");
-  el.setAttribute("text-anchor", "middle");
+  el.setAttribute("font-weight", weightAttr("bold"));
+  el.setAttribute("text-anchor", anchorFromAlign("center"));
   el.setAttribute("dominant-baseline", "middle");
   el.setAttribute(NAME_ATTR, text);
-  el.textContent = text;
+  writeTextLines(el, text);
   root.appendChild(el);
   ensureLayerIds(root);
   return new XMLSerializer().serializeToString(root);
@@ -391,8 +399,10 @@ function toLayer(el: Element, index: number): SvgLayer {
     hidden: isHidden(el),
     locked: isLocked(el),
     private: isPrivate(el),
-    text: kind === "text" ? (el.textContent || "").replace(/\s+/g, " ").trim() : null,
+    text: kind === "text" ? readTextLines(el) : null,
     fontSize: kind === "text" ? Number(el.getAttribute("font-size") || "") || null : null,
+    fontWeight: kind === "text" ? weightFromAttr(el.getAttribute("font-weight")) : null,
+    textAlign: kind === "text" ? alignFromAnchor(el.getAttribute("text-anchor")) : null,
     opacity: svgOpacityFromEl(el),
     children: [...kids].map((child, i) => toLayer(child, i)).reverse(),
   };
@@ -426,6 +436,19 @@ export function findSvgLayer(layers: SvgLayer[], id: string): SvgLayer | null {
   return null;
 }
 
+function svgToWorld(
+  sx: number,
+  sy: number,
+  vb: { x: number; y: number; w: number; h: number },
+  cal: Calibration,
+): { x: number; y: number } {
+  return metersFromPixels(
+    ((sx - vb.x) / vb.w) * cal.widthPx,
+    ((sy - vb.y) / vb.h) * cal.heightPx,
+    cal,
+  );
+}
+
 export function svgVenueWorldPolylines(markup: string, cal: Calibration): { points: Ring; closed: boolean }[] {
   try {
     const root = parseRoot(markup);
@@ -440,13 +463,57 @@ export function svgVenueWorldPolylines(markup: string, cal: Calibration): { poin
         closed: local.closed,
         points: local.points.map(([x, y]) => {
           const [sx, sy] = svgLocalToRoot(el, x, y);
-          const p = metersFromPixels(
-            ((sx - vb.x) / vb.w) * cal.widthPx,
-            ((sy - vb.y) / vb.h) * cal.heightPx,
-            cal,
-          );
+          const p = svgToWorld(sx, sy, vb, cal);
           return [p.x, p.y];
         }),
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+export type SvgVenueWorldLabel = {
+  text: string;
+  x: number;
+  y: number;
+  fontSize: number;
+  align: SvgTextAlign;
+  weight: SvgTextWeight;
+  rotation: number;
+};
+
+export function svgVenueWorldLabels(markup: string, cal: Calibration): SvgVenueWorldLabel[] {
+  try {
+    const root = parseRoot(markup);
+    const vb = viewBoxFromRoot(root);
+    if (!vb || !(vb.w > 0) || !(vb.h > 0) || !(cal.widthPx > 0) || !(cal.heightPx > 0)) return [];
+    const out: SvgVenueWorldLabel[] = [];
+    for (const el of collectNodes(root)) {
+      if (localName(el) !== "text") continue;
+      if (skippedForHall(el, root, vb, { allowText: true })) continue;
+      const text = readTextLines(el).replace(/\s+$/g, "").replace(/^\s+/g, "");
+      if (!text.trim()) continue;
+      const lx = Number(el.getAttribute("x") || 0);
+      const ly = Number(el.getAttribute("y") || 0);
+      const [sx, sy] = svgLocalToRoot(el, lx, ly);
+      const origin = svgToWorld(sx, sy, vb, cal);
+      const [sx1, sy1] = svgLocalToRoot(el, lx + 1, ly);
+      const along = svgToWorld(sx1, sy1, vb, cal);
+      const fs = textFontSize(el);
+      const [fsx, fsy] = svgLocalToRoot(el, lx, ly + fs);
+      const fsWorld = svgToWorld(fsx, fsy, vb, cal);
+      const fontSize = Math.hypot(fsWorld.x - origin.x, fsWorld.y - origin.y);
+      if (!(fontSize > 0) || !Number.isFinite(origin.x + origin.y)) continue;
+      out.push({
+        text,
+        x: origin.x,
+        y: origin.y,
+        fontSize,
+        align: alignFromAnchor(el.getAttribute("text-anchor")),
+        weight: weightFromAttr(el.getAttribute("font-weight")),
+        rotation: Math.atan2(along.y - origin.y, along.x - origin.x),
       });
     }
     return out;
@@ -475,17 +542,39 @@ export function svgViewBox(markup: string): { x: number; y: number; w: number; h
   }
 }
 
+function applySvgTransform(t: string, x: number, y: number): [number, number] {
+  if (!t.trim()) return [x, y];
+  const cmds: Array<{ kind: "t"; x: number; y: number } | { kind: "r"; deg: number; cx: number; cy: number }> = [];
+  const re =
+    /translate\(\s*([-.\d]+)(?:[,\s]+|\s+)([-.\d]+)[^)]*\)|rotate\(\s*([-.\d]+)(?:(?:[,\s]+|\s+)([-.\d]+)(?:[,\s]+|\s+)([-.\d]+))?[^)]*\)/g;
+  for (const m of t.matchAll(re)) {
+    if (m[1] != null) cmds.push({ kind: "t", x: Number(m[1]), y: Number(m[2]) });
+    else cmds.push({ kind: "r", deg: Number(m[3]), cx: Number(m[4] || 0), cy: Number(m[5] || 0) });
+  }
+  let cx = x;
+  let cy = y;
+  for (let i = cmds.length - 1; i >= 0; i--) {
+    const cmd = cmds[i];
+    if (cmd.kind === "t") {
+      cx += cmd.x;
+      cy += cmd.y;
+    } else {
+      const a = (cmd.deg * Math.PI) / 180;
+      const dx = cx - cmd.cx;
+      const dy = cy - cmd.cy;
+      cx = cmd.cx + dx * Math.cos(a) - dy * Math.sin(a);
+      cy = cmd.cy + dx * Math.sin(a) + dy * Math.cos(a);
+    }
+  }
+  return [cx, cy];
+}
+
 function svgLocalToRoot(el: Element, x: number, y: number): [number, number] {
   let cx = x;
   let cy = y;
   let n: Element | null = el;
   while (n) {
-    const t = n.getAttribute("transform") || "";
-    const m = t.match(/translate\(\s*([-.\d]+)(?:[,\s]+|\s+)([-.\d]+)/);
-    if (m) {
-      cx += Number(m[1]);
-      cy += Number(m[2]);
-    }
+    [cx, cy] = applySvgTransform(n.getAttribute("transform") || "", cx, cy);
     if (localName(n) === "svg") break;
     n = n.parentElement;
   }
@@ -496,11 +585,13 @@ function skippedForHall(
   el: Element,
   root: SVGSVGElement,
   vb: { x: number; y: number; w: number; h: number },
+  opts?: { allowText?: boolean },
 ): boolean {
   const kind = localName(el);
-  if (kind === "g" || kind === "a" || kind === "svg" || kind === "text" || kind === "image" || kind === "use") {
+  if (kind === "g" || kind === "a" || kind === "svg" || kind === "image" || kind === "use") {
     return true;
   }
+  if (kind === "text" && !opts?.allowText) return true;
   let n: Element | null = el;
   while (n) {
     if (isHidden(n) || isPrivate(n)) return true;
@@ -767,6 +858,25 @@ export function setSvgLayerFontSize(markup: string, id: string, fontSize: number
   const el = findLayer(root, id);
   if (!el || localName(el) !== "text") return markup;
   el.setAttribute("font-size", String(Math.max(1, fontSize)));
+  syncTextLineHeight(el);
+  return new XMLSerializer().serializeToString(root);
+}
+
+export function setSvgLayerFontWeight(markup: string, id: string, weight: SvgTextWeight): string {
+  const root = parseRoot(markup);
+  const el = findLayer(root, id);
+  if (!el || localName(el) !== "text") return markup;
+  el.setAttribute("font-weight", weightAttr(weight));
+  syncTextLineHeight(el);
+  return new XMLSerializer().serializeToString(root);
+}
+
+export function setSvgLayerTextAlign(markup: string, id: string, align: SvgTextAlign): string {
+  const root = parseRoot(markup);
+  const el = findLayer(root, id);
+  if (!el || localName(el) !== "text") return markup;
+  el.setAttribute("text-anchor", anchorFromAlign(align));
+  syncTextLineHeight(el);
   return new XMLSerializer().serializeToString(root);
 }
 
@@ -774,13 +884,7 @@ export function setSvgLayerText(markup: string, id: string, text: string): strin
   const root = parseRoot(markup);
   const el = findLayer(root, id);
   if (!el || localName(el) !== "text") return markup;
-  const tspans = [...el.querySelectorAll("tspan")];
-  if (tspans.length) {
-    tspans[0].textContent = text;
-    for (const extra of tspans.slice(1)) extra.remove();
-  } else {
-    el.textContent = text;
-  }
+  writeTextLines(el, text);
   return new XMLSerializer().serializeToString(root);
 }
 
@@ -914,17 +1018,99 @@ function textFontSize(el: Element): number {
   return Number.isFinite(n) && n > 0 ? n : 24;
 }
 
+function textTspans(el: Element): Element[] {
+  return [...el.children].filter((child) => localName(child) === "tspan");
+}
+
+function readTextLines(el: Element): string {
+  const tspans = textTspans(el);
+  if (tspans.length) return tspans.map((t) => t.textContent ?? "").join("\n");
+  return el.textContent ?? "";
+}
+
+function writeTextLines(el: Element, text: string): void {
+  const lines = text.split(/\r?\n/);
+  const x = el.getAttribute("x") || "0";
+  const n = Math.max(1, lines.length);
+  const startDy = -((n - 1) / 2) * TEXT_LINE_EM;
+  while (el.firstChild) el.removeChild(el.firstChild);
+  for (let i = 0; i < lines.length; i++) {
+    const tspan = el.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "tspan");
+    tspan.setAttribute("x", x);
+    tspan.setAttribute("dy", `${i === 0 ? startDy : TEXT_LINE_EM}em`);
+    tspan.textContent = lines[i];
+    el.appendChild(tspan);
+  }
+}
+
+function syncTextLineHeight(el: Element): void {
+  const tspans = textTspans(el);
+  if (!tspans.length) return;
+  const startDy = -((tspans.length - 1) / 2) * TEXT_LINE_EM;
+  tspans.forEach((tspan, i) => {
+    tspan.setAttribute("dy", `${i === 0 ? startDy : TEXT_LINE_EM}em`);
+  });
+}
+
+function syncTextTspanX(el: Element): void {
+  const x = el.getAttribute("x") || "0";
+  for (const tspan of textTspans(el)) tspan.setAttribute("x", x);
+}
+
+function weightAttr(weight: SvgTextWeight): string {
+  if (weight === "black") return "900";
+  if (weight === "bold") return "700";
+  return "400";
+}
+
+function weightFromAttr(raw: string | null): SvgTextWeight {
+  const v = (raw || "").trim().toLowerCase();
+  if (v === "black" || v === "900" || v === "800") return "black";
+  const n = Number(v);
+  if (v === "bold" || v === "bolder" || (Number.isFinite(n) && n >= 600)) return "bold";
+  return "regular";
+}
+
+function anchorFromAlign(align: SvgTextAlign): "start" | "middle" | "end" {
+  if (align === "center") return "middle";
+  if (align === "right") return "end";
+  return "start";
+}
+
+function alignFromAnchor(raw: string | null): SvgTextAlign {
+  const v = (raw || "").trim().toLowerCase();
+  if (v === "middle") return "center";
+  if (v === "end") return "right";
+  return "left";
+}
+
+function placeTextInBox(el: Element, box: { x: number; y: number; w: number; h: number }): void {
+  const lines = Math.max(1, readTextLines(el).split(/\r?\n/).length);
+  const fs = Math.max(1, box.h / (TEXT_LINE_EM * lines));
+  const align = alignFromAnchor(el.getAttribute("text-anchor") || "middle");
+  let x = box.x;
+  if (align === "center") x = box.x + box.w / 2;
+  else if (align === "right") x = box.x + box.w;
+  el.setAttribute("font-size", String(fs));
+  el.setAttribute("x", String(x));
+  el.setAttribute("y", String(box.y + box.h / 2));
+  el.setAttribute("dominant-baseline", "middle");
+  syncTextTspanX(el);
+  syncTextLineHeight(el);
+}
+
 function textBox(el: Element): { minX: number; minY: number; maxX: number; maxY: number; area: number } {
   const fs = textFontSize(el);
-  const len = Math.max(1, (el.textContent || "").replace(/\s+/g, " ").trim().length);
-  const w = fs * len * 0.62;
-  const h = fs * 1.25;
+  const lines = readTextLines(el).split(/\r?\n/);
+  const longest = Math.max(1, ...lines.map((line) => line.length));
+  const w = fs * longest * TEXT_CHAR_W;
+  const h = fs * TEXT_LINE_EM * Math.max(1, lines.length);
   const cx = Number(el.getAttribute("x") || 0);
   const cy = Number(el.getAttribute("y") || 0);
-  const anchor = el.getAttribute("text-anchor") || "start";
+  const align = alignFromAnchor(el.getAttribute("text-anchor") || "start");
   let minX = cx;
-  if (anchor === "middle") minX = cx - w / 2;
-  else if (anchor === "end") minX = cx - w;
+  if (align === "center") minX = cx - w / 2;
+  else if (align === "right") minX = cx - w;
   const minY = cy - h / 2;
   return { minX, minY, maxX: minX + w, maxY: minY + h, area: w * h };
 }
@@ -1131,12 +1317,7 @@ export function setSvgElementBox(
     el.setAttribute("rx", String(Math.max(1, w / 2)));
     el.setAttribute("ry", String(Math.max(1, h / 2)));
   } else if (kind === "text") {
-    const fs = Math.max(1, h / 1.25);
-    el.setAttribute("font-size", String(fs));
-    el.setAttribute("x", String(box.x + w / 2));
-    el.setAttribute("y", String(box.y + h / 2));
-    el.setAttribute("text-anchor", "middle");
-    el.setAttribute("dominant-baseline", "middle");
+    placeTextInBox(el, { x: box.x, y: box.y, w, h });
   } else {
     return markup;
   }
@@ -1361,12 +1542,7 @@ export function setSvgElementPoint(
       index,
       point,
     );
-    const fs = Math.max(1, next.h / 1.25);
-    el.setAttribute("font-size", String(fs));
-    el.setAttribute("x", String(next.x + next.w / 2));
-    el.setAttribute("y", String(next.y + next.h / 2));
-    el.setAttribute("text-anchor", "middle");
-    el.setAttribute("dominant-baseline", "middle");
+    placeTextInBox(el, next);
   } else if (kind === "path") {
     const parsed = parseSvgPath(el.getAttribute("d") || "") ?? polylineFromPath(el.getAttribute("d") || "");
     if (!parsed) return markup;

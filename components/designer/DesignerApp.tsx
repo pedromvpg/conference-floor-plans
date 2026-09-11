@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { Box, Building2, CalendarDays, ChevronDown, Circle, ImagePlus, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, RefreshCw, SlidersHorizontal, Square, Theater, Type, Undo2 } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Box, Building2, CalendarDays, ChevronDown, Circle, ImagePlus, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, RefreshCw, SlidersHorizontal, Square, Theater, Type, Undo2 } from "lucide-react";
 import { ObjectMediaFields } from "@/components/designer/ObjectMediaFields";
 import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
 import { VenueLayersEditor } from "@/components/designer/VenueLayersEditor";
@@ -39,6 +39,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AMENITIES, amenityLabel } from "@/lib/amenities";
+import { pinLucideIcon } from "@/lib/pin-icons";
 import { STAGE_PRESET_METERS, hallDefaults, resolveAppearance } from "@/lib/appearance";
 import { displayLogoUrl } from "@/lib/hall";
 import { DEFAULT_HALL_VIEW, type HallView } from "@/lib/hall-view";
@@ -83,6 +84,8 @@ import {
   setSvgLayerName,
   setSvgLayerText,
   setSvgLayerFontSize,
+  setSvgLayerFontWeight,
+  setSvgLayerTextAlign,
   svgElementMetrics,
   svgElementPaint,
   svgElementRotation,
@@ -1817,20 +1820,24 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         Icon
                       </DropdownMenuSubTrigger>
                       <DropdownMenuSubContent>
-                        {AMENITIES.map((a) => (
-                          <DropdownMenuItem
-                            key={a.type}
-                            onClick={() => {
-                              setStampAppearance(null);
-                              setStampModelId(null);
-                              setPinKind("amenity");
-                              setAmenityStamp(a.type);
-                              setTool("icon");
-                            }}
-                          >
-                            {a.label}
-                          </DropdownMenuItem>
-                        ))}
+                        {AMENITIES.map((a) => {
+                          const AmenityIcon = pinLucideIcon("amenity", a.type);
+                          return (
+                            <DropdownMenuItem
+                              key={a.type}
+                              onClick={() => {
+                                setStampAppearance(null);
+                                setStampModelId(null);
+                                setPinKind("amenity");
+                                setAmenityStamp(a.type);
+                                setTool("icon");
+                              }}
+                            >
+                              <AmenityIcon strokeWidth={1.5} />
+                              {a.label}
+                            </DropdownMenuItem>
+                          );
+                        })}
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
                     <DropdownMenuSub>
@@ -2213,10 +2220,13 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         className="chrome-row"
                       >
                         <span
-                          className="flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                          className="flex size-5 shrink-0 items-center justify-center rounded-full text-white"
                           style={{ background: MAP_PIN_META[o.kind].color }}
                         >
-                          {MAP_PIN_META[o.kind].mark}
+                          {(() => {
+                            const PinIcon = pinLucideIcon(o.kind);
+                            return <PinIcon className="size-3" strokeWidth={2.25} />;
+                          })()}
                         </span>
                         <span className="min-w-0 flex-1 truncate">{objectTitle(o)}</span>
                         <span className="shrink-0 text-[10px] text-muted-foreground">
@@ -2619,10 +2629,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <Label htmlFor="insp-venue-label" className="text-[10px] text-muted-foreground">
                       Label
                     </Label>
-                    <Input
+                    <Textarea
                       id="insp-venue-label"
                       value={selectedVenueLayer.text}
                       onChange={(e) => commitVenueSvg(setSvgLayerText(venueSvg, selectedVenueLayer.id, e.target.value))}
+                      className="mt-1 min-h-16 text-sm"
                     />
                   </div>
                 ) : null}
@@ -2643,6 +2654,59 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         commitVenueSvg(setSvgLayerFontSize(venueSvg, selectedVenueLayer.id, n));
                       }}
                     />
+                  </div>
+                ) : null}
+                {selectedVenueLayer.fontWeight != null ? (
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">Weight</p>
+                    <div className="mt-1 inline-flex w-full rounded-lg border border-border p-0.5" role="group" aria-label="Label weight">
+                      {(
+                        [
+                          ["regular", "Regular"],
+                          ["bold", "Bold"],
+                          ["black", "Black"],
+                        ] as const
+                      ).map(([value, label]) => (
+                        <Button
+                          key={value}
+                          size="sm"
+                          variant={selectedVenueLayer.fontWeight === value ? "default" : "ghost"}
+                          className="h-7 flex-1 px-1 text-[11px]"
+                          onClick={() =>
+                            commitVenueSvg(setSvgLayerFontWeight(venueSvg, selectedVenueLayer.id, value))
+                          }
+                        >
+                          {label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {selectedVenueLayer.textAlign != null ? (
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">Align</p>
+                    <div className="mt-1 inline-flex w-full rounded-lg border border-border p-0.5" role="group" aria-label="Label align">
+                      {(
+                        [
+                          ["left", AlignLeft, "Left"],
+                          ["center", AlignCenter, "Center"],
+                          ["right", AlignRight, "Right"],
+                        ] as const
+                      ).map(([value, Icon, label]) => (
+                        <Button
+                          key={value}
+                          size="icon-sm"
+                          variant={selectedVenueLayer.textAlign === value ? "default" : "ghost"}
+                          className="h-7 flex-1"
+                          aria-label={label}
+                          onClick={() =>
+                            commitVenueSvg(setSvgLayerTextAlign(venueSvg, selectedVenueLayer.id, value))
+                          }
+                        >
+                          <Icon strokeWidth={1.5} />
+                        </Button>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
                 {selectedVenueLayer.kind !== "image" && selectedVenuePaint ? (
