@@ -1293,6 +1293,29 @@ export function FloorCanvas({
     if (canEditObjects && e.button === 0 && !spaceHeld.current) {
       const ppmPin = svgUserToScreen(svgRef.current, cam.w, cam.h);
       const hrV = screenPx(HANDLE_HALF_PX, ppmPin);
+      if (tool === "select" && selectedSet.size > 1) {
+        const groupBox = objectSelectionBounds(ppmPin);
+        if (groupBox) {
+          const rh = rotateHandlePos(groupBox, hrV * 3.2);
+          if (hypot(w.x - rh.hx, w.y - rh.hy) <= hrV * 1.8) {
+            const ids = [...selectedSet].filter((id) => id !== VENUE_ID);
+            drag.current = {
+              id: ids[0],
+              ids,
+              starts: snapshotsFor(ids),
+              mode: "rotate",
+              ox: rh.cx,
+              oy: rh.cy,
+              polygon: null,
+              x: null,
+              y: null,
+              startAngle: angleDeg(rh.cx, rh.cy, w.x, w.y),
+              startRot: 0,
+            };
+            return;
+          }
+        }
+      }
       const solePin =
         selectedSet.size === 1 ? objects.find((o) => selectedSet.has(o.id) && isMapPinObject(o)) : undefined;
       if (solePin && solePin.x != null && solePin.y != null) {
@@ -2049,6 +2072,14 @@ export function FloorCanvas({
           }
           setHoverHandle(handle);
         }
+      } else if (canEditObjects && selectedSet.size > 1) {
+        const groupBox = objectSelectionBounds(ppm);
+        if (groupBox) {
+          const rh = rotateHandlePos(groupBox, hr * 3.2);
+          setHoverHandle(hypot(w.x - rh.hx, w.y - rh.hy) <= hr * 1.8 ? "rotate" : null);
+        } else {
+          setHoverHandle(null);
+        }
       } else if (canEditObjects && selectedSet.size === 1) {
         const selected = objects.find((o) => selectedSet.has(o.id));
         if (selected?.polygon) {
@@ -2091,6 +2122,12 @@ export function FloorCanvas({
       const d = drag.current;
       if (d.starts?.length && d.mode === "move") {
         commitGroupMove(d.starts, w.x - d.ox, w.y - d.oy);
+        return;
+      }
+      if (d.starts?.length && d.mode === "rotate" && d.startAngle != null) {
+        let delta = angleDeg(d.ox, d.oy, w.x, w.y) - d.startAngle;
+        if (e.shiftKey) delta = snapDeg(delta, 15);
+        commitGroupRotate(d.starts, d.ox, d.oy, delta);
         return;
       }
       const obj = objects.find((o) => o.id === d.id);
@@ -3142,6 +3179,26 @@ export function FloorCanvas({
       ))}
       {mode === "edit" && tool === "select"
         ? (() => {
+            if (canEditObjects && selectedSet.size > 1) {
+              const b = objectSelectionBounds(pxPerMeterScreen);
+              if (!b) return null;
+              return (
+                <g pointerEvents="none">
+                  <rect
+                    x={b.minX}
+                    y={b.minY}
+                    width={b.maxX - b.minX}
+                    height={b.maxY - b.minY}
+                    fill="none"
+                    stroke="#f97316"
+                    strokeWidth={screenPx(1.25, pxPerMeterScreen)}
+                    strokeDasharray={`${handleR * 1.4} ${handleR * 0.9}`}
+                    strokeOpacity={0.85}
+                  />
+                  <RotateKnob box={b} handleR={handleR} />
+                </g>
+              );
+            }
             if (selectedSet.size !== 1) return null;
             const selected = objects.find((o) => selectedSet.has(o.id));
             const b =
