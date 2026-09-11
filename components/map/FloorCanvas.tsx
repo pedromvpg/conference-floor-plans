@@ -733,29 +733,6 @@ export function FloorCanvas({
     cy: number,
     delta: number,
   ) {
-    if (!delta) {
-      const restored: MapObject[] = [];
-      for (const s of starts) {
-        const obj = objects.find((o) => o.id === s.id);
-        if (!obj) continue;
-        if (isPinObject(obj) && s.x != null && s.y != null) {
-          restored.push({ ...obj, x: s.x, y: s.y, rotation: s.rotation, facingDeg: s.facingDeg });
-        } else if (s.path?.length || s.polygon) {
-          const path = s.path?.length ? s.path : null;
-          restored.push({
-            ...obj,
-            polygon: path ? tessellate(path, true) : s.polygon ?? obj.polygon,
-            path,
-            facingDeg: s.facingDeg,
-            rotation: s.rotation,
-          });
-        }
-      }
-      if (!restored.length) return;
-      if (onChangeObjects) onChangeObjects(restored);
-      else restored.forEach((o) => onChangeObject?.(o));
-      return;
-    }
     const next: MapObject[] = [];
     for (const s of starts) {
       const obj = objects.find((o) => o.id === s.id);
