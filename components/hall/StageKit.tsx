@@ -46,11 +46,11 @@ export function StageKit({
   }
   return (
     <group>
-      <Suspense fallback={<PolygonSlab ring={ring} thickness={0.4} y={0} color={color} selected={selected} />}>
+      <Suspense fallback={<PolygonSlab ring={ring} thickness={0.4} y={0.04} color={color} selected={selected} />}>
         <PolygonSlab
           ring={ring}
           thickness={0.4}
-          y={0}
+          y={0.04}
           color={color}
           mapUrl={fillUrl}
           mapFit={fillUrl ? "cover" : "repeat"}

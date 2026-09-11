@@ -52,15 +52,61 @@ export function HallAO({ enabled }: { enabled: boolean }) {
   );
 }
 
+function litMaterial(mat: THREE.Material | THREE.Material[] | undefined) {
+  const list = Array.isArray(mat) ? mat : mat ? [mat] : [];
+  return list.some(
+    (m) =>
+      m instanceof THREE.MeshStandardMaterial ||
+      m instanceof THREE.MeshPhysicalMaterial ||
+      m instanceof THREE.MeshLambertMaterial ||
+      m instanceof THREE.MeshPhongMaterial ||
+      m instanceof THREE.MeshToonMaterial,
+  );
+}
+
+function applyShadowFlags(scene: THREE.Scene, enabled: boolean) {
+  scene.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const mode = mesh.userData.shadowMode as "none" | "cast" | "receive" | "both" | undefined;
+    if (!enabled || mode === "none") {
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      return;
+    }
+    if (mode === "receive") {
+      mesh.castShadow = false;
+      mesh.receiveShadow = true;
+      return;
+    }
+    if (!litMaterial(mesh.material)) {
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      return;
+    }
+    if (mode === "cast") {
+      mesh.castShadow = true;
+      mesh.receiveShadow = false;
+      return;
+    }
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+  });
+}
+
 export function ApplyMeshShadows({ enabled, revision }: { enabled: boolean; revision: number }) {
   const scene = useThree((s) => s.scene);
   useLayoutEffect(() => {
-    scene.traverse((obj) => {
-      const mesh = obj as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      mesh.castShadow = enabled;
-      mesh.receiveShadow = enabled;
+    applyShadowFlags(scene, enabled);
+    let nested = 0;
+    const a = requestAnimationFrame(() => {
+      applyShadowFlags(scene, enabled);
+      nested = requestAnimationFrame(() => applyShadowFlags(scene, enabled));
     });
+    return () => {
+      cancelAnimationFrame(a);
+      cancelAnimationFrame(nested);
+    };
   }, [enabled, revision, scene]);
   return null;
 }

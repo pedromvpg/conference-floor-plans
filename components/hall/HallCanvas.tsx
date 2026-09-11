@@ -20,7 +20,7 @@ import type {
   Tool,
   Units,
 } from "@/lib/types";
-import { HallScene, hallExtent, hallFocus, type HallSceneProps } from "./HallScene";
+import { HallScene, hallExtent, hallFocus, plotsExtent, type HallSceneProps } from "./HallScene";
 
 export type HallCanvasProps = {
   mode: "edit" | "view";
@@ -214,6 +214,16 @@ export function HallCanvas({
     };
   }, [mode]);
 
+  const plotExt = useMemo(() => plotsExtent(objects), [objects]);
+  const span = Math.max(extent.w, extent.h, 24);
+  const lightSpan = plotExt ? Math.max(plotExt.w, plotExt.h, 24) * 1.25 : span;
+  const lightTarget: [number, number, number] = plotExt
+    ? [plotExt.cx, 0, plotExt.cy]
+    : [extent.cx, 0, extent.cy];
+  const shaded = shadows && !pathTracing;
+  const occlude = ao && !pathTracing;
+  const envLit = environment || pathTracing;
+
   const sceneProps: HallSceneProps = {
     mode,
     floor,
@@ -239,15 +249,11 @@ export function HallCanvas({
     showRulers,
     cuboids,
     venueSvg: venueSvg !== undefined ? venueSvg : fetchedSvg,
+    showGround: shaded,
   };
-
-  const span = Math.max(extent.w, extent.h, 24);
-  const shaded = shadows && !pathTracing;
-  const occlude = ao && !pathTracing;
-  const envLit = environment || pathTracing;
   const pose = { azimuth, elevation, distance };
   const startPose = isometricPose(extent.cx, extent.cy, Math.max(extent.w, extent.h), pose);
-  const sun = sunPosition(extent.cx, extent.cy, span, {
+  const sun = sunPosition(lightTarget[0], lightTarget[2], lightSpan, {
     azimuth: lightAzimuth,
     elevation: lightElevation,
     distance: lightDistance,
@@ -275,19 +281,12 @@ export function HallCanvas({
           <HallEnvironment enabled={envLit} />
           <hemisphereLight args={[hall.sky, hall.ground, (shaded || envLit ? 0.28 : 0.85) * fillMul]} />
           <ambientLight intensity={(tone === "light" ? (shaded || envLit ? 0.16 : 0.45) : shaded || envLit ? 0.08 : 0.22) * fillMul} />
-          <directionalLight
-            castShadow={shaded}
+          <HallSun
+            enabled={shaded}
             position={sun}
+            target={lightTarget}
+            span={lightSpan}
             intensity={(tone === "light" ? (shaded ? 1.35 : 0.95) : shaded ? 1.55 : 1.15) * sunMul}
-            shadow-mapSize={[2048, 2048]}
-            shadow-bias={-0.0002}
-            shadow-normalBias={0.035}
-            shadow-camera-near={1}
-            shadow-camera-far={span * 4}
-            shadow-camera-left={-span * 0.9}
-            shadow-camera-right={span * 0.9}
-            shadow-camera-top={span * 0.9}
-            shadow-camera-bottom={-span * 0.9}
           />
           <HallScene {...sceneProps} />
           <ApplyMeshShadows enabled={shaded} revision={objects.length} />
@@ -320,6 +319,51 @@ export function HallCanvas({
         </HallPathTrace>
       </Canvas>
     </div>
+  );
+}
+
+function HallSun({
+  enabled,
+  position,
+  target,
+  span,
+  intensity,
+}: {
+  enabled: boolean;
+  position: [number, number, number];
+  target: [number, number, number];
+  span: number;
+  intensity: number;
+}) {
+  const lightRef = useRef<THREE.DirectionalLight>(null);
+  const half = Math.max(span * 0.85, 16);
+  const reach = Math.hypot(position[0] - target[0], position[1] - target[1], position[2] - target[2]);
+  const map = span > 90 ? 4096 : 2048;
+
+  useLayoutEffect(() => {
+    const light = lightRef.current;
+    if (!light) return;
+    light.target.position.set(target[0], target[1], target[2]);
+    light.target.updateMatrixWorld();
+    if (!light.target.parent && light.parent) light.parent.add(light.target);
+  }, [target[0], target[1], target[2]]);
+
+  return (
+    <directionalLight
+      ref={lightRef}
+      castShadow={enabled}
+      position={position}
+      intensity={intensity}
+      shadow-mapSize={[map, map]}
+      shadow-bias={-0.00015}
+      shadow-normalBias={0.06}
+      shadow-camera-near={0.5}
+      shadow-camera-far={reach + span * 1.5}
+      shadow-camera-left={-half}
+      shadow-camera-right={half}
+      shadow-camera-top={half}
+      shadow-camera-bottom={-half}
+    />
   );
 }
 
@@ -506,17 +550,25 @@ function CameraRig({
   useEffect(() => {
     const c = controlsRef.current;
     if (!c) return;
-    const next = isometricPose(focus.cx, focus.cz, focus.span, pose);
     fromP.current.copy(c.object.position);
     fromT.current.copy(c.target);
-    toP.current.set(...next.position);
-    toT.current.set(...next.target);
+    toT.current.set(focus.cx, 0, focus.cz);
+    const offset = fromP.current.clone().sub(fromT.current);
+    const dist = Math.max(16, focus.span * 0.85) * pose.distance;
+    if (offset.lengthSq() < 1e-10) {
+      const next = isometricPose(focus.cx, focus.cz, focus.span, pose);
+      toP.current.set(...next.position);
+    } else {
+      offset.setLength(dist);
+      toP.current.copy(toT.current).add(offset);
+    }
     if (c.object instanceof THREE.OrthographicCamera) {
       fromZoom.current = c.object.zoom;
       toZoom.current = orthoZoomForSpan(focus.span, size.height);
     }
     anim.current = 1;
     // Animate only when nonce changes (fit / frame / floor), not when the hall is dragged.
+    // Keep the current view direction; only pan/dolly to frame.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nonce]);
 

@@ -2,9 +2,10 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { Grid } from "@react-three/drei";
+import { Grid, Html } from "@react-three/drei";
 import { useThree, type ThreeEvent } from "@react-three/fiber";
 import { AMENITY_COLOR } from "@/lib/amenities";
+import { pinLucideIcon } from "@/lib/pin-icons";
 import { hallDefaults, resolveAppearance } from "@/lib/appearance";
 import { boothFillHex, HALL_THEME, type MapTone } from "@/lib/colors";
 import { angleDeg, rectFromCenter, rectRing, ringBounds, rotateHandlePos, snapDeg, squareRectRing, venueWorldRect } from "@/lib/geometry";
@@ -12,13 +13,15 @@ import { displayLogoUrl, objectUrls, snapWorld, yawRad } from "@/lib/hall";
 import { commitShape, ellipseFromCorners, objectShape, rotateBezier, tessellate, translateBezier } from "@/lib/bezier";
 import { stampPinObject, newMapObject } from "@/lib/new-object";
 import { gridSize } from "@/lib/units";
-import { svgVenueWorldPolylines } from "@/lib/svg-layers";
+import { Text } from "@react-three/drei";
+import { svgVenueWorldLabels, svgVenueWorldPolylines } from "@/lib/svg-layers";
 import type {
   AmenityType,
   Appearance,
   Floor,
   LibraryAsset,
   MapObject,
+  ObjectKind,
   PinKind,
   Ring,
   Sponsor,
@@ -57,6 +60,7 @@ export type HallSceneProps = {
   showRulers?: boolean;
   cuboids?: boolean;
   venueSvg?: string | null;
+  showGround?: boolean;
 };
 
 export type HallExtent = {
@@ -70,15 +74,11 @@ export type HallExtent = {
   cy: number;
 };
 
-export function hallExtent(floor: Floor, objects: MapObject[]): HallExtent {
-  if (floor.calibration) {
-    const v = venueWorldRect(floor.calibration);
-    return { ...v, cx: (v.minX + v.maxX) / 2, cy: (v.minY + v.maxY) / 2 };
-  }
-  let minX = 0;
-  let minY = 0;
-  let maxX = 40;
-  let maxY = 40;
+export function plotsExtent(objects: MapObject[]): HallExtent | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
   for (const o of objects) {
     if (isMapPinObject(o)) continue;
     if (o.polygon?.length) {
@@ -94,6 +94,7 @@ export function hallExtent(floor: Floor, objects: MapObject[]): HallExtent {
       maxY = Math.max(maxY, o.y);
     }
   }
+  if (!Number.isFinite(minX)) return null;
   return {
     minX,
     minY,
@@ -106,6 +107,25 @@ export function hallExtent(floor: Floor, objects: MapObject[]): HallExtent {
   };
 }
 
+export function hallExtent(floor: Floor, objects: MapObject[]): HallExtent {
+  if (floor.calibration) {
+    const v = venueWorldRect(floor.calibration);
+    return { ...v, cx: (v.minX + v.maxX) / 2, cy: (v.minY + v.maxY) / 2 };
+  }
+  return (
+    plotsExtent(objects) ?? {
+      minX: 0,
+      minY: 0,
+      maxX: 40,
+      maxY: 40,
+      w: 40,
+      h: 40,
+      cx: 20,
+      cy: 20,
+    }
+  );
+}
+
 export function hallFocus(
   objects: MapObject[],
   id: string | null,
@@ -113,8 +133,8 @@ export function hallFocus(
 ): { cx: number; cz: number; span: number } {
   if (id) {
     const o = objects.find((x) => x.id === id);
-    if (o && !isMapPinObject(o)) {
-      if (o.polygon?.length) {
+    if (o) {
+      if (o.polygon?.length && !isMapPinObject(o)) {
         const b = ringBounds(o.polygon);
         return {
           cx: (b.minX + b.maxX) / 2,
@@ -171,6 +191,7 @@ export function HallScene({
   showRulers = false,
   cuboids = false,
   venueSvg = null,
+  showGround = false,
 }: HallSceneProps) {
   const hall = HALL_THEME[tone];
   const canEdit = mode === "edit";
@@ -441,12 +462,14 @@ export function HallScene({
       <mesh
         rotation={[-Math.PI / 2, 0, 0]}
         position={[extent.cx, 0, extent.cy]}
+        userData={{ shadowMode: "none" }}
         onPointerDown={onGroundDown}
         onPointerMove={(e) => setHover(hitToWorld(e.point, grid))}
       >
         <planeGeometry args={[Math.max(extent.w, 24) * 1.6, Math.max(extent.h, 24) * 1.6]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
+      {showGround ? <HallShadowFloor tone={tone} cx={extent.cx} cz={extent.cy} span={Math.max(extent.w, extent.h, 24)} /> : null}
       {floor.calibration && venueSvg ? (
         <HallVenuePaths markup={venueSvg} calibration={floor.calibration} color={tone === "light" ? "#6a6a64" : "#a8a8a0"} />
       ) : null}
@@ -557,12 +580,59 @@ export function HallScene({
       ) : null}
       {placing && hover && tool === "icon" ? (
         pinKind === "side_event" || pinKind === "hotel" ? (
-          <AmenityTotem x={hover.x} y={hover.y} color={MAP_PIN_META[pinKind].color} selected={false} ghost />
+          <AmenityTotem x={hover.x} y={hover.y} kind={pinKind} color={MAP_PIN_META[pinKind].color} selected={false} ghost />
         ) : (
-          <AmenityTotem x={hover.x} y={hover.y} type={amenityStamp} selected={false} ghost />
+          <AmenityTotem x={hover.x} y={hover.y} kind="amenity" type={amenityStamp} selected={false} ghost />
         )
       ) : null}
     </>
+  );
+}
+
+function HallShadowFloor({
+  tone,
+  cx,
+  cz,
+  span,
+}: {
+  tone: MapTone;
+  cx: number;
+  cz: number;
+  span: number;
+}) {
+  const size = Math.max(span * 8, 160);
+  return (
+    <group position={[cx, 0, cz]}>
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, -0.12, 0]}
+        renderOrder={-2}
+        frustumCulled={false}
+        userData={{ shadowMode: "none" }}
+      >
+        <planeGeometry args={[size, size]} />
+        <meshBasicMaterial color={tone === "light" ? "#ffffff" : "#3a3a3a"} toneMapped={false} depthWrite={false} />
+      </mesh>
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, -0.11, 0]}
+        renderOrder={-1}
+        frustumCulled={false}
+        userData={{ shadowMode: "receive" }}
+        receiveShadow
+        castShadow={false}
+      >
+        <planeGeometry args={[size, size]} />
+        <meshLambertMaterial
+          color={new THREE.Color(2.4, 2.4, 2.4)}
+          toneMapped={false}
+          transparent
+          premultipliedAlpha
+          depthWrite={false}
+          blending={THREE.MultiplyBlending}
+        />
+      </mesh>
+    </group>
   );
 }
 
@@ -592,12 +662,34 @@ function HallVenuePaths({
     g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
     return g;
   }, [markup, calibration]);
+  const labels = useMemo(() => svgVenueWorldLabels(markup, calibration), [markup, calibration]);
   useEffect(() => () => geom.dispose(), [geom]);
-  if (!geom.getAttribute("position")?.count) return null;
+  const hasLines = (geom.getAttribute("position")?.count ?? 0) > 0;
+  if (!hasLines && !labels.length) return null;
   return (
-    <lineSegments geometry={geom} frustumCulled={false}>
-      <lineBasicMaterial color={color} />
-    </lineSegments>
+    <group>
+      {hasLines ? (
+        <lineSegments geometry={geom} frustumCulled={false}>
+          <lineBasicMaterial color={color} />
+        </lineSegments>
+      ) : null}
+      {labels.map((label, i) => (
+        <Text
+          key={`${label.x}:${label.y}:${i}:${label.text}`}
+          position={[label.x, 0.04, label.y]}
+          rotation={[-Math.PI / 2, 0, -label.rotation]}
+          fontSize={Math.max(0.25, label.fontSize)}
+          color={color}
+          anchorX={label.align === "left" ? "left" : label.align === "right" ? "right" : "center"}
+          anchorY="middle"
+          fontWeight={label.weight === "black" ? 900 : label.weight === "bold" ? 700 : 400}
+          lineHeight={0.95}
+          frustumCulled={false}
+        >
+          {label.text}
+        </Text>
+      ))}
+    </group>
   );
 }
 
@@ -663,6 +755,7 @@ function HallPlot({
       <AmenityTotem
         x={object.x}
         y={object.y}
+        kind={object.kind}
         type={object.amenityType ?? "info"}
         color={isMapPinObject(object) ? MAP_PIN_META[object.kind].color : undefined}
         rotation={object.rotation ?? 0}
@@ -729,6 +822,7 @@ function HallPlot({
 function AmenityTotem({
   x,
   y,
+  kind = "amenity",
   type = "info",
   color,
   rotation = 0,
@@ -737,6 +831,7 @@ function AmenityTotem({
 }: {
   x: number;
   y: number;
+  kind?: ObjectKind;
   type?: AmenityType;
   color?: string;
   rotation?: number;
@@ -745,12 +840,21 @@ function AmenityTotem({
 }) {
   const fill = color ?? AMENITY_COLOR[type];
   const h = selected ? 1.45 : 1.2;
+  const Icon = pinLucideIcon(kind, type);
   return (
     <group position={[x, 0, y]} rotation={[0, yawRad(rotation), 0]}>
       <mesh position={[0, h / 2, 0]} castShadow receiveShadow>
         <cylinderGeometry args={[0.28, 0.34, h, 10]} />
         <meshStandardMaterial color={fill} roughness={0.45} transparent={ghost} opacity={ghost ? 0.5 : 1} />
       </mesh>
+      <Html
+        center
+        position={[0, h * 0.62, 0]}
+        distanceFactor={8}
+        style={{ pointerEvents: "none", opacity: ghost ? 0.55 : 1 }}
+      >
+        <Icon size={18} color="#fff" strokeWidth={2.35} aria-hidden />
+      </Html>
       {selected ? (
         <mesh position={[0, 0.04, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[0.42, 0.52, 20]} />

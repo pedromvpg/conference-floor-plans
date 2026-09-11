@@ -50,11 +50,11 @@ export function BoothKit({
   }
   return (
     <group>
-      <Suspense fallback={<PolygonSlab ring={ring} thickness={0.05} y={0} color={rugColor} selected={selected} />}>
+      <Suspense fallback={<PolygonSlab ring={ring} thickness={0.05} y={0.04} color={rugColor} selected={selected} />}>
         <PolygonSlab
           ring={ring}
           thickness={0.05}
-          y={0}
+          y={0.04}
           color={rugColor}
           mapUrl={floorUrl}
           mapFit={floorFit}

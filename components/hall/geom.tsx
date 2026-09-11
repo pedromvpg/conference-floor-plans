@@ -65,6 +65,7 @@ export function PolygonSlab({
   facingDeg?: number;
   selected?: boolean;
 }) {
+  const shadowMode = thickness < 0.5 ? "receive" : "both";
   const geom = useMemo(() => {
     const g = slabGeometry(ring, thickness);
     if (mapFit === "cover") applyCoverUvs(g, ring, facingDeg);
@@ -78,7 +79,7 @@ export function PolygonSlab({
   }, [ring, facingDeg]);
   return (
     <group>
-      <mesh geometry={geom} position={[0, y, 0]} castShadow receiveShadow>
+      <mesh geometry={geom} position={[0, y, 0]} userData={{ shadowMode }} castShadow={shadowMode === "both"} receiveShadow>
         <ColorOrMap color={color} url={mapUrl} fit={mapFit} aspect={aspect} />
       </mesh>
       {selected ? (
