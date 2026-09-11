@@ -5,12 +5,12 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { Box, Building2, CalendarDays, ChevronDown, Circle, ImagePlus, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, RefreshCw, Square, Theater, Type, Undo2 } from "lucide-react";
+import { Box, Building2, CalendarDays, ChevronDown, Circle, ImagePlus, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, RefreshCw, SlidersHorizontal, Square, Theater, Type, Undo2 } from "lucide-react";
 import { ObjectMediaFields } from "@/components/designer/ObjectMediaFields";
 import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
 import { VenueLayersEditor } from "@/components/designer/VenueLayersEditor";
 import { FloorCanvas } from "@/components/map/FloorCanvas";
-import { FloorSwitcher, GridToggle, RulersToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
+import { FloorSwitcher, GridToggle, HallViewAside, RulersToggle, ViewModeToggle } from "@/components/map/ViewModeToggle";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -41,6 +41,7 @@ import {
 import { AMENITIES, amenityLabel } from "@/lib/amenities";
 import { STAGE_PRESET_METERS, hallDefaults, resolveAppearance } from "@/lib/appearance";
 import { displayLogoUrl } from "@/lib/hall";
+import { DEFAULT_HALL_VIEW, type HallView } from "@/lib/hall-view";
 import { DEFAULT_FLOOR_BASEMAP, BASEMAP_COORD_STEP, bearingSliderValue, parseLatLngPaste, roundBasemapCoord, wrapBearingDeg } from "@/lib/basemap";
 import { withInheritedFloorSettings, inheritedSettingsTargetId } from "@/lib/floor-settings";
 import { floorSizeMeters, metersFromPixels, ringBounds, scaleRingToSize } from "@/lib/geometry";
@@ -344,7 +345,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [floorId, setFloorId] = useState(initial.floors[0]?.id ?? "");
   const [tool, setTool] = useState<Tool>("select");
   const [viewMode, setViewMode] = useState<ViewMode>("plan");
-  const [orthographic, setOrthographic] = useState(false);
+  const [hallView, setHallView] = useState<HallView>(DEFAULT_HALL_VIEW);
+  const [hallSettingsOpen, setHallSettingsOpen] = useState(false);
   const [stampAppearance, setStampAppearance] = useState<Appearance | null>(null);
   const [stampModelId, setStampModelId] = useState<string | null>(null);
   const [units, setUnits] = useUnits();
@@ -357,6 +359,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const selectedId = selectedIds[0] ?? null;
   const [frameNonce, setFrameNonce] = useState(0);
   const [fitNonce, setFitNonce] = useState(0);
+  const [venueNonce, setVenueNonce] = useState(0);
   const [sponsorQuery, setSponsorQuery] = useState("");
   const [sponsorFilter, setSponsorFilter] = useState<SponsorFilter>("all");
   const [sponsorSort, setSponsorSort] = useState<SponsorSort>("tier");
@@ -1630,10 +1633,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
             value={viewMode}
             onChange={(mode) => {
               setViewMode(mode);
+              setFrameNonce(0);
+              setVenueNonce((n) => n + 1);
               if (mode === "hall" && (tool === "calibrate" || tool === "label" || tool === "image")) setTool("select");
             }}
-            orthographic={orthographic}
-            onOrthographicChange={setOrthographic}
           />
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
@@ -2161,6 +2164,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <DropdownMenuContent align="start" className="min-w-52">
                       <DropdownMenuItem
                         onClick={() => {
+                          if (viewMode !== "plan") {
+                            setFrameNonce(0);
+                            setVenueNonce((n) => n + 1);
+                          }
                           setViewMode("plan");
                           setAlignDrawingToMap(false);
                           setPinKind("side_event");
@@ -2172,6 +2179,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() => {
+                          if (viewMode !== "plan") {
+                            setFrameNonce(0);
+                            setVenueNonce((n) => n + 1);
+                          }
                           setViewMode("plan");
                           setAlignDrawingToMap(false);
                           setPinKind("hotel");
@@ -2398,7 +2409,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           )}
         </aside>
 
-        <main className="relative min-w-0 flex-1">
+        <main className="relative flex min-h-0 min-w-0 flex-1">
+          <div className="relative min-h-0 min-w-0 flex-1 overflow-clip">
           {floor ? (
             viewMode === "hall" ? (
               <HallCanvas
@@ -2410,6 +2422,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 selectedId={selectedId}
                 frameNonce={frameNonce}
                 fitNonce={fitNonce}
+                venueNonce={venueNonce}
                 tool={tool}
                 units={units}
                 amenityStamp={amenityStamp}
@@ -2419,7 +2432,22 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 stampModelAssetId={stampModelId}
                 showGrid={showGrid}
                 showRulers={showRulers}
-                orthographic={orthographic}
+                orthographic={hallView.orthographic}
+                cuboids={hallView.cuboids}
+                fog={hallView.fog}
+                fogIntensity={hallView.fogIntensity}
+                ao={hallView.ao}
+                shadows={hallView.shadows}
+                environment={hallView.environment}
+                pathTracing={hallView.pathTracing}
+                azimuth={hallView.azimuth}
+                elevation={hallView.elevation}
+                distance={hallView.distance}
+                lightAzimuth={hallView.lightAzimuth}
+                lightElevation={hallView.lightElevation}
+                lightDistance={hallView.lightDistance}
+                lightIntensity={hallView.lightIntensity}
+                fill={hallView.fill}
                 venueSvg={venueSvg}
                 onSelect={(id) => {
                   selectVenueLayer(null);
@@ -2445,6 +2473,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 selectedIds={selectedIds}
                 frameNonce={frameNonce}
                 fitNonce={fitNonce}
+                venueNonce={venueNonce}
                 tool={tool}
                 units={units}
                 amenityStamp={amenityStamp}
@@ -2526,6 +2555,29 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   ? "Drag an ellipse on the venue. Hold Shift for a circle. Hold Space to pan."
                   : "Drag a rectangle on the venue. Hold Space to pan."}
             </div>
+          ) : null}
+          {viewMode === "hall" ? (
+            <div className="pointer-events-auto absolute top-4 right-4 z-20">
+              <Button
+                size="icon-sm"
+                variant={hallSettingsOpen ? "secondary" : "ghost"}
+                className="size-8 border border-border bg-background/80 shadow-sm backdrop-blur-md"
+                title="3D view"
+                aria-label="3D view settings"
+                aria-pressed={hallSettingsOpen}
+                onClick={() => setHallSettingsOpen(true)}
+              >
+                <SlidersHorizontal strokeWidth={1.5} />
+              </Button>
+            </div>
+          ) : null}
+          </div>
+          {hallSettingsOpen ? (
+            <HallViewAside
+              hallView={hallView}
+              onHallViewChange={(patch) => setHallView((prev) => ({ ...prev, ...patch }))}
+              onClose={() => setHallSettingsOpen(false)}
+            />
           ) : null}
         </main>
 
