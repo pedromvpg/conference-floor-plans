@@ -390,18 +390,6 @@ export function ViewerApp({
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search exhibitors"
         />
-        {tiers.length ? (
-          <div className="flex flex-wrap gap-1">
-            <button type="button" className="chrome-pill h-7 min-h-0 px-2" data-active={tier === ""} onClick={() => setTier("")}>
-              All
-            </button>
-            {tiers.slice(0, 8).map((t) => (
-              <button key={t} type="button" className="chrome-pill h-7 min-h-0 px-2" data-active={tier === t} onClick={() => setTier(t)}>
-                {t}
-              </button>
-            ))}
-          </div>
-        ) : null}
       </div>
       <div
         className="flex shrink-0 items-center gap-0.5 border-b border-border px-3 py-1.5"
@@ -440,7 +428,7 @@ export function ViewerApp({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  aria-label="Sort objects"
+                  aria-label="Filter and sort"
                   className="ml-auto flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
                 >
                   <ChevronDown
@@ -450,9 +438,9 @@ export function ViewerApp({
                 </button>
               </DropdownMenuTrigger>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Sort</TooltipContent>
+            <TooltipContent side="bottom">Filter and sort</TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="end" className="min-w-40">
+          <DropdownMenuContent align="end" className="min-w-52">
             <DropdownMenuLabel>Sort by</DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={objectSort}
@@ -470,6 +458,23 @@ export function ViewerApp({
               <DropdownMenuRadioItem value="asc">Ascending</DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="desc">Descending</DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
+            {tiers.length ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Filter</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={tier || "__all__"}
+                  onValueChange={(v) => setTier(v === "__all__" ? "" : v)}
+                >
+                  <DropdownMenuRadioItem value="__all__">All</DropdownMenuRadioItem>
+                  {tiers.slice(0, 8).map((t) => (
+                    <DropdownMenuRadioItem key={t} value={t}>
+                      {t}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -585,7 +590,7 @@ export function ViewerApp({
           </div>
         )}
 
-        <div className="pointer-events-auto absolute bottom-4 left-1/2 z-50 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-background/80 p-1 shadow-sm backdrop-blur-md">
+        <div className="pointer-events-auto absolute bottom-4 left-1/2 z-50 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-nowrap items-center justify-center gap-1 overflow-x-auto rounded-xl border border-border bg-background/80 p-1 shadow-sm backdrop-blur-md [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <ViewModeToggle
             value={viewMode}
             onChange={(mode) => {

@@ -61,7 +61,7 @@ export function FloorSwitcher({
 }) {
   if (floors.length < 2) return null;
   return (
-    <div className="flex flex-wrap justify-start gap-0.5 rounded-lg border border-border p-0.5" role="group" aria-label="Floor">
+    <div className="flex shrink-0 flex-nowrap justify-start gap-0.5 rounded-lg border border-border p-0.5" role="group" aria-label="Floor">
       {floors.map((f, i) => (
         <button
           key={f.id}
@@ -156,7 +156,7 @@ export function ViewModeToggle({
   onChange: (mode: ViewMode) => void;
 }) {
   return (
-    <div className="inline-flex items-center" role="group" aria-label="View mode">
+    <div className="inline-flex shrink-0 items-center" role="group" aria-label="View mode">
       <Button
         size="icon-sm"
         variant={value === "plan" ? "secondary" : "ghost"}

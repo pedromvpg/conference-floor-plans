@@ -10,7 +10,7 @@ export function UnitsToggle({
   onChange: (units: Units) => void;
 }) {
   return (
-    <div className="inline-flex rounded-lg border border-border p-0.5" role="group" aria-label="Measurement units">
+    <div className="inline-flex shrink-0 rounded-lg border border-border p-0.5" role="group" aria-label="Measurement units">
       {(["m", "ft"] as const).map((u) => (
         <button
           key={u}
