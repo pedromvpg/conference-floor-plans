@@ -1,24 +1,26 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import * as THREE from "three";
-import { Grid, Html, Text } from "@react-three/drei";
+import { Grid, Html } from "@react-three/drei";
 import { useThree, type ThreeEvent } from "@react-three/fiber";
-import { AMENITY_COLOR } from "@/lib/amenities";
 import { pinLucideIcon } from "@/lib/pin-icons";
+import { resolvedIconPaint } from "@/lib/paint";
 import { hallDefaults, resolveAppearance } from "@/lib/appearance";
+import { kitByKind, kitStampName } from "@/lib/exhibit-kits";
 import { boothFillHex, HALL_THEME, type MapTone } from "@/lib/colors";
-import { angleDeg, rectFromCenter, rectRing, ringBounds, rotateHandlePos, snapDeg, squareRectRing, venueWorldRect } from "@/lib/geometry";
-import { displayLogoUrl, objectUrls, snapWorld, yawRad } from "@/lib/hall";
+import { angleDeg, rectFromCenter, rectRing, ringBounds, ringCentroid, rotateHandlePos, rotateRing, snapDeg, squareRectRing, venueWorldRect } from "@/lib/geometry";
+import { displayLogoUrl, objectUrls, snapWorld } from "@/lib/hall";
 import { commitShape, ellipseFromCorners, objectShape, rotateBezier, tessellate, translateBezier } from "@/lib/bezier";
 import { stampPinObject, newMapObject } from "@/lib/new-object";
-import { gridSize } from "@/lib/units";
-import { svgVenueWorldLabels, svgVenueWorldPolylines } from "@/lib/svg-layers";
+import { formatLength, gridSize } from "@/lib/units";
+import { svgVenueWorldLabels, svgVenueWorldPolylines, type SvgTextWeight } from "@/lib/svg-layers";
 import type {
   AmenityType,
   Appearance,
   Floor,
   LibraryAsset,
+  ExhibitKit,
   MapObject,
   ObjectKind,
   PinKind,
@@ -28,10 +30,11 @@ import type {
   Units,
   Calibration,
 } from "@/lib/types";
-import { isPinObject, isMapPinObject, MAP_PIN_META } from "@/lib/types";
+import { isPinObject, isMapPinObject } from "@/lib/types";
 import { BoothKit } from "./BoothKit";
 import { CustomModel } from "./CustomModel";
 import { HallRulers } from "./HallRulers";
+import { KioskKit } from "./KioskKit";
 import { StageKit } from "./StageKit";
 
 export type HallSceneProps = {
@@ -49,6 +52,8 @@ export type HallSceneProps = {
   presetMeters: { w: number; d: number } | null;
   stampAppearance: Appearance | null;
   stampModelAssetId: string | null;
+  stampKitKind?: MapObject["kitKind"];
+  kits?: ExhibitKit[];
   onSelect?: (id: string | null) => void;
   onChangeObject?: (obj: MapObject) => void;
   onCreateObject?: (obj: MapObject) => void;
@@ -60,6 +65,7 @@ export type HallSceneProps = {
   cuboids?: boolean;
   venueSvg?: string | null;
   showGround?: boolean;
+  showObjectSizes?: boolean;
 };
 
 export type HallExtent = {
@@ -107,12 +113,30 @@ export function plotsExtent(objects: MapObject[]): HallExtent | null {
 }
 
 export function hallExtent(floor: Floor, objects: MapObject[]): HallExtent {
+  const plots = plotsExtent(objects);
   if (floor.calibration) {
     const v = venueWorldRect(floor.calibration);
+    if (plots && (v.w > plots.w * 3.5 || v.h > plots.h * 3.5)) {
+      const pad = Math.max(plots.w, plots.h, 12) * 0.35;
+      const minX = plots.minX - pad;
+      const minY = plots.minY - pad;
+      const maxX = plots.maxX + pad;
+      const maxY = plots.maxY + pad;
+      return {
+        minX,
+        minY,
+        maxX,
+        maxY,
+        w: maxX - minX,
+        h: maxY - minY,
+        cx: plots.cx,
+        cy: plots.cy,
+      };
+    }
     return { ...v, cx: (v.minX + v.maxX) / 2, cy: (v.minY + v.maxY) / 2 };
   }
   return (
-    plotsExtent(objects) ?? {
+    plots ?? {
       minX: 0,
       minY: 0,
       maxX: 40,
@@ -180,6 +204,8 @@ export function HallScene({
   presetMeters,
   stampAppearance,
   stampModelAssetId,
+  stampKitKind = null,
+  kits = [],
   onSelect,
   onChangeObject,
   onCreateObject,
@@ -191,6 +217,7 @@ export function HallScene({
   cuboids = false,
   venueSvg = null,
   showGround = false,
+  showObjectSizes = false,
 }: HallSceneProps) {
   const hall = HALL_THEME[tone];
   const canEdit = mode === "edit";
@@ -226,6 +253,20 @@ export function HallScene({
   onNavLockRef.current = onNavLock;
   const { camera, gl } = useThree();
 
+  function clientOnFloor(clientX: number, clientY: number) {
+    const rect = gl.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const raycaster = new THREE.Raycaster();
+    const hit = new THREE.Vector3();
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    raycaster.setFromCamera(ndc, camera);
+    if (!raycaster.ray.intersectPlane(plane, hit)) return null;
+    return planeToWorld(hit);
+  }
+
   function stampAt(x: number, y: number, ring?: Ring) {
     if (!canEdit) return;
     if (tool === "icon") {
@@ -251,8 +292,9 @@ export function HallScene({
           kind: "booth",
           polygon: shape.polygon,
           path: shape.path,
-          name: stampAppearance === "stage" ? "Stage" : "",
+          name: stampAppearance === "stage" ? kitStampName(stampKitKind ?? "main_stage") || "Stage" : kitStampName(stampKitKind ?? "small"),
           appearance: stampAppearance,
+          kitKind: stampKitKind,
           modelAssetId: stampModelAssetId,
         }),
       );
@@ -267,8 +309,9 @@ export function HallScene({
         floorId: floor.id,
         kind: "booth",
         polygon: poly,
-        name: stampAppearance === "stage" ? "Stage" : "",
+        name: kitStampName(stampKitKind ?? "small") || (stampAppearance === "stage" ? "Stage" : ""),
         appearance: stampAppearance,
+        kitKind: stampKitKind,
         modelAssetId: stampModelAssetId,
       }),
     );
@@ -413,19 +456,23 @@ export function HallScene({
     }
   }
 
-  function startDrag(obj: MapObject, e: ThreeEvent<PointerEvent>) {
+  function startDragAt(obj: MapObject, x: number, y: number) {
     if (!canEdit || tool !== "select") return;
-    const p = hitToWorld(e.point, grid);
     pendingDrag.current = {
       id: obj.id,
       mode: "move",
-      ox: p.x,
-      oy: p.y,
+      ox: x,
+      oy: y,
       polygon: obj.polygon,
       path: obj.path ?? objectShape(obj),
       x: obj.x,
       y: obj.y,
     };
+  }
+
+  function startDrag(obj: MapObject, e: ThreeEvent<PointerEvent>) {
+    const p = hitToWorld(e.point, grid);
+    startDragAt(obj, p.x, p.y);
   }
 
   function startRotate(obj: MapObject, e: ThreeEvent<PointerEvent>) {
@@ -470,7 +517,12 @@ export function HallScene({
       </mesh>
       {showGround ? <HallShadowFloor tone={tone} cx={extent.cx} cz={extent.cy} span={Math.max(extent.w, extent.h, 24)} /> : null}
       {floor.calibration && venueSvg ? (
-        <HallVenuePaths markup={venueSvg} calibration={floor.calibration} color={tone === "light" ? "#6a6a64" : "#a8a8a0"} />
+        <HallVenuePaths
+          markup={venueSvg}
+          calibration={floor.calibration}
+          color={tone === "light" ? "#3f3f3a" : "#e8e8e0"}
+          outline={tone === "light" ? "#ffffff" : "#141414"}
+        />
       ) : null}
       {showGrid ? (
         <Grid
@@ -512,7 +564,17 @@ export function HallScene({
                 passThroughNav.current = true;
               }}
             >
-              <HallPlot object={o} sponsor={sponsor} assets={assets} selected={selected} tone={tone} cuboid={cuboids} />
+              <HallPlot
+                object={o}
+                sponsor={sponsor}
+                assets={assets}
+                kits={kits}
+                selected={selected}
+                tone={tone}
+                cuboid={cuboids}
+                showSizes={showObjectSizes}
+                units={units}
+              />
             </group>
           );
         })}
@@ -536,7 +598,24 @@ export function HallScene({
                 passThroughNav.current = true;
               }}
             >
-              <HallPlot object={o} selected={selected} tone={tone} cuboid={cuboids} />
+              <HallPlot
+                object={o}
+                selected={selected}
+                tone={tone}
+                cuboid={cuboids}
+                largePins={mode === "view"}
+                onPinPointerDown={(ev) => {
+                  if (ev.button !== 0) return;
+                  if (spacePan) return;
+                  const alreadySelected = o.id === selectedId;
+                  ev.stopPropagation();
+                  onSelect?.(o.id);
+                  if (alreadySelected && canEdit && tool === "select") {
+                    const p = clientOnFloor(ev.clientX, ev.clientY);
+                    if (p) startDragAt(o, p.x, p.y);
+                  }
+                }}
+              />
             </group>
           );
         })}
@@ -558,11 +637,12 @@ export function HallScene({
             color: null,
             description: "",
             eventDate: "",
-            ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
+            ...hallDefaults({ appearance: stampAppearance, kitKind: stampKitKind, modelAssetId: stampModelAssetId }),
             createdAt: "",
             updatedAt: "",
           }}
           assets={assets}
+          kits={kits}
           selected={false}
           tone={tone}
           cuboid={cuboids}
@@ -579,9 +659,9 @@ export function HallScene({
       ) : null}
       {placing && hover && tool === "icon" ? (
         pinKind === "side_event" || pinKind === "hotel" ? (
-          <AmenityTotem x={hover.x} y={hover.y} kind={pinKind} color={MAP_PIN_META[pinKind].color} selected={false} ghost />
+          <AmenityTotem x={hover.x} y={hover.y} kind={pinKind} selected={false} ghost tone={tone} />
         ) : (
-          <AmenityTotem x={hover.x} y={hover.y} kind="amenity" type={amenityStamp} selected={false} ghost />
+          <AmenityTotem x={hover.x} y={hover.y} kind="amenity" type={amenityStamp} selected={false} ghost tone={tone} />
         )
       ) : null}
     </>
@@ -635,27 +715,46 @@ function HallShadowFloor({
   );
 }
 
+function simplifyStroke(points: Ring, minStep: number): Ring {
+  if (points.length < 3) return points;
+  const out: Ring = [points[0]];
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = out[out.length - 1];
+    const p = points[i];
+    if (Math.hypot(p[0] - prev[0], p[1] - prev[1]) >= minStep) out.push(p);
+  }
+  out.push(points[points.length - 1]);
+  return out;
+}
+
 function HallVenuePaths({
   markup,
   calibration,
   color,
+  outline,
 }: {
   markup: string;
   calibration: Calibration;
   color: string;
+  outline: string;
 }) {
   const geom = useMemo(() => {
     const strokes = svgVenueWorldPolylines(markup, calibration);
     const positions: number[] = [];
+    const maxSeg = 24000;
     for (const stroke of strokes) {
-      const pts =
+      const raw =
         stroke.closed && stroke.points.length > 2 ? [...stroke.points, stroke.points[0]] : stroke.points;
+      const pts = simplifyStroke(raw, 0.35);
       for (let i = 0; i < pts.length - 1; i++) {
         const a = pts[i];
         const b = pts[i + 1];
         if (!Number.isFinite(a[0] + a[1] + b[0] + b[1])) continue;
+        if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.04) continue;
         positions.push(a[0], 0.03, a[1], b[0], 0.03, b[1]);
+        if (positions.length / 6 >= maxSeg) break;
       }
+      if (positions.length / 6 >= maxSeg) break;
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
@@ -673,21 +772,114 @@ function HallVenuePaths({
         </lineSegments>
       ) : null}
       {labels.map((label, i) => (
-        <Text
-          key={`${label.x}:${label.y}:${i}:${label.text}`}
-          position={[label.x, 0.04, label.y]}
-          rotation={[-Math.PI / 2, 0, label.rotation]}
-          fontSize={Math.max(0.25, label.fontSize)}
+        <VenueFloorLabel
+          key={`${i}:${label.text}`}
+          text={label.text}
+          x={label.x}
+          z={label.y}
+          fontSize={Math.min(5.5, Math.max(0.7, label.fontSize))}
           color={color}
-          anchorX={label.align === "left" ? "left" : label.align === "right" ? "right" : "center"}
-          anchorY="middle"
-          fontWeight={label.weight === "black" ? 900 : label.weight === "bold" ? 700 : 400}
-          lineHeight={0.95}
-          frustumCulled={false}
-        >
-          {label.text}
-        </Text>
+          outline={outline}
+          align={label.align}
+          weight={label.weight}
+          rotation={label.rotation}
+        />
       ))}
+    </group>
+  );
+}
+
+function interFontStack(): string {
+  if (typeof document === "undefined") return "Inter, ui-sans-serif, system-ui, sans-serif";
+  const fromVar = getComputedStyle(document.documentElement).getPropertyValue("--font-sans").trim();
+  const fromBody = getComputedStyle(document.body).fontFamily.trim();
+  const family = fromVar || fromBody || "Inter";
+  return `${family}, Inter, ui-sans-serif, system-ui, sans-serif`;
+}
+
+function interWeight(weight: SvgTextWeight): string {
+  if (weight === "regular") return "400";
+  return "700";
+}
+
+function VenueFloorLabel({
+  text,
+  x,
+  z,
+  fontSize,
+  color,
+  outline,
+  align,
+  weight,
+  rotation,
+}: {
+  text: string;
+  x: number;
+  z: number;
+  fontSize: number;
+  color: string;
+  outline: string;
+  align: "left" | "center" | "right";
+  weight: SvgTextWeight;
+  rotation: number;
+}) {
+  const [fontReady, setFontReady] = useState(false);
+  useEffect(() => {
+    const css = `${interWeight(weight)} 64px ${interFontStack()}`;
+    let cancelled = false;
+    void document.fonts.load(css).finally(() => {
+      if (!cancelled) setFontReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [weight]);
+  const { map, w, h } = useMemo(() => {
+    const lines = text.split("\n");
+    const fs = 64;
+    const padX = 20;
+    const padY = 12;
+    const lineH = fs * 1.05;
+    const stack = interFontStack();
+    const font = `${interWeight(weight)} ${fs}px ${stack}`;
+    const canvas = document.createElement("canvas");
+    const probe = canvas.getContext("2d");
+    if (!probe) return { map: null as THREE.CanvasTexture | null, w: 1, h: 1 };
+    probe.font = font;
+    const textW = Math.max(1, ...lines.map((line) => probe.measureText(line).width));
+    canvas.width = Math.ceil(textW + padX * 2);
+    canvas.height = Math.ceil(lineH * lines.length + padY * 2);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return { map: null as THREE.CanvasTexture | null, w: 1, h: 1 };
+    ctx.font = font;
+    ctx.textAlign = align === "left" ? "left" : align === "right" ? "right" : "center";
+    ctx.textBaseline = "middle";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = outline;
+    ctx.fillStyle = color;
+    const ax = align === "left" ? padX : align === "right" ? canvas.width - padX : canvas.width / 2;
+    lines.forEach((line, i) => {
+      const y = padY + lineH * i + lineH / 2;
+      ctx.strokeText(line, ax, y);
+      ctx.fillText(line, ax, y);
+    });
+    const map = new THREE.CanvasTexture(canvas);
+    map.colorSpace = THREE.SRGBColorSpace;
+    map.needsUpdate = true;
+    const h = fontSize * Math.max(1, lines.length);
+    const w = h * (canvas.width / canvas.height);
+    return { map, w, h };
+  }, [text, fontSize, color, outline, align, weight, fontReady]);
+  useEffect(() => () => map?.dispose(), [map]);
+  if (!map) return null;
+  const ox = align === "left" ? w / 2 : align === "right" ? -w / 2 : 0;
+  return (
+    <group position={[x, 0.14, z]} rotation={[0, -rotation, 0]}>
+      <mesh position={[ox, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={8} frustumCulled={false}>
+        <planeGeometry args={[w, h]} />
+        <meshBasicMaterial map={map} transparent toneMapped={false} depthTest={false} depthWrite={false} />
+      </mesh>
     </group>
   );
 }
@@ -703,8 +895,8 @@ function HallRotateGizmo({
   if (!box) return null;
   const offset = Math.max(1.1, Math.min(box.w, box.h) * 0.18);
   const rh = rotateHandlePos(box, offset);
-  const y = isPinObject(object) ? 1.85 : 3.05;
-  const from = new THREE.Vector3(rh.cx, isPinObject(object) ? 1.35 : 2.55, box.minY);
+  const y = isPinObject(object) ? 0.55 : 3.05;
+  const from = new THREE.Vector3(rh.cx, isPinObject(object) ? 0.12 : 2.55, box.minY);
   const to = new THREE.Vector3(rh.hx, y, rh.hy);
   const mid = from.clone().lerp(to, 0.5);
   const stemLen = Math.max(from.distanceTo(to), 0.2);
@@ -734,20 +926,85 @@ function HallRotateGizmo({
   );
 }
 
+function HallObjectEdgeSizes({
+  ring,
+  facingDeg,
+  units,
+  y,
+  color,
+}: {
+  ring: Ring;
+  facingDeg: number;
+  units: Units;
+  y: number;
+  color: string;
+}) {
+  const local = rotateRing(ring, -facingDeg);
+  const b = ringBounds(local);
+  if (!(b.w > 0.35 && b.h > 0.35)) return null;
+  const { x: cx, y: cy } = ringCentroid(ring);
+  const pad = 0.32;
+  const rad = (facingDeg * Math.PI) / 180;
+  const rot = (x: number, y: number) => {
+    const dx = x - cx;
+    const dy = y - cy;
+    return [cx + dx * Math.cos(rad) - dy * Math.sin(rad), cy + dx * Math.sin(rad) + dy * Math.cos(rad)] as const;
+  };
+  const [wx, wz] = rot((b.minX + b.maxX) / 2, b.maxY + pad);
+  const [hx, hz] = rot(b.maxX + pad, (b.minY + b.maxY) / 2);
+  const halo = color === "#3a3a36" || color === "#6a6a64" ? "#f4f4f1" : "#12110f";
+  const label = (text: string) => (
+    <div
+      style={{
+        fontSize: 9,
+        lineHeight: 1,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontWeight: 600,
+        color,
+        whiteSpace: "nowrap",
+        pointerEvents: "none",
+        textShadow: `0 0 2px ${halo}, 0 0 2px ${halo}, 0 1px 0 ${halo}`,
+      }}
+    >
+      {text}
+    </div>
+  );
+  return (
+    <group>
+      <Html center position={[wx, y, wz]} zIndexRange={[40, 0]} style={{ pointerEvents: "none" }}>
+        {label(formatLength(b.w, units))}
+      </Html>
+      <Html center position={[hx, y, hz]} zIndexRange={[40, 0]} style={{ pointerEvents: "none" }}>
+        {label(formatLength(b.h, units))}
+      </Html>
+    </group>
+  );
+}
+
 function HallPlot({
   object,
   sponsor,
   assets = [],
+  kits = [],
   selected,
   tone = "dark",
   cuboid = false,
+  largePins = false,
+  showSizes = false,
+  units = "m",
+  onPinPointerDown,
 }: {
   object: MapObject;
   sponsor?: Sponsor;
   assets?: LibraryAsset[];
+  kits?: ExhibitKit[];
   selected: boolean;
   tone?: MapTone;
   cuboid?: boolean;
+  largePins?: boolean;
+  showSizes?: boolean;
+  units?: Units;
+  onPinPointerDown?: (e: ReactPointerEvent) => void;
 }) {
   if (isPinObject(object) && object.x != null && object.y != null) {
     return (
@@ -756,65 +1013,104 @@ function HallPlot({
         y={object.y}
         kind={object.kind}
         type={object.amenityType ?? "info"}
-        color={isMapPinObject(object) ? MAP_PIN_META[object.kind].color : undefined}
-        rotation={object.rotation ?? 0}
+        paint={object.paint}
+        color={object.color}
         selected={selected}
+        tone={tone}
+        large={largePins}
+        onPointerDown={onPinPointerDown}
       />
     );
   }
   if (!object.polygon?.length) return null;
   const appearance = resolveAppearance(object);
   const urls = objectUrls(object, assets);
-  const rug = boothFillHex(object.color, sponsor?.tier ?? "", tone);
+  const rug = boothFillHex(object.color, sponsor?.tier ?? "", tone, appearance === "stage" ? "stage" : "booth");
+  const kit = kitByKind(kits, object.kitKind);
+  const wallH = kit?.wallHeightM;
+  const deck = kit?.platformHeightM ?? 0.9;
+  const sizeY = cuboid ? (appearance === "stage" ? wallH ?? 4.75 : wallH ?? 2.65) : appearance === "stage" ? (deck + 0.15) : 0.22;
+  const sizeColor = tone === "light" ? "#3a3a36" : "#c8c8c0";
+  const sizes = showSizes ? (
+    <HallObjectEdgeSizes ring={object.polygon} facingDeg={object.facingDeg ?? 0} units={units} y={sizeY} color={sizeColor} />
+  ) : null;
   if (appearance === "custom" && urls.modelUrl && !cuboid) {
     return (
-      <Suspense
-        fallback={
-          <BoothKit
+      <group>
+        <Suspense
+          fallback={
+            <BoothKit
+              ring={object.polygon}
+              facingDeg={object.facingDeg ?? 0}
+              rugColor={rug}
+              selected={selected}
+            />
+          }
+        >
+          <CustomModel
+            url={urls.modelUrl}
             ring={object.polygon}
             facingDeg={object.facingDeg ?? 0}
             rugColor={rug}
             selected={selected}
           />
-        }
-      >
-        <CustomModel
-          url={urls.modelUrl}
-          ring={object.polygon}
-          facingDeg={object.facingDeg ?? 0}
-          rugColor={rug}
-          selected={selected}
-        />
-      </Suspense>
+        </Suspense>
+        {sizes}
+      </group>
     );
   }
   const fillUrl = urls.fillTextureUrl || undefined;
   const logoUrl = displayLogoUrl(object, assets, sponsor) || undefined;
   if (appearance === "stage") {
     return (
-      <StageKit
-        ring={object.polygon}
-        facingDeg={object.facingDeg ?? 0}
-        color={rug}
-        fillUrl={fillUrl}
-        logoUrl={logoUrl}
-        selected={selected}
-        cuboid={cuboid}
-      />
+      <group>
+        <StageKit
+          ring={object.polygon}
+          facingDeg={object.facingDeg ?? 0}
+          color={rug}
+          fillUrl={fillUrl}
+          logoUrl={logoUrl}
+          selected={selected}
+          cuboid={cuboid}
+          wallHeight={wallH ?? 4.2}
+          platformHeight={deck}
+          kitKind={object.kitKind === "secondary_stage" ? "secondary_stage" : "main_stage"}
+        />
+        {sizes}
+      </group>
+    );
+  }
+  if (appearance === "kiosk") {
+    return (
+      <group>
+        <KioskKit
+          ring={object.polygon}
+          facingDeg={object.facingDeg ?? 0}
+          color={rug}
+          selected={selected}
+          cuboid={cuboid}
+          wallHeight={wallH ?? 2.2}
+        />
+        {sizes}
+      </group>
     );
   }
   return (
-    <BoothKit
-      ring={object.polygon}
-      facingDeg={object.facingDeg ?? 0}
-      rugColor={rug}
-      rugUrl={urls.rugTextureUrl || undefined}
-      fillUrl={fillUrl}
-      wallUrl={urls.wallTextureUrl || undefined}
-      logoUrl={logoUrl}
-      selected={selected}
-      cuboid={cuboid}
-    />
+    <group>
+      <BoothKit
+        ring={object.polygon}
+        facingDeg={object.facingDeg ?? 0}
+        rugColor={rug}
+        rugUrl={urls.rugTextureUrl || undefined}
+        fillUrl={fillUrl}
+        wallUrl={urls.wallTextureUrl || undefined}
+        logoUrl={logoUrl}
+        selected={selected}
+        cuboid={cuboid}
+        wallHeight={wallH ?? 2.5}
+      />
+      {sizes}
+    </group>
   );
 }
 
@@ -823,43 +1119,82 @@ function AmenityTotem({
   y,
   kind = "amenity",
   type = "info",
+  paint,
   color,
-  rotation = 0,
   selected,
   ghost,
+  tone = "dark",
+  large = false,
+  onPointerDown,
 }: {
   x: number;
   y: number;
   kind?: ObjectKind;
   type?: AmenityType;
-  color?: string;
-  rotation?: number;
+  paint?: MapObject["paint"];
+  color?: string | null;
   selected: boolean;
   ghost?: boolean;
+  tone?: MapTone;
+  large?: boolean;
+  onPointerDown?: (e: ReactPointerEvent) => void;
 }) {
-  const fill = color ?? AMENITY_COLOR[type];
-  const h = selected ? 1.45 : 1.2;
+  const look = resolvedIconPaint(paint, color, tone);
   const Icon = pinLucideIcon(kind, type);
+  const fill = look.fillNone ? "none" : look.fillHex;
+  const w = large ? 38 : 28;
+  const h = large ? 52 : 38;
+  const glyph = large ? 19 : 14;
+  const glyphTop = large ? 8 : 6;
   return (
-    <group position={[x, 0, y]} rotation={[0, yawRad(rotation), 0]}>
-      <mesh position={[0, h / 2, 0]} castShadow receiveShadow>
-        <cylinderGeometry args={[0.28, 0.34, h, 10]} />
-        <meshStandardMaterial color={fill} roughness={0.45} transparent={ghost} opacity={ghost ? 0.5 : 1} />
+    <group position={[x, 0, y]}>
+      <mesh position={[0, 0.08, 0]} visible={false}>
+        <sphereGeometry args={[0.22, 8, 8]} />
+        <meshBasicMaterial />
       </mesh>
-      <Html
-        center
-        position={[0, h * 0.62, 0]}
-        distanceFactor={8}
-        style={{ pointerEvents: "none", opacity: ghost ? 0.55 : 1 }}
-      >
-        <Icon size={18} color="#fff" strokeWidth={2.35} aria-hidden />
+      <Html position={[0, 0.02, 0]} zIndexRange={[30, 0]} style={{ pointerEvents: "none" }}>
+        <div
+          onPointerDown={ghost ? undefined : onPointerDown}
+          style={{
+            position: "relative",
+            transform: "translate(-50%, -100%)",
+            pointerEvents: ghost ? "none" : "auto",
+            opacity: ghost ? 0.55 : look.opacity,
+            filter: selected ? "drop-shadow(0 0 3px #f97316)" : "drop-shadow(0 1px 2px rgb(0 0 0 / 0.45))",
+            cursor: onPointerDown ? "pointer" : "default",
+          }}
+        >
+          <svg width={w} height={h} viewBox="0 0 28 38" aria-hidden>
+            <path
+              d="M14 1.4C20.3 1.4 25.2 6.5 25.2 12.8C25.2 20.2 14 36.4 14 36.4C14 36.4 2.8 20.2 2.8 12.8C2.8 6.5 7.7 1.4 14 1.4Z"
+              fill={fill}
+              fillOpacity={look.fillOpacity}
+              stroke={look.strokeNone ? "none" : look.strokeHex}
+              strokeOpacity={look.strokeOpacity}
+              strokeWidth={look.strokeNone ? 0 : 1.5}
+            />
+            {selected ? (
+              <path
+                d="M14 1.4C20.3 1.4 25.2 6.5 25.2 12.8C25.2 20.2 14 36.4 14 36.4C14 36.4 2.8 20.2 2.8 12.8C2.8 6.5 7.7 1.4 14 1.4Z"
+                fill="none"
+                stroke="#fff"
+                strokeWidth={1.15}
+              />
+            ) : null}
+          </svg>
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: glyphTop,
+              transform: "translateX(-50%)",
+              display: "flex",
+            }}
+          >
+            <Icon size={glyph} color={look.glyphHex} strokeWidth={2.4} aria-hidden />
+          </div>
+        </div>
       </Html>
-      {selected ? (
-        <mesh position={[0, 0.04, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.42, 0.52, 20]} />
-          <meshBasicMaterial color="#f97316" />
-        </mesh>
-      ) : null}
     </group>
   );
 }

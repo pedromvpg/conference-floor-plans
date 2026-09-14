@@ -1,15 +1,37 @@
 export type MapTone = "light" | "dark";
 
+export const DEFAULT_BOOTH_HEX: Record<MapTone, string> = {
+  light: "#ecece8",
+  dark: "#e8e8e4",
+};
+
+export const FLOOR_PLATE_HEX = "#ffffff";
+
+export const DEFAULT_STAGE_HEX: Record<MapTone, string> = {
+  light: "#ecece8",
+  dark: "#e8e8e4",
+};
+
 export function tierFill(tier: string): string {
   const hue = tierHue(tier);
-  if (hue == null) return `hsla(24, 94%, var(--map-geom-l), var(--map-geom-a))`;
+  if (hue == null) return `hsla(60, 4%, var(--map-geom-l), var(--map-geom-a))`;
   return `hsla(${hue}, 38%, var(--map-geom-l), var(--map-geom-a))`;
 }
 
-export function boothFillHex(color: string | null, tier: string, tone: MapTone = "dark"): string {
+export function boothFillHex(
+  color: string | null,
+  tier: string,
+  tone: MapTone = "dark",
+  look: "booth" | "stage" | "kiosk" = "booth",
+): string {
   if (color && /^#[0-9a-fA-F]{6}$/.test(color)) return color;
+  if (look === "stage") {
+    const hue = tierHue(tier);
+    if (hue == null) return DEFAULT_STAGE_HEX[tone];
+    return hslToHex(hue, tone === "light" ? 48 : 52, tone === "light" ? 58 : 38);
+  }
   const hue = tierHue(tier);
-  if (hue == null) return tone === "light" ? "#f4a574" : "#f97316";
+  if (hue == null) return DEFAULT_BOOTH_HEX[tone];
   return hslToHex(hue, tone === "light" ? 36 : 42, tone === "light" ? 64 : 42);
 }
 

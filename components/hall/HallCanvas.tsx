@@ -1,5 +1,6 @@
 "use client";
 
+import "@/lib/three-timer-clock";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type RefObject } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
@@ -12,6 +13,7 @@ import { ApplyMeshShadows, HallAO, HallEnvironment, HallPathTrace } from "./Hall
 import type {
   AmenityType,
   Appearance,
+  ExhibitKit,
   Floor,
   LibraryAsset,
   MapObject,
@@ -37,6 +39,8 @@ export type HallCanvasProps = {
   presetMeters?: { w: number; d: number } | null;
   stampAppearance?: Appearance | null;
   stampModelAssetId?: string | null;
+  stampKitKind?: MapObject["kitKind"];
+  kits?: ExhibitKit[];
   onSelect?: (id: string | null) => void;
   onChangeObject?: (obj: MapObject) => void;
   onCreateObject?: (obj: MapObject) => void;
@@ -45,6 +49,7 @@ export type HallCanvasProps = {
   venueNonce?: number;
   showGrid?: boolean;
   showRulers?: boolean;
+  showObjectSizes?: boolean;
   orthographic?: boolean;
   cuboids?: boolean;
   fog?: boolean;
@@ -79,6 +84,8 @@ export function HallCanvas({
   presetMeters = null,
   stampAppearance = null,
   stampModelAssetId = null,
+  stampKitKind = null,
+  kits = [],
   onSelect,
   onChangeObject,
   onCreateObject,
@@ -87,6 +94,7 @@ export function HallCanvas({
   venueNonce = 0,
   showGrid = mode === "edit",
   showRulers = false,
+  showObjectSizes = false,
   orthographic = false,
   cuboids = false,
   fog = DEFAULT_HALL_VIEW.fog,
@@ -239,6 +247,8 @@ export function HallCanvas({
     presetMeters,
     stampAppearance,
     stampModelAssetId,
+    stampKitKind,
+    kits,
     onSelect,
     onChangeObject,
     onCreateObject,
@@ -250,6 +260,7 @@ export function HallCanvas({
     cuboids,
     venueSvg: venueSvg !== undefined ? venueSvg : fetchedSvg,
     showGround: shaded,
+    showObjectSizes,
   };
   const pose = { azimuth, elevation, distance };
   const startPose = isometricPose(extent.cx, extent.cy, Math.max(extent.w, extent.h), pose);

@@ -1,5 +1,6 @@
 "use client";
 
+import "@/lib/three-timer-clock";
 import { Suspense, useEffect, useLayoutEffect, type ReactNode } from "react";
 import * as THREE from "three";
 import { Environment } from "@react-three/drei";
