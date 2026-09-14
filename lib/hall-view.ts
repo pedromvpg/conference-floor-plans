@@ -26,7 +26,7 @@ export const DEFAULT_HALL_VIEW: HallView = {
   shadows: false,
   environment: false,
   pathTracing: false,
-  azimuth: 45,
+  azimuth: -45,
   elevation: 32,
   distance: 1,
   lightAzimuth: 62,

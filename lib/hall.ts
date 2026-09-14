@@ -80,7 +80,7 @@ export function isometricPose(
   pose?: { azimuth?: number; elevation?: number; distance?: number },
 ) {
   const dist = Math.max(16, span * 0.85) * (pose?.distance ?? 1);
-  const az = ((pose?.azimuth ?? 45) * Math.PI) / 180;
+  const az = ((pose?.azimuth ?? -45) * Math.PI) / 180;
   const el = ((pose?.elevation ?? 32) * Math.PI) / 180;
   const horiz = dist * Math.cos(el);
   return {

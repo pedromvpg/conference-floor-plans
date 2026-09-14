@@ -38,7 +38,7 @@ export function KitPreview({ kit }: { kit: ExhibitKit }) {
     <div className="h-48 overflow-hidden rounded-2xl border border-border" style={{ background: hall.bg }}>
       <Canvas
         className="h-full w-full"
-        camera={{ fov: 38, near: 0.1, far: 200, position: [span * 0.95, span * 0.55, span * 1.15] }}
+        camera={{ fov: 38, near: 0.1, far: 200, position: [-span * 1.15, span * 0.55, span * 0.95] }}
       >
         <Aim y={aimY} />
         <color attach="background" args={[hall.bg]} />
