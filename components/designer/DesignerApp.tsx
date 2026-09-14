@@ -1,11 +1,11 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { AlignCenter, AlignLeft, AlignRight, Box, Building2, CalendarDays, ChevronDown, Circle, ImagePlus, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, RefreshCw, SlidersHorizontal, Square, Theater, Type, Undo2 } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Box, Building2, CalendarDays, ChevronDown, Circle, Combine, ImagePlus, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, RefreshCw, SlidersHorizontal, Square, Theater, Type, Undo2 } from "lucide-react";
 import { ObjectMediaFields } from "@/components/designer/ObjectMediaFields";
 import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
 import { VenueLayersEditor } from "@/components/designer/VenueLayersEditor";
@@ -35,20 +35,32 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AMENITIES, amenityLabel } from "@/lib/amenities";
-import { pinLucideIcon } from "@/lib/pin-icons";
-import { STAGE_PRESET_METERS, hallDefaults, resolveAppearance } from "@/lib/appearance";
+import { AMENITIES, amenityLabel, applyIconType, ICON_TYPES, iconTypeOf, type IconType } from "@/lib/amenities";
+import { PaintFields } from "@/components/inspector/PaintFields";
+import { DEFAULT_SHAPE_PAINT, parseShapePaint, type ShapePaint } from "@/lib/paint";
+import { pinLucideIcon, lucideForIconType } from "@/lib/pin-icons";
+import { hallDefaults, resolveAppearance } from "@/lib/appearance";
+import {
+  EXHIBIT_KIT_KINDS,
+  EXHIBIT_KIT_LABELS,
+  isExhibitKitKind,
+  isStageKitKind,
+  kitAppearance,
+  kitByKind,
+} from "@/lib/exhibit-kits";
 import { displayLogoUrl } from "@/lib/hall";
-import { DEFAULT_HALL_VIEW, type HallView } from "@/lib/hall-view";
+import { useMapViewPrefs } from "@/lib/use-map-view-prefs";
 import { DEFAULT_FLOOR_BASEMAP, BASEMAP_COORD_STEP, bearingSliderValue, parseLatLngPaste, roundBasemapCoord, wrapBearingDeg } from "@/lib/basemap";
 import { withInheritedFloorSettings, inheritedSettingsTargetId } from "@/lib/floor-settings";
 import { floorSizeMeters, metersFromPixels, ringBounds, scaleRingToSize } from "@/lib/geometry";
 import { commitShape, objectShape, rotateBezier, translateBezier, type BezierNode } from "@/lib/bezier";
-import { PRESETS, presetMeters as presetSize, formatArea, formatSize, fromMeters, toMeters } from "@/lib/units";
+import { formatArea, formatSize, fromMeters, toMeters } from "@/lib/units";
 import { useUnits } from "@/lib/use-units";
 import type {
   AmenityType,
@@ -95,6 +107,8 @@ import {
   appendPastedSvg,
   clipboardLooksLikeSvg,
   pastedSvgPaths,
+  pathfinderSvgLayers,
+  type PathfinderOp,
 } from "@/lib/svg-layers";
 import { newId, nowIso } from "@/lib/store";
 import {
@@ -190,7 +204,7 @@ function objectArea(o: MapObject): number {
   return b.w * b.h;
 }
 
-const CLIP_PREFIX = "conference-maps-objects:v1:";
+const CLIP_PREFIX = "conference-floor-plans-objects:v1:";
 const PASTE_NUDGE_M = 1;
 
 function isTypingTarget(el: EventTarget | null) {
@@ -202,24 +216,15 @@ function isTypingTarget(el: EventTarget | null) {
   );
 }
 
-function paintToHex(value: string, fallback: string): string {
-  const v = value.trim();
-  if (/^#[0-9a-fA-F]{6}$/.test(v)) return v;
-  if (/^#[0-9a-fA-F]{8}$/.test(v)) return v.slice(0, 7);
-  if (/^#[0-9a-fA-F]{3}$/.test(v)) {
-    return `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`;
-  }
-  const rgb = v.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
-  if (rgb) {
-    const hex = (n: string) => Number(n).toString(16).padStart(2, "0");
-    return `#${hex(rgb[1])}${hex(rgb[2])}${hex(rgb[3])}`;
-  }
-  return fallback;
+function objectInspectorPaint(o: MapObject): ShapePaint {
+  const paint = parseShapePaint(o.paint, DEFAULT_SHAPE_PAINT);
+  return { ...paint, fill: paint.fill ?? o.color };
 }
 
-function paintIsNone(value: string): boolean {
-  const v = value.trim().toLowerCase();
-  return v === "" || v === "none" || v === "transparent";
+function withObjectPaint(o: MapObject, paint: ShapePaint): MapObject {
+  const fill = paint.fill;
+  const color = fill == null || fill === "none" ? null : fill.startsWith("#") ? fill : o.color;
+  return { ...o, paint, color };
 }
 
 function parseCopiedObjects(text: string): MapObject[] | null {
@@ -342,16 +347,55 @@ function sliderRangeStyle(min: number, max: number, value: number): CSSPropertie
   return { "--range": `${pct}%` } as CSSProperties;
 }
 
+function PathfinderGlyph({ op }: { op: PathfinderOp }) {
+  return (
+    <svg viewBox="0 0 16 16" className="size-4 shrink-0" aria-hidden>
+      {op === "unite" ? (
+        <path fill="currentColor" d="M3 3h7v3h3v7H6V10H3V3zm2 2v3h3v3h3V8H8V5H5z" />
+      ) : op === "subtract" ? (
+        <>
+          <path fill="currentColor" opacity="0.35" d="M3 3h7v7H3V3z" />
+          <path fill="currentColor" d="M6 6h7v7H6V6z" />
+        </>
+      ) : op === "intersect" ? (
+        <>
+          <path fill="currentColor" opacity="0.28" d="M3 3h7v7H3V3zm3 3h7v7H6V6z" />
+          <path fill="currentColor" d="M6 6h4v4H6V6z" />
+        </>
+      ) : (
+        <>
+          <path fill="currentColor" d="M3 3h7v3H6v4H3V3zm6 3h4v4H9V6zm-3 3h3v4H3V9z" />
+          <path fill="currentColor" d="M6 6h4v4H6z" opacity="0.2" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
   const [bundle, setBundle] = useState(initial);
-  const [floorId, setFloorId] = useState(initial.floors[0]?.id ?? "");
+  const {
+    viewMode,
+    setViewMode,
+    hallView,
+    patchHallView,
+    hallSettingsOpen,
+    setHallSettingsOpen,
+    showGrid,
+    setShowGrid,
+    showRulers,
+    setShowRulers,
+    showUnderlay,
+    showObjectSizes,
+    setShowObjectSizes,
+    floorId,
+    setFloorId,
+  } = useMapViewPrefs(initial.event.slug, initial.floors[0]?.id ?? "", "plan", initial.floors);
   const [tool, setTool] = useState<Tool>("select");
-  const [viewMode, setViewMode] = useState<ViewMode>("plan");
-  const [hallView, setHallView] = useState<HallView>(DEFAULT_HALL_VIEW);
-  const [hallSettingsOpen, setHallSettingsOpen] = useState(false);
   const [stampAppearance, setStampAppearance] = useState<Appearance | null>(null);
+  const [stampKitKind, setStampKitKind] = useState<MapObject["kitKind"]>(null);
   const [stampModelId, setStampModelId] = useState<string | null>(null);
   const [units, setUnits] = useUnits();
   const [snapToObjects, setSnapToObjects] = useState(true);
@@ -386,9 +430,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [underlayOpacity, setUnderlayOpacity] = useState(1);
-  const [showUnderlay, setShowUnderlay] = useState(true);
-  const [showGrid, setShowGrid] = useState(true);
-  const [showRulers, setShowRulers] = useState(false);
   const [venueSvg, setVenueSvg] = useState<string | null>(null);
   const [hoverLayerId, setHoverLayerId] = useState<string | null>(null);
   const [selectedVenueEl, setSelectedVenueEl] = useState<string | null>(null);
@@ -431,8 +472,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     !venueSelected && selectedIds.length === 1
       ? (objects.find((o) => o.id === selectedIds[0]) ?? null)
       : null;
-  const preset =
-    presetId === "stage" ? STAGE_PRESET_METERS : presetId ? presetSize(presetId) : null;
+  const kits = bundle.kits ?? [];
+  const activeKit = isExhibitKitKind(presetId) ? kitByKind(kits, presetId) : null;
+  const preset = activeKit ? { w: activeKit.widthM, d: activeKit.depthM } : null;
   const listedObjects = useMemo(() => {
     const matches = objects.filter((o) => {
       if (isMapPinObject(o)) return false;
@@ -601,8 +643,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   }, []);
 
   useEffect(() => {
-    const objects = localStorage.getItem("conference-maps-snap-objects");
-    const grid = localStorage.getItem("conference-maps-snap-units");
+    const objects = localStorage.getItem("conference-floor-plans-snap-objects");
+    const grid = localStorage.getItem("conference-floor-plans-snap-units");
     if (objects === "0") setSnapToObjects(false);
     if (objects === "1") setSnapToObjects(true);
     if (grid === "1") setSnapToUnits(true);
@@ -683,7 +725,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     }
   }
 
-  function onBasemapCoordPaste(e: ClipboardEvent<HTMLInputElement>) {
+  function onBasemapCoordPaste(e: ReactClipboardEvent<HTMLInputElement>) {
     const pair = parseLatLngPaste(e.clipboardData.getData("text"));
     if (!pair) return;
     e.preventDefault();
@@ -839,18 +881,27 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
 
   function matchingBoothPresetId(w: number, h: number): string {
     const near = (a: number, b: number) => Math.abs(a - b) < 0.02;
-    for (const p of PRESETS) {
-      const m = presetSize(p.id);
-      if (!m) continue;
-      if ((near(w, m.w) && near(h, m.d)) || (near(w, m.d) && near(h, m.w))) return p.id;
-    }
-    if (
-      (near(w, STAGE_PRESET_METERS.w) && near(h, STAGE_PRESET_METERS.d)) ||
-      (near(w, STAGE_PRESET_METERS.d) && near(h, STAGE_PRESET_METERS.w))
-    ) {
-      return "stage";
+    for (const k of kits) {
+      if ((near(w, k.widthM) && near(h, k.depthM)) || (near(w, k.depthM) && near(h, k.widthM))) return k.kind;
     }
     return "custom";
+  }
+
+  function applyBoothPreset(id: string) {
+    if (!selected?.polygon || id === "custom") return;
+    const k = kitByKind(kits, isExhibitKitKind(id) ? id : null);
+    const size = k ? { w: k.widthM, d: k.depthM } : null;
+    if (!size) return;
+    const polygon = scaleRingToSize(selected.polygon, size.w, size.d);
+    const nb = ringBounds(polygon);
+    setBoothWidth(fmtDim(nb.w, units));
+    setBoothHeight(fmtDim(nb.h, units));
+    void patchObject({
+      ...selected,
+      polygon,
+      kitKind: k?.kind ?? selected.kitKind,
+      appearance: k ? kitAppearance(k.kind) : selected.appearance,
+    });
   }
 
   function applyObjectRotation(nextDeg: number) {
@@ -897,15 +948,21 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     if (!Number.isFinite(minX)) return;
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
+    const rad = (delta * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
     const next = sel.map((o) => {
       if (isPinObject(o) && o.x != null && o.y != null) {
-        const path = rotateBezier(
-          [{ x: o.x, y: o.y, inDx: 0, inDy: 0, outDx: 0, outDy: 0 }],
-          delta,
-          { x: cx, y: cy },
-        )[0];
+        const dx = o.x - cx;
+        const dy = o.y - cy;
         const rot = (o.rotation ?? o.facingDeg ?? 0) + delta;
-        return { ...o, x: path.x, y: path.y, rotation: rot, facingDeg: rot };
+        return {
+          ...o,
+          x: cx + dx * cos - dy * sin,
+          y: cy + dx * sin + dy * cos,
+          rotation: rot,
+          facingDeg: rot,
+        };
       }
       if (!o.polygon) return o;
       const rotated = commitShape(rotateBezier(objectShape(o), delta, { x: cx, y: cy }));
@@ -918,17 +975,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       };
     });
     void patchObjects(next);
-  }
-
-  function applyBoothPreset(id: string) {
-    if (!selected?.polygon || id === "custom") return;
-    const size = id === "stage" ? STAGE_PRESET_METERS : presetSize(id);
-    if (!size) return;
-    const polygon = scaleRingToSize(selected.polygon, size.w, size.d);
-    const nb = ringBounds(polygon);
-    setBoothWidth(fmtDim(nb.w, units));
-    setBoothHeight(fmtDim(nb.h, units));
-    void patchObject({ ...selected, polygon });
   }
 
   const createObjects = useCallback(async (objs: MapObject[]) => {
@@ -990,6 +1036,17 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     }
     setSelectedVenueEl(id);
     setSelectedVenueEls([id]);
+  }
+
+  function applyPathfinder(op: PathfinderOp) {
+    if (!venueSvg) return;
+    const result = pathfinderSvgLayers(venueSvg, selectedVenueEls, op);
+    if (!result.id) {
+      toast.error(result.error ?? "Could not combine shapes");
+      return;
+    }
+    commitVenueSvg(result.markup);
+    selectVenueLayer(result.id);
   }
 
   function commitVenueSvg(next: string) {
@@ -1315,7 +1372,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
           color: null,
           description: "",
           eventDate: "",
-          ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelId }),
+          ...hallDefaults({ appearance: stampAppearance, kitKind: stampKitKind, modelAssetId: stampModelId }),
           createdAt: t,
           updatedAt: t,
         };
@@ -1523,7 +1580,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       <header className="grid h-10 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-sidebar-border bg-sidebar px-1.5">
         <div className="flex min-w-0 items-center gap-1.5">
           <Button size="icon-sm" variant="ghost" asChild>
-            <Link href="/events" aria-label="All events" title="All events">
+            <Link href={`/e/${bundle.event.slug}/studio`} aria-label="Event home" title="Event home">
               <Menu strokeWidth={1.5} />
             </Link>
           </Button>
@@ -1541,12 +1598,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               <DropdownMenuContent align="start" className="min-w-40">
                 {(
                   [
-                    ["Designer", `/e/${bundle.event.slug}/edit`],
-                    ["Assets", `/e/${bundle.event.slug}/assets`],
-                    ["Sponsors", `/e/${bundle.event.slug}/assets/sponsors`],
-                    ["Agenda", `/e/${bundle.event.slug}/assets/agenda`],
-                    ["Library", `/e/${bundle.event.slug}/assets/library`],
+                    ["Event", `/e/${bundle.event.slug}/studio`],
+                    ["Sponsors", `/e/${bundle.event.slug}/sponsors`],
+                    ["Agenda", `/e/${bundle.event.slug}/agenda`],
+                    ["Library", `/e/${bundle.event.slug}/library`],
                     ["Settings", `/e/${bundle.event.slug}/settings`],
+                    ["Designer", `/e/${bundle.event.slug}/edit`],
                   ] as const
                 ).map(([label, href]) => (
                   <DropdownMenuItem key={href} onSelect={() => router.push(href)}>
@@ -1554,26 +1611,13 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   </DropdownMenuItem>
                 ))}
                 <DropdownMenuSeparator />
-                <DropdownMenuLabel>Units</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={units}
-                  onValueChange={(value) => setUnits(value as "m" | "ft")}
-                >
-                  <DropdownMenuRadioItem value="m" onSelect={(e) => e.preventDefault()}>
-                    Metres
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="ft" onSelect={(e) => e.preventDefault()}>
-                    Feet
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-                <DropdownMenuSeparator />
                 <DropdownMenuLabel>Snap</DropdownMenuLabel>
                 <DropdownMenuCheckboxItem
                   checked={snapToObjects}
                   onCheckedChange={(checked) => {
                     const next = checked === true;
                     setSnapToObjects(next);
-                    localStorage.setItem("conference-maps-snap-objects", next ? "1" : "0");
+                    localStorage.setItem("conference-floor-plans-snap-objects", next ? "1" : "0");
                   }}
                   onSelect={(e) => e.preventDefault()}
                 >
@@ -1584,7 +1628,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   onCheckedChange={(checked) => {
                     const next = checked === true;
                     setSnapToUnits(next);
-                    localStorage.setItem("conference-maps-snap-units", next ? "1" : "0");
+                    localStorage.setItem("conference-floor-plans-snap-units", next ? "1" : "0");
                   }}
                   onSelect={(e) => e.preventDefault()}
                 >
@@ -1690,19 +1734,6 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               if (mode === "hall" && (tool === "calibrate" || tool === "label" || tool === "image")) setTool("select");
             }}
           />
-          {floor ? (
-            <>
-              <span className="h-5 w-px bg-border" aria-hidden />
-              <MapExportMenu
-                floor={floor}
-                objects={objects}
-                sponsors={bundle.sponsors}
-                assets={bundle.assets}
-                venueSvg={venueSvg}
-                filename={`${bundle.event.slug}-${floor.name || "floor"}-plan.svg`}
-              />
-            </>
-          ) : null}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
           <div className="group relative">
@@ -1814,35 +1845,52 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className="min-w-52">
-                    <DropdownMenuLabel>Booth presets</DropdownMenuLabel>
-                    {PRESETS.map((p) => (
-                      <DropdownMenuItem
-                        key={p.id}
-                        onClick={() => {
-                          setStampAppearance(null);
-                          setStampModelId(null);
-                          setPresetId(p.id);
-                          setTool("rect");
-                        }}
-                      >
-                        {p.label}
-                      </DropdownMenuItem>
-                    ))}
+                    <DropdownMenuLabel>Booths</DropdownMenuLabel>
+                    {EXHIBIT_KIT_KINDS.filter((kind) => !isStageKitKind(kind)).map((kind) => {
+                      const k = kitByKind(kits, kind);
+                      const size = k ? `${k.widthM} × ${k.depthM} m` : "";
+                      return (
+                        <DropdownMenuItem
+                          key={kind}
+                          onClick={() => {
+                            setStampAppearance(kitAppearance(kind));
+                            setStampKitKind(kind);
+                            setStampModelId(null);
+                            setPresetId(kind);
+                            setTool("rect");
+                          }}
+                        >
+                          {EXHIBIT_KIT_LABELS[kind]}
+                          {size ? <span className="ml-auto font-mono text-[11px] text-muted-foreground">{size}</span> : null}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>Stages</DropdownMenuLabel>
+                    {EXHIBIT_KIT_KINDS.filter((kind) => isStageKitKind(kind)).map((kind) => {
+                      const k = kitByKind(kits, kind);
+                      const size = k ? `${k.widthM} × ${k.depthM} m` : "";
+                      return (
+                        <DropdownMenuItem
+                          key={kind}
+                          onClick={() => {
+                            setStampAppearance(kitAppearance(kind));
+                            setStampKitKind(kind);
+                            setStampModelId(null);
+                            setPresetId(kind);
+                            setTool("rect");
+                          }}
+                        >
+                          {EXHIBIT_KIT_LABELS[kind]}
+                          {size ? <span className="ml-auto font-mono text-[11px] text-muted-foreground">{size}</span> : null}
+                        </DropdownMenuItem>
+                      );
+                    })}
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       onClick={() => {
-                        setStampAppearance("stage");
-                        setStampModelId(null);
-                        setPresetId("stage");
-                        setTool("rect");
-                      }}
-                    >
-                      <Theater />
-                      Stage
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
                         setStampAppearance(null);
+                        setStampKitKind(null);
                         setStampModelId(null);
                         setPresetId("none");
                         setTool("rect");
@@ -1855,6 +1903,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <DropdownMenuItem
                       onClick={() => {
                         setStampAppearance(null);
+                        setStampKitKind(null);
                         setStampModelId(null);
                         setPresetId("none");
                         setTool("ellipse");
@@ -1867,6 +1916,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <DropdownMenuItem
                       onClick={() => {
                         setStampAppearance(null);
+                        setStampKitKind(null);
                         setStampModelId(null);
                         setPresetId("none");
                         setTool("polygon");
@@ -1934,9 +1984,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   <p className="text-[11px] text-primary">
                     {presetId && presetId !== "none"
                       ? `Click the ${viewMode === "hall" ? "hall floor" : "plan"} to place a ${
-                          presetId === "stage"
-                            ? "stage"
-                            : PRESETS.find((p) => p.id === presetId)?.label ?? "booth"
+                          isExhibitKitKind(presetId) ? EXHIBIT_KIT_LABELS[presetId] : "booth"
                         }.`
                       : `Drag on the ${viewMode === "hall" ? "hall floor" : "plan"} to draw a rectangle. Esc cancels.`}
                   </p>
@@ -2284,8 +2332,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         className="chrome-row"
                       >
                         <span
-                          className="flex size-5 shrink-0 items-center justify-center rounded-full text-white"
-                          style={{ background: MAP_PIN_META[o.kind].color }}
+                          className="map-pin-mark flex size-5 shrink-0 items-center justify-center rounded-full"
                         >
                           <PinIcon className="size-3" strokeWidth={2.25} />
                         </span>
@@ -2434,6 +2481,40 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       </TooltipTrigger>
                       <TooltipContent side="bottom">Image</TooltipContent>
                     </Tooltip>
+                    <DropdownMenu>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="icon-sm" variant="outline" aria-label="Pathfinder">
+                              <Combine strokeWidth={1.5} />
+                            </Button>
+                          </DropdownMenuTrigger>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">
+                          {selectedVenueEls.length < 2 ? "Select two shapes" : "Pathfinder"}
+                        </TooltipContent>
+                      </Tooltip>
+                      <DropdownMenuContent align="start" className="min-w-40">
+                        <DropdownMenuLabel>Pathfinder</DropdownMenuLabel>
+                        {(
+                          [
+                            ["unite", "Unite"],
+                            ["subtract", "Subtract"],
+                            ["intersect", "Intersect"],
+                            ["exclude", "Exclude"],
+                          ] as const
+                        ).map(([op, label]) => (
+                          <DropdownMenuItem
+                            key={op}
+                            disabled={selectedVenueEls.length < 2}
+                            onSelect={() => applyPathfinder(op)}
+                          >
+                            <PathfinderGlyph op={op} />
+                            {label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                   <VenueLayersEditor
                     layers={(() => {
@@ -2502,8 +2583,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 presetMeters={presetId && presetId !== "none" ? preset : null}
                 stampAppearance={stampAppearance}
                 stampModelAssetId={stampModelId}
+                stampKitKind={stampKitKind}
+                kits={kits}
                 showGrid={showGrid}
                 showRulers={showRulers}
+                showObjectSizes={showObjectSizes}
                 orthographic={hallView.orthographic}
                 cuboids={hallView.cuboids}
                 fog={hallView.fog}
@@ -2531,6 +2615,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   setTool("select");
                   setPresetId("none");
                   setStampAppearance(null);
+                  setStampKitKind(null);
                   setStampModelId(null);
                 }}
               />
@@ -2553,6 +2638,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 presetMeters={presetId && presetId !== "none" ? preset : null}
                 stampAppearance={stampAppearance}
                 stampModelAssetId={stampModelId}
+                stampKitKind={stampKitKind}
                 constrainProportions={constrainProportions}
                 editLayer={sidebarTab === "venue" ? "venue" : "objects"}
                 canvasInteractive={sidebarTab !== "map"}
@@ -2578,6 +2664,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   setTool("select");
                   setPresetId("none");
                   setStampAppearance(null);
+                  setStampKitKind(null);
                   setStampModelId(null);
                 }}
                 underlayOpacity={underlayOpacity}
@@ -2628,27 +2715,45 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   : "Drag a rectangle on the venue. Hold Space to pan."}
             </div>
           ) : null}
-          {viewMode === "hall" ? (
-            <div className="pointer-events-auto absolute top-4 right-4 z-20">
-              <Button
-                size="icon-sm"
-                variant={hallSettingsOpen ? "secondary" : "ghost"}
-                className="size-8 border border-border bg-background/80 shadow-sm backdrop-blur-md"
-                title="3D view"
-                aria-label="3D view settings"
-                aria-pressed={hallSettingsOpen}
-                onClick={() => setHallSettingsOpen(true)}
-              >
-                <SlidersHorizontal strokeWidth={1.5} />
-              </Button>
-            </div>
-          ) : null}
+          <div className="pointer-events-auto absolute top-4 right-4 z-20">
+            <Button
+              size="icon-sm"
+              variant={hallSettingsOpen ? "secondary" : "ghost"}
+              className="size-8 border border-border bg-background/80 shadow-sm backdrop-blur-md"
+              title="View settings"
+              aria-label="View settings"
+              aria-pressed={hallSettingsOpen}
+              onClick={() => setHallSettingsOpen((open) => !open)}
+            >
+              <SlidersHorizontal strokeWidth={1.5} />
+            </Button>
+          </div>
           </div>
           {hallSettingsOpen ? (
             <HallViewAside
               hallView={hallView}
-              onHallViewChange={(patch) => setHallView((prev) => ({ ...prev, ...patch }))}
+              onHallViewChange={patchHallView}
               onClose={() => setHallSettingsOpen(false)}
+              viewMode={viewMode}
+              units={units}
+              onUnitsChange={setUnits}
+              showObjectSizes={showObjectSizes}
+              onShowObjectSizesChange={setShowObjectSizes}
+              exportSlot={
+                floor ? (
+                  <MapExportMenu
+                    stacked
+                    floor={floor}
+                    objects={objects}
+                    sponsors={bundle.sponsors}
+                    assets={bundle.assets}
+                    venueSvg={venueSvg}
+                    filename={`${bundle.event.slug}-${floor.name || "floor"}-plan.svg`}
+                    viewMode={viewMode}
+                    hallView={hallView}
+                  />
+                ) : null
+              }
             />
           ) : null}
         </main>
@@ -2772,155 +2877,39 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   </div>
                 ) : null}
                 {selectedVenueLayer.kind !== "image" && selectedVenuePaint ? (
-                  <div className="space-y-2">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <Label className="w-12 shrink-0 text-[10px] font-normal text-muted-foreground">Fill</Label>
-                        <input
-                          type="color"
-                          aria-label="Fill color"
-                          value={paintToHex(selectedVenuePaint.fill, "#f4f0e6")}
-                          onChange={(e) =>
-                            commitVenueSvg(
-                              setSvgElementPaint(venueSvg, selectedVenueLayer.id, {
-                                fill: e.target.value,
-                                fillOpacity: selectedVenuePaint.fillOpacity,
-                              }),
-                            )
-                          }
-                          className="size-8 shrink-0 cursor-pointer border border-input bg-background p-0.5"
-                        />
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            commitVenueSvg(setSvgElementPaint(venueSvg, selectedVenueLayer.id, { fill: "none" }))
-                          }
-                        >
-                          None
-                        </Button>
-                      </div>
-                      <div className="flex items-center gap-2 pl-14">
-                        <input
-                          type="range"
-                          min="0"
-                          max="1"
-                          step="0.05"
-                          aria-label="Fill opacity"
-                          disabled={paintIsNone(selectedVenuePaint.fill)}
-                          value={selectedVenuePaint.fillOpacity}
-                          style={sliderRangeStyle(0, 1, selectedVenuePaint.fillOpacity)}
-                          onChange={(e) =>
-                            commitVenueSvg(
-                              setSvgElementPaint(venueSvg, selectedVenueLayer.id, {
-                                fillOpacity: Number(e.target.value),
-                              }),
-                            )
-                          }
-                          className="chrome-slider w-full disabled:opacity-40"
-                        />
-                        <span className="w-8 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
-                          {Math.round(selectedVenuePaint.fillOpacity * 100)}%
-                        </span>
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <Label className="w-12 shrink-0 text-[10px] font-normal text-muted-foreground">Stroke</Label>
-                        <input
-                          type="color"
-                          aria-label="Stroke color"
-                          value={paintToHex(selectedVenuePaint.stroke, "#1a1a1a")}
-                          onChange={(e) =>
-                            commitVenueSvg(
-                              setSvgElementPaint(venueSvg, selectedVenueLayer.id, {
-                                stroke: e.target.value,
-                                strokeOpacity: selectedVenuePaint.strokeOpacity,
-                              }),
-                            )
-                          }
-                          className="size-8 shrink-0 cursor-pointer border border-input bg-background p-0.5"
-                        />
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            commitVenueSvg(setSvgElementPaint(venueSvg, selectedVenueLayer.id, { stroke: "none" }))
-                          }
-                        >
-                          None
-                        </Button>
-                      </div>
-                      <div className="flex items-center gap-2 pl-14">
-                        <input
-                          type="range"
-                          min="0"
-                          max="1"
-                          step="0.05"
-                          aria-label="Stroke opacity"
-                          disabled={paintIsNone(selectedVenuePaint.stroke)}
-                          value={selectedVenuePaint.strokeOpacity}
-                          style={sliderRangeStyle(0, 1, selectedVenuePaint.strokeOpacity)}
-                          onChange={(e) =>
-                            commitVenueSvg(
-                              setSvgElementPaint(venueSvg, selectedVenueLayer.id, {
-                                strokeOpacity: Number(e.target.value),
-                              }),
-                            )
-                          }
-                          className="chrome-slider w-full disabled:opacity-40"
-                        />
-                        <span className="w-8 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
-                          {Math.round(selectedVenuePaint.strokeOpacity * 100)}%
-                        </span>
-                      </div>
-                    </div>
-                    <div>
-                      <Label htmlFor="insp-venue-stroke-w" className="text-[10px] text-muted-foreground">
-                        Stroke thickness
-                      </Label>
-                      <Input
-                        id="insp-venue-stroke-w"
-                        type="number"
-                        min="0"
-                        step="0.5"
-                        value={selectedVenuePaint.strokeWidth}
-                        onChange={(e) => {
-                          const n = Number(e.target.value);
-                          if (!Number.isFinite(n) || n < 0) return;
-                          commitVenueSvg(
-                            setSvgElementPaint(venueSvg, selectedVenueLayer.id, { strokeWidth: n }),
-                          );
-                        }}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-                <div>
-                  <Label htmlFor="insp-venue-opacity" className="text-[10px] text-muted-foreground">
-                    Opacity
-                  </Label>
-                  <div className="mt-1 flex items-center gap-2">
-                    <input
-                      id="insp-venue-opacity"
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.05"
-                      value={selectedVenueLayer.opacity}
-                      style={sliderRangeStyle(0, 1, selectedVenueLayer.opacity)}
-                      onChange={(e) =>
-                        commitVenueSvg(
-                          setSvgElementOpacity(venueSvg, selectedVenueLayer.id, Number(e.target.value)),
-                        )
-                      }
-                      className="chrome-slider w-full"
-                    />
-                    <span className="w-8 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
-                      {Math.round(selectedVenueLayer.opacity * 100)}%
-                    </span>
-                  </div>
-                </div>
+                  <PaintFields
+                    value={{
+                      fill: selectedVenuePaint.fill || "none",
+                      fillOpacity: selectedVenuePaint.fillOpacity,
+                      stroke: selectedVenuePaint.stroke || "none",
+                      strokeOpacity: selectedVenuePaint.strokeOpacity,
+                      strokeWidth: selectedVenuePaint.strokeWidth,
+                      opacity: selectedVenueLayer.opacity,
+                    }}
+                    fillFallback="#f4f0e6"
+                    strokeFallback="#1a1a1a"
+                    defaultStrokeWidth={2}
+                    onChange={(next) => {
+                      const painted = setSvgElementPaint(venueSvg, selectedVenueLayer.id, {
+                        fill: next.fill ?? "none",
+                        fillOpacity: next.fillOpacity,
+                        stroke: next.stroke ?? "none",
+                        strokeOpacity: next.strokeOpacity,
+                        strokeWidth: next.strokeWidth,
+                      });
+                      commitVenueSvg(setSvgElementOpacity(painted, selectedVenueLayer.id, next.opacity));
+                    }}
+                  />
+                ) : (
+                  <PaintFields
+                    value={{ ...DEFAULT_SHAPE_PAINT, opacity: selectedVenueLayer.opacity }}
+                    showChannels={false}
+                    fillFallback="#f4f0e6"
+                    onChange={(next) =>
+                      commitVenueSvg(setSvgElementOpacity(venueSvg, selectedVenueLayer.id, next.opacity))
+                    }
+                  />
+                )}
                 <div>
                   <Label htmlFor="insp-venue-rot" className="text-[10px] text-muted-foreground" title="Drag the top handle to rotate. Shift snaps to 15°.">
                     Rotation
@@ -3045,6 +3034,32 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     placeholder={isMapPinObject(selected) ? MAP_PIN_META[selected.kind].label : "Display name"}
                   />
                 </div>
+                {isPinObject(selected) ? (
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground">Icon</Label>
+                    <Select
+                      value={iconTypeOf(selected)}
+                      onValueChange={(v) => void patchObject(applyIconType(selected, v as IconType))}
+                    >
+                      <SelectTrigger className="mt-1 w-full" size="sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ICON_TYPES.map((t) => {
+                          const Icon = lucideForIconType(t.type);
+                          return (
+                            <SelectItem key={t.type} value={t.type}>
+                              <span className="map-pin-mark flex size-5 shrink-0 items-center justify-center rounded-full">
+                                <Icon className="size-3" strokeWidth={2.25} />
+                              </span>
+                              {t.label}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
                 {isMapPinObject(selected) ? (
                   <>
                     {selected.kind === "side_event" ? (
@@ -3177,12 +3192,30 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="custom">Custom</SelectItem>
-                          {PRESETS.map((p) => (
-                            <SelectItem key={p.id} value={p.id}>
-                              {p.label}
-                            </SelectItem>
-                          ))}
-                          <SelectItem value="stage">Stage (12 × 8 m)</SelectItem>
+                          <SelectGroup>
+                            <SelectLabel>Booths</SelectLabel>
+                            {EXHIBIT_KIT_KINDS.filter((kind) => !isStageKitKind(kind)).map((kind) => {
+                              const k = kitByKind(kits, kind);
+                              return (
+                                <SelectItem key={kind} value={kind}>
+                                  {EXHIBIT_KIT_LABELS[kind]}
+                                  {k ? ` (${k.widthM} × ${k.depthM} m)` : ""}
+                                </SelectItem>
+                              );
+                            })}
+                          </SelectGroup>
+                          <SelectGroup>
+                            <SelectLabel>Stages</SelectLabel>
+                            {EXHIBIT_KIT_KINDS.filter((kind) => isStageKitKind(kind)).map((kind) => {
+                              const k = kitByKind(kits, kind);
+                              return (
+                                <SelectItem key={kind} value={kind}>
+                                  {EXHIBIT_KIT_LABELS[kind]}
+                                  {k ? ` (${k.widthM} × ${k.depthM} m)` : ""}
+                                </SelectItem>
+                              );
+                            })}
+                          </SelectGroup>
                         </SelectContent>
                       </Select>
                     </div>
@@ -3198,28 +3231,24 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   </div>
                 ) : null}
                 {selected.kind === "booth" && selected.polygon ? (
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <Label htmlFor="object-color" className="text-[11px] font-normal text-muted-foreground">
-                      Color
-                    </Label>
-                    <input
-                      id="object-color"
-                      type="color"
-                      value={selected.color && /^#[0-9a-fA-F]{6}$/.test(selected.color) ? selected.color : "#f97316"}
-                      onChange={(e) => void patchObject({ ...selected, color: e.target.value })}
-                      className="size-8 shrink-0 cursor-pointer border border-input bg-background p-0.5"
-                      aria-label="Booth color"
-                    />
-                    {selected.color ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => void patchObject({ ...selected, color: null })}
-                      >
-                        Reset
-                      </Button>
-                    ) : null}
-                  </div>
+                  <PaintFields
+                    value={objectInspectorPaint(selected)}
+                    fillFallback="#ecece8"
+                    strokeFallback="#1a1a1a"
+                    defaultStrokeWidth={0.08}
+                    strokeStep={0.02}
+                    onChange={(next) => void patchObject(withObjectPaint(selected, next))}
+                  />
+                ) : null}
+                {isPinObject(selected) ? (
+                  <PaintFields
+                    value={objectInspectorPaint(selected)}
+                    fillFallback={resolvedTheme === "light" ? "#fcfcfc" : "#0a0a0a"}
+                    strokeFallback={resolvedTheme === "light" ? "#fcfcfc" : "#0a0a0a"}
+                    defaultStrokeWidth={0.12}
+                    strokeStep={0.02}
+                    onChange={(next) => void patchObject(withObjectPaint(selected, next))}
+                  />
                 ) : null}
                 {selected.kind === "booth" && selected.polygon ? (
                   <ObjectMediaFields
@@ -3299,6 +3328,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="booth">Booth</SelectItem>
+                          <SelectItem value="kiosk">Kiosk</SelectItem>
                           <SelectItem value="stage">Stage</SelectItem>
                           <SelectItem value="custom">Custom</SelectItem>
                         </SelectContent>
