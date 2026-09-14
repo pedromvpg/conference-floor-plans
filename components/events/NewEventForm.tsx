@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { eventStudioHref } from "@/lib/studio-nav";
 import { slugify } from "@/lib/store";
 
 export function NewEventForm() {
@@ -29,11 +30,11 @@ export function NewEventForm() {
       setError(data.error || "Could not create");
       return;
     }
-    router.push(`/e/${data.slug}/edit`);
+    router.push(eventStudioHref(data.slug));
   }
 
   return (
-    <form onSubmit={(e) => void onSubmit(e)} className="mx-auto max-w-md space-y-4">
+    <form onSubmit={(e) => void onSubmit(e)} className="max-w-md space-y-4">
       <div>
         <Label htmlFor="name">Event name</Label>
         <Input

@@ -41,13 +41,13 @@ export function LoginForm({ demo }: { demo: boolean }) {
   }
 
   return (
-    <div className="mx-auto w-full max-w-sm space-y-6">
+    <div className="w-full max-w-sm space-y-6">
       {demo ? (
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
             Local demo mode — no Supabase. Production uses invited email magic links.
           </p>
-          <Button className="w-full" size="lg" onClick={() => void demoLogin()} disabled={busy}>
+          <Button className="w-full" variant="inverse" size="lg" onClick={() => void demoLogin()} disabled={busy}>
             Continue as editor
           </Button>
         </div>
@@ -68,7 +68,7 @@ export function LoginForm({ demo }: { demo: boolean }) {
             />
           </div>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <Button className="w-full" size="lg" type="submit" disabled={busy}>
+          <Button className="w-full" variant="inverse" size="lg" type="submit" disabled={busy}>
             Send magic link
           </Button>
         </form>
