@@ -263,7 +263,10 @@ export function HallCanvas({
     showObjectSizes,
   };
   const pose = { azimuth, elevation, distance };
-  const startPose = isometricPose(extent.cx, extent.cy, Math.max(extent.w, extent.h), pose);
+  const startPose = useMemo(
+    () => isometricPose(extent.cx, extent.cy, Math.max(extent.w, extent.h), pose),
+    [extent.cx, extent.cy, extent.w, extent.h, azimuth, elevation, distance],
+  );
   const sun = sunPosition(lightTarget[0], lightTarget[2], lightSpan, {
     azimuth: lightAzimuth,
     elevation: lightElevation,
@@ -557,8 +560,10 @@ function CameraRig({
   const toT = useRef(new THREE.Vector3());
   const fromZoom = useRef(1);
   const toZoom = useRef(1);
+  const framedControls = useRef<ComponentRef<typeof MapControls> | null>(null);
 
   useEffect(() => {
+    if (!nonce) return;
     const c = controlsRef.current;
     if (!c) return;
     fromP.current.copy(c.object.position);
@@ -595,13 +600,28 @@ function CameraRig({
     }
     c.update();
     anim.current = 0;
+    // Snap when the framed region or orbit pose is known. MapControls may recreate
+    // after the first layout pass; useFrame below re-applies if the instance changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pose.azimuth, pose.elevation, pose.distance]);
+  }, [pose.azimuth, pose.elevation, pose.distance, focus.cx, focus.cz, focus.span]);
 
   useFrame((_, dt) => {
-    if (anim.current <= 0) return;
     const c = controlsRef.current;
     if (!c) return;
+    if (framedControls.current !== c) {
+      const next = isometricPose(focus.cx, focus.cz, focus.span, pose);
+      c.object.position.set(...next.position);
+      c.target.set(...next.target);
+      if (orthographic && c.object instanceof THREE.OrthographicCamera) {
+        c.object.zoom = orthoZoomForSpan(focus.span, size.height);
+        c.object.updateProjectionMatrix();
+      }
+      c.update();
+      framedControls.current = c;
+      anim.current = 0;
+      return;
+    }
+    if (anim.current <= 0) return;
     anim.current = Math.max(0, anim.current - dt / 0.45);
     const t = 1 - anim.current;
     const k = t * t * (3 - 2 * t);
