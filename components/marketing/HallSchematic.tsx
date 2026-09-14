@@ -155,8 +155,8 @@ function PlanSchematic({ className }: { className?: string }) {
         ))}
       </g>
       <rect x="214" y="78" width="214" height="236" fill="#111" stroke="#9a9a9a" strokeWidth="1.5" />
-      <Zone x="222" y="86" w="198" h="40" fill="#8b5cf6" />
-      <Zone x="222" y="132" w="78" h="48" fill="#1a1a1a" />
+      <Zone x={222} y={86} w={198} h={40} fill="#8b5cf6" />
+      <Zone x={222} y={132} w={78} h={48} fill="#1a1a1a" />
       <text
         x="261"
         y="154"
@@ -168,43 +168,43 @@ function PlanSchematic({ className }: { className?: string }) {
       >
         CARD EXPO
       </text>
-      <Zone x="338" y="132" w="82" h="44" fill="#3b82f6" label="Press" />
+      <Zone x={338} y={132} w={82} h={44} fill="#3b82f6" label="Press" />
       {booths.map(([x, y, w, h], i) => (
         <rect key={i} x={x} y={y} width={w} height={h} fill="#1c1c1c" stroke="#5a5a5a" strokeWidth="0.6" />
       ))}
       <rect x="248" y="184" width="24" height="18" fill="#166534" />
       <rect x="274" y="184" width="24" height="18" fill="#166534" />
       <rect x="248" y="232" width="40" height="18" fill="#9a3412" />
-      <Zone x="338" y="184" w="82" h="54" fill="#52525b" label="Whale" />
-      <Zone x="232" y="254" w="70" h="40" fill="#2563eb" label="DEAL ZONE" />
-      <Zone x="306" y="254" w="114" h="40" fill="#7c3aed" label="GENESIS STAGE" />
-      <Pin cx="196" cy="128">
+      <Zone x={338} y={184} w={82} h={54} fill="#52525b" label="Whale" />
+      <Zone x={232} y={254} w={70} h={40} fill="#2563eb" label="DEAL ZONE" />
+      <Zone x={306} y={254} w={114} h={40} fill="#7c3aed" label="GENESIS STAGE" />
+      <Pin cx={196} cy={128}>
         <path d="M-3.5 -2.5 h7 v7 h-7 z" />
         <path d="M-1.5 1.5 h3" />
       </Pin>
-      <Pin cx="178" cy="168">
+      <Pin cx={178} cy={168}>
         <path d="M0 -4 v8" />
         <path d="M-2.5 -1.5 l2.5 -2.5 2.5 2.5" />
         <path d="M-2.5 3.5 l2.5 -2.5 2.5 2.5" />
       </Pin>
-      <Pin cx="164" cy="208">
+      <Pin cx={164} cy={208}>
         <path d="M-3.5 3.5 L-3.5 -1 0 -4 3.5 -1 3.5 3.5" />
         <path d="M-1.2 3.5 v-3 h2.4 v3" />
       </Pin>
-      <Pin cx="156" cy="248">
+      <Pin cx={156} cy={248}>
         <circle cx="0" cy="0" r="4" />
         <path d="M0 -1.6 v3.4" />
         <circle cx="0" cy="-2.6" r="0.4" fill="#111" stroke="none" />
       </Pin>
-      <Pin cx="176" cy="286">
+      <Pin cx={176} cy={286}>
         <path d="M-3.5 3 v-4.5 a3.5 3.5 0 0 1 7 0 V3" />
         <path d="M-3.5 3 h7" />
       </Pin>
-      <Pin cx="214" cy="308">
+      <Pin cx={214} cy={308}>
         <path d="M-2.5 2.5 c0 -4 5 -4 5 0" />
         <circle cx="-1" cy="-1.5" r="1.4" />
       </Pin>
-      <Pin cx="438" cy="176">
+      <Pin cx={438} cy={176}>
         <path d="M-4 2 h8 v-2.5 l-2 -3 h-4 l-2 3 z" />
         <path d="M-1.6 2 v2.4 h3.2 V2" />
       </Pin>
