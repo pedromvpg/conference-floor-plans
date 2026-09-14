@@ -1,5 +1,6 @@
 import { hallDefaults } from "./appearance";
 import { amenityLabel } from "./amenities";
+import { DEFAULT_SHAPE_PAINT } from "./paint";
 import { nowIso, newId } from "./store";
 import type { AmenityType, Appearance, BezierNode, MapObject, PinKind, Ring } from "./types";
 import { MAP_PIN_META } from "./types";
@@ -17,6 +18,7 @@ export function newMapObject(input: {
   eventDate?: string;
   amenityType?: AmenityType | null;
   appearance?: Appearance | null;
+  kitKind?: MapObject["kitKind"];
   modelAssetId?: string | null;
 }): MapObject {
   const t = nowIso();
@@ -36,8 +38,10 @@ export function newMapObject(input: {
     sponsorId: null,
     amenityType: input.amenityType ?? null,
     color: null,
+    paint: { ...DEFAULT_SHAPE_PAINT },
     ...hallDefaults({
       appearance: input.appearance ?? null,
+      kitKind: input.kitKind ?? null,
       modelAssetId: input.modelAssetId ?? null,
     }),
     createdAt: t,
