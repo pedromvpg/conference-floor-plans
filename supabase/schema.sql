@@ -48,6 +48,29 @@ create table if not exists public.sponsors (
   unique (event_id, airtable_id)
 );
 
+create table if not exists public.event_exhibit_kits (
+  event_id uuid not null references public.events(id) on delete cascade,
+  kind text not null check (
+    kind in (
+      'extra_large',
+      'large',
+      'medium',
+      'small',
+      'kiosk',
+      'main_stage',
+      'secondary_stage'
+    )
+  ),
+  width_m double precision not null,
+  depth_m double precision not null,
+  wall_height_m double precision not null,
+  platform_height_m double precision,
+  instructions text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (event_id, kind)
+);
+
 create table if not exists public.library_assets (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references public.events(id) on delete cascade,
@@ -95,7 +118,20 @@ create table if not exists public.objects (
   sponsor_id uuid references public.sponsors(id) on delete set null,
   amenity_type text,
   color text,
-  appearance text check (appearance is null or appearance in ('booth', 'stage', 'custom')),
+  paint jsonb,
+  appearance text check (appearance is null or appearance in ('booth', 'stage', 'custom', 'kiosk')),
+  kit_kind text check (
+    kit_kind is null
+    or kit_kind in (
+      'extra_large',
+      'large',
+      'medium',
+      'small',
+      'kiosk',
+      'main_stage',
+      'secondary_stage'
+    )
+  ),
   facing_deg double precision not null default 0,
   model_asset_id uuid references public.library_assets(id) on delete set null,
   rug_texture_asset_id uuid references public.library_assets(id) on delete set null,
@@ -130,6 +166,7 @@ alter table public.objects enable row level security;
 alter table public.publications enable row level security;
 alter table public.draft_versions enable row level security;
 alter table public.library_assets enable row level security;
+alter table public.event_exhibit_kits enable row level security;
 alter table public.sessions enable row level security;
 alter table public.speakers enable row level security;
 
@@ -223,6 +260,21 @@ create policy "editors delete publications"
 
 create policy "editors manage draft versions"
   on public.draft_versions for all
+  using (
+    exists (
+      select 1 from public.allowed_editors e
+      where e.email = lower(auth.jwt() ->> 'email')
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.allowed_editors e
+      where e.email = lower(auth.jwt() ->> 'email')
+    )
+  );
+
+create policy "editors manage event_exhibit_kits"
+  on public.event_exhibit_kits for all
   using (
     exists (
       select 1 from public.allowed_editors e

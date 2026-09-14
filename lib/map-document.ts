@@ -2,6 +2,7 @@ import type {
   AgendaSession,
   AgendaSpeaker,
   Floor,
+  ExhibitKit,
   LibraryAsset,
   MapDocument,
   MapEvent,
@@ -23,6 +24,7 @@ export function buildMapDocument(input: {
   sessions?: AgendaSession[];
   speakers?: AgendaSpeaker[];
   assets?: LibraryAsset[];
+  kits?: ExhibitKit[];
   publishedAt: string;
 }): MapDocument {
   const sponsorById = new Map(input.sponsors.map((s) => [s.id, s]));
@@ -79,6 +81,7 @@ export function buildMapDocument(input: {
       name: s.name,
       photoUrl: s.photoUrl,
     })),
+    kits: input.kits ?? [],
   };
 }
 
@@ -102,8 +105,10 @@ function objectToFeature(
     logoUrl: logo?.url || sponsor?.logoUrl || "",
     amenityType: o.amenityType,
     color: o.color,
+    paint: o.paint ?? null,
     rotation: o.rotation,
     appearance: resolveAppearance(o),
+    kitKind: o.kitKind ?? null,
     facingDeg: o.facingDeg ?? 0,
     modelUrl: model?.url ?? "",
     rugTextureUrl: rug?.url ?? "",

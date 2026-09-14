@@ -5,6 +5,7 @@ import type {
   Calibration,
   DraftBundle,
   DraftSlice,
+  ExhibitKit,
   Floor,
   FloorBasemap,
   LibraryAsset,
@@ -20,6 +21,7 @@ import { parseStoredPolygon, serializePolygon } from "./bezier";
 import { nowIso } from "./store";
 import type { NewEventInput, NewLibraryAsset, Store } from "./store";
 import { normalizeObject } from "./appearance";
+import { defaultExhibitKits, sortExhibitKits, withCurrentKitDefaults } from "./exhibit-kits";
 
 type EventRow = {
   id: string;
@@ -66,7 +68,9 @@ type ObjectRow = {
   sponsor_id: string | null;
   amenity_type: MapObject["amenityType"];
   color: string | null;
+  paint: MapObject["paint"];
   appearance: MapObject["appearance"];
+  kit_kind: MapObject["kitKind"];
   facing_deg: number | null;
   model_asset_id: string | null;
   rug_texture_asset_id: string | null;
@@ -140,7 +144,9 @@ function objectFrom(r: ObjectRow): MapObject {
     sponsorId: r.sponsor_id,
     amenityType: r.amenity_type,
     color: r.color ?? null,
+    paint: r.paint ?? null,
     appearance: r.appearance ?? null,
+    kitKind: r.kit_kind ?? null,
     facingDeg: r.facing_deg ?? 0,
     modelAssetId: r.model_asset_id,
     rugTextureAssetId: r.rug_texture_asset_id,
@@ -231,6 +237,32 @@ function assetFrom(r: AssetRow): LibraryAsset {
   };
 }
 
+type KitRow = {
+  event_id: string;
+  kind: ExhibitKit["kind"];
+  width_m: number;
+  depth_m: number;
+  wall_height_m: number;
+  platform_height_m: number | null;
+  instructions: string;
+  created_at: string;
+  updated_at: string;
+};
+
+function kitFrom(r: KitRow): ExhibitKit {
+  return {
+    eventId: r.event_id,
+    kind: r.kind,
+    widthM: r.width_m,
+    depthM: r.depth_m,
+    wallHeightM: r.wall_height_m,
+    platformHeightM: r.platform_height_m,
+    instructions: r.instructions ?? "",
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
 export class SupabaseStore implements Store {
   constructor(private sb: SupabaseClient) {}
 
@@ -262,7 +294,22 @@ export class SupabaseStore implements Store {
       .select("*")
       .single();
     if (error) throw error;
-    return eventFrom(data as EventRow);
+    const event = eventFrom(data as EventRow);
+    const kits = defaultExhibitKits(event.id, event.slug);
+    await this.sb.from("event_exhibit_kits").insert(
+      kits.map((k) => ({
+        event_id: k.eventId,
+        kind: k.kind,
+        width_m: k.widthM,
+        depth_m: k.depthM,
+        wall_height_m: k.wallHeightM,
+        platform_height_m: k.platformHeightM,
+        instructions: k.instructions,
+        created_at: k.createdAt,
+        updated_at: k.updatedAt,
+      })),
+    );
+    return event;
   }
 
   async updateEvent(id: string, patch: Partial<NewEventInput>) {
@@ -298,8 +345,9 @@ export class SupabaseStore implements Store {
     const sessions = await this.listSessions(event.id);
     const speakers = await this.listSpeakers(event.id);
     const assets = await this.listAssets(event.id);
+    const kits = await this.listKits(event.id);
     const publication = await this.getPublicationBySlug(slug);
-    return { event, floors, objects, sponsors, sessions, speakers, assets, publication };
+    return { event, floors, objects, sponsors, sessions, speakers, assets, kits, publication };
   }
 
   async getFloor(id: string) {
@@ -365,7 +413,9 @@ export class SupabaseStore implements Store {
         sponsor_id: obj.sponsorId,
         amenity_type: obj.amenityType,
         color: obj.color,
+        paint: obj.paint ?? null,
         appearance: obj.appearance,
+        kit_kind: obj.kitKind,
         facing_deg: obj.facingDeg ?? 0,
         model_asset_id: obj.modelAssetId,
         rug_texture_asset_id: obj.rugTextureAssetId,
@@ -504,6 +554,52 @@ export class SupabaseStore implements Store {
     if (error) throw error;
   }
 
+  async listKits(eventId: string) {
+    const { data, error } = await this.sb.from("event_exhibit_kits").select("*").eq("event_id", eventId);
+    if (error) throw error;
+    const rows = (data ?? []) as KitRow[];
+    const event = await this.sb.from("events").select("slug").eq("id", eventId).maybeSingle();
+    const slug = event.data?.slug;
+    if (!rows.length) {
+      const seeded = defaultExhibitKits(eventId, slug);
+      await this.sb.from("event_exhibit_kits").insert(
+        seeded.map((k) => ({
+          event_id: k.eventId,
+          kind: k.kind,
+          width_m: k.widthM,
+          depth_m: k.depthM,
+          wall_height_m: k.wallHeightM,
+          platform_height_m: k.platformHeightM,
+          instructions: k.instructions,
+          created_at: k.createdAt,
+          updated_at: k.updatedAt,
+        })),
+      );
+      return seeded;
+    }
+    return sortExhibitKits(withCurrentKitDefaults(eventId, slug, rows.map(kitFrom)));
+  }
+
+  async upsertKit(kit: ExhibitKit) {
+    const { data, error } = await this.sb
+      .from("event_exhibit_kits")
+      .upsert({
+        event_id: kit.eventId,
+        kind: kit.kind,
+        width_m: kit.widthM,
+        depth_m: kit.depthM,
+        wall_height_m: kit.wallHeightM,
+        platform_height_m: kit.platformHeightM,
+        instructions: kit.instructions,
+        created_at: kit.createdAt,
+        updated_at: nowIso(),
+      })
+      .select("*")
+      .single();
+    if (error) throw error;
+    return kitFrom(data as KitRow);
+  }
+
   async publish(eventId: string, publishedBy: string) {
     const { data: eventRow, error: e1 } = await this.sb.from("events").select("*").eq("id", eventId).single();
     if (e1) throw e1;
@@ -520,6 +616,7 @@ export class SupabaseStore implements Store {
     const sessions = await this.listSessions(eventId);
     const speakers = await this.listSpeakers(eventId);
     const assets = await this.listAssets(eventId);
+    const kits = await this.listKits(eventId);
     const publishedAt = nowIso();
     const snapshot = buildMapDocument({
       event,
@@ -529,6 +626,7 @@ export class SupabaseStore implements Store {
       sessions,
       speakers,
       assets,
+      kits,
       publishedAt,
     });
     await this.sb.from("publications").delete().eq("event_id", eventId);

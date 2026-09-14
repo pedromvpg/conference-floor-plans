@@ -4,6 +4,7 @@ import type {
   DraftBundle,
   DraftSlice,
   DraftVersionMeta,
+  ExhibitKit,
   Floor,
   LibraryAsset,
   LibraryAssetKind,
@@ -57,6 +58,8 @@ export interface Store {
   listAssets(eventId: string): Promise<LibraryAsset[]>;
   createAsset(input: NewLibraryAsset): Promise<LibraryAsset>;
   deleteAsset(id: string): Promise<void>;
+  listKits(eventId: string): Promise<ExhibitKit[]>;
+  upsertKit(kit: ExhibitKit): Promise<ExhibitKit>;
   publish(eventId: string, publishedBy: string): Promise<Publication>;
   getPublicationBySlug(slug: string): Promise<Publication | null>;
   replaceDraft(eventId: string, slice: DraftSlice): Promise<DraftSlice>;

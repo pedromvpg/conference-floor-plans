@@ -1,3 +1,5 @@
+import type { ShapePaint } from "./paint";
+
 export const VENUE_ID = "__venue__";
 
 export type Units = "m" | "ft";
@@ -32,7 +34,28 @@ export const MAP_PIN_META = {
   hotel: { label: "Hotel", color: "#0f766e" },
 } as const;
 
-export type Appearance = "booth" | "stage" | "custom";
+export type Appearance = "booth" | "stage" | "custom" | "kiosk";
+
+export type ExhibitKitKind =
+  | "extra_large"
+  | "large"
+  | "medium"
+  | "small"
+  | "kiosk"
+  | "main_stage"
+  | "secondary_stage";
+
+export type ExhibitKit = {
+  eventId: string;
+  kind: ExhibitKitKind;
+  widthM: number;
+  depthM: number;
+  wallHeightM: number;
+  platformHeightM: number | null;
+  instructions: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type LibraryAssetKind = "texture" | "model";
 
@@ -122,7 +145,9 @@ export type MapObject = {
   sponsorId: string | null;
   amenityType: AmenityType | null;
   color: string | null;
+  paint?: ShapePaint | null;
   appearance: Appearance | null;
+  kitKind: ExhibitKitKind | null;
   facingDeg: number;
   modelAssetId: string | null;
   rugTextureAssetId: string | null;
@@ -196,6 +221,7 @@ export type MapDocument = {
   sponsors: MapDocumentSponsor[];
   sessions?: MapDocumentSession[];
   speakers?: MapDocumentSpeaker[];
+  kits?: ExhibitKit[];
 };
 
 export type MapDocumentFloor = {
@@ -265,6 +291,7 @@ export type DraftBundle = {
   sessions: AgendaSession[];
   speakers: AgendaSpeaker[];
   assets: LibraryAsset[];
+  kits: ExhibitKit[];
   publication: Publication | null;
 };
 

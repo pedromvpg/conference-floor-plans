@@ -13,10 +13,12 @@ import type {
   MapObject,
   Publication,
   Sponsor,
+  ExhibitKit,
 } from "./types";
 import { MAX_DRAFT_VERSIONS, sliceKey } from "./draft-versions";
 import { buildMapDocument } from "./map-document";
 import { hallDefaults, normalizeObject } from "./appearance";
+import { defaultExhibitKits, inferKitKindFromName, kitAppearance, sortExhibitKits, withCurrentKitDefaults } from "./exhibit-kits";
 import { normalizeFloorBasemap } from "./basemap";
 import { newId, nowIso, type NewEventInput, type NewLibraryAsset, type Store } from "./store";
 import zones from "../seed/bhk26-zones.json";
@@ -29,6 +31,7 @@ type Db = {
   sessions?: AgendaSession[];
   speakers?: AgendaSpeaker[];
   assets?: LibraryAsset[];
+  kits?: ExhibitKit[];
   publications: Publication[];
   draftVersions?: DraftVersion[];
   editors: string[];
@@ -96,6 +99,7 @@ async function emptyDb(): Promise<Db> {
     sessions: [],
     speakers: [],
     assets: [],
+    kits: [],
     publications: [],
     draftVersions: [],
     editors: ["demo@local"],
@@ -117,6 +121,12 @@ async function loadDbUnlocked(): Promise<Db> {
   db.sessions ??= [];
   db.speakers ??= [];
   db.assets ??= [];
+  db.kits ??= [];
+  for (const event of db.events) {
+    if (!db.kits.some((k) => k.eventId === event.id)) {
+      db.kits.push(...defaultExhibitKits(event.id, event.slug));
+    }
+  }
   try {
     JSON.parse(raw);
   } catch {
@@ -222,7 +232,13 @@ async function seedBhk26(db: Db): Promise<Db> {
       sponsorId: null,
       amenityType: null,
       color: null,
-      ...hallDefaults(),
+      paint: null,
+      ...hallDefaults({
+        kitKind: inferKitKindFromName(b.name, b.boothNumber || ""),
+        appearance: inferKitKindFromName(b.name, b.boothNumber || "")
+          ? kitAppearance(inferKitKindFromName(b.name, b.boothNumber || "")!)
+          : null,
+      }),
       createdAt: t,
       updatedAt: t,
     })),
@@ -241,6 +257,7 @@ async function seedBhk26(db: Db): Promise<Db> {
       sponsorId: null,
       amenityType: a.amenityType as MapObject["amenityType"],
       color: null,
+      paint: null,
       ...hallDefaults(),
       createdAt: t,
       updatedAt: t,
@@ -249,11 +266,13 @@ async function seedBhk26(db: Db): Promise<Db> {
   db.events.push(event);
   db.floors.push(floor);
   db.objects.push(...objects);
+  db.kits = [...(db.kits ?? []), ...defaultExhibitKits(event.id, event.slug)];
   const snapshot = buildMapDocument({
     event,
     floors: [floor],
     objects,
     sponsors: [],
+    kits: db.kits.filter((k) => k.eventId === event.id),
     publishedAt: t,
   });
   db.publications.push({
@@ -301,6 +320,7 @@ export class DemoStore implements Store {
         updatedAt: t,
       };
       db.events.push(event);
+      db.kits = [...(db.kits ?? []), ...defaultExhibitKits(event.id, event.slug)];
       return event;
     });
   }
@@ -331,6 +351,13 @@ export class DemoStore implements Store {
         sessions: (db.sessions ?? []).filter((s) => s.eventId === event.id),
         speakers: (db.speakers ?? []).filter((s) => s.eventId === event.id),
         assets: (db.assets ?? []).filter((a) => a.eventId === event.id),
+        kits: sortExhibitKits(
+          withCurrentKitDefaults(
+            event.id,
+            event.slug,
+            (db.kits ?? []).filter((k) => k.eventId === event.id),
+          ),
+        ),
         publication: db.publications.filter((p) => p.eventId === event.id).at(-1) ?? null,
       };
     });
@@ -469,6 +496,30 @@ export class DemoStore implements Store {
     });
   }
 
+  async listKits(eventId: string) {
+    return useDb(true, (db) => {
+      db.kits ??= [];
+      const event = db.events.find((e) => e.id === eventId);
+      if (!db.kits.some((k) => k.eventId === eventId)) {
+        db.kits.push(...defaultExhibitKits(eventId, event?.slug));
+      }
+      return sortExhibitKits(
+        withCurrentKitDefaults(eventId, event?.slug, db.kits.filter((k) => k.eventId === eventId)),
+      );
+    });
+  }
+
+  async upsertKit(kit: ExhibitKit) {
+    return useDb(true, (db) => {
+      db.kits ??= [];
+      const next = { ...kit, updatedAt: nowIso() };
+      const i = db.kits.findIndex((k) => k.eventId === kit.eventId && k.kind === kit.kind);
+      if (i >= 0) db.kits[i] = next;
+      else db.kits.push(next);
+      return next;
+    });
+  }
+
   async deleteAsset(id: string) {
     await useDb(true, (db) => {
       db.assets = (db.assets ?? []).filter((a) => a.id !== id);
@@ -494,6 +545,7 @@ export class DemoStore implements Store {
       const sessions = (db.sessions ?? []).filter((s) => s.eventId === eventId);
       const speakers = (db.speakers ?? []).filter((s) => s.eventId === eventId);
       const assets = (db.assets ?? []).filter((a) => a.eventId === eventId);
+      const kits = sortExhibitKits((db.kits ?? []).filter((k) => k.eventId === eventId));
       const publishedAt = nowIso();
       const snapshot = buildMapDocument({
         event,
@@ -503,6 +555,7 @@ export class DemoStore implements Store {
         sessions,
         speakers,
         assets,
+        kits,
         publishedAt,
       });
       const pub: Publication = {

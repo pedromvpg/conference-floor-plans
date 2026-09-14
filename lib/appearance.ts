@@ -1,4 +1,6 @@
-import type { Appearance, MapObject } from "./types";
+import { DEFAULT_SHAPE_PAINT, parseShapePaint } from "./paint";
+import { inferKitKindFromName, isExhibitKitKind, kitAppearance } from "./exhibit-kits";
+import type { Appearance, ExhibitKitKind, MapObject } from "./types";
 import { tessellate } from "./bezier";
 
 export function isStageObject(o: { name: string; boothNumber: string }): boolean {
@@ -11,6 +13,7 @@ export function isBoothObject(o: MapObject): boolean {
 
 export function resolveAppearance(o: MapObject): Appearance {
   if (o.appearance) return o.appearance;
+  if (o.kitKind) return kitAppearance(o.kitKind);
   return isStageObject(o) ? "stage" : "booth";
 }
 
@@ -19,6 +22,7 @@ export function hallDefaults(
     Pick<
       MapObject,
       | "appearance"
+      | "kitKind"
       | "facingDeg"
       | "modelAssetId"
       | "rugTextureAssetId"
@@ -30,6 +34,7 @@ export function hallDefaults(
 ) {
   return {
     appearance: partial?.appearance ?? null,
+    kitKind: partial?.kitKind ?? null,
     facingDeg: partial?.facingDeg ?? 0,
     modelAssetId: partial?.modelAssetId ?? null,
     rugTextureAssetId: partial?.rugTextureAssetId ?? null,
@@ -46,6 +51,7 @@ export function normalizeObject(o: MapObject): MapObject {
     path,
     polygon: path ? tessellate(path, true) : o.polygon,
     appearance: o.appearance ?? null,
+    kitKind: resolveKitKind(o),
     facingDeg: o.facingDeg ?? 0,
     modelAssetId: o.modelAssetId ?? null,
     rugTextureAssetId: o.rugTextureAssetId ?? null,
@@ -54,7 +60,13 @@ export function normalizeObject(o: MapObject): MapObject {
     fillTextureAssetId: o.fillTextureAssetId ?? null,
     description: o.description ?? "",
     eventDate: o.eventDate ?? "",
+    paint: parseShapePaint(o.paint, DEFAULT_SHAPE_PAINT),
   };
 }
 
-export const STAGE_PRESET_METERS = { w: 12, d: 8 };
+export const STAGE_PRESET_METERS = { w: 18, d: 12 };
+
+export function resolveKitKind(o: Pick<MapObject, "kitKind" | "name" | "boothNumber">): ExhibitKitKind | null {
+  if (isExhibitKitKind(o.kitKind)) return o.kitKind;
+  return inferKitKindFromName(o.name, o.boothNumber);
+}
