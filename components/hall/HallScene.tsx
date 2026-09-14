@@ -31,7 +31,7 @@ import type {
   Calibration,
 } from "@/lib/types";
 import { isPinObject, isMapPinObject } from "@/lib/types";
-import type { ViewCenter } from "@/lib/view-center";
+import { spanToFitBounds, type ViewCenter } from "@/lib/view-center";
 import { BoothKit } from "./BoothKit";
 import { CustomModel } from "./CustomModel";
 import { HallRulers } from "./HallRulers";
@@ -118,24 +118,20 @@ export function hallExtent(floor: Floor, objects: MapObject[]): HallExtent {
   const plots = plotsExtent(objects);
   if (floor.calibration) {
     const v = venueWorldRect(floor.calibration);
-    if (plots && (v.w > plots.w * 3.5 || v.h > plots.h * 3.5)) {
-      const pad = Math.max(plots.w, plots.h, 12) * 0.35;
-      const minX = plots.minX - pad;
-      const minY = plots.minY - pad;
-      const maxX = plots.maxX + pad;
-      const maxY = plots.maxY + pad;
-      return {
-        minX,
-        minY,
-        maxX,
-        maxY,
-        w: maxX - minX,
-        h: maxY - minY,
-        cx: plots.cx,
-        cy: plots.cy,
-      };
-    }
-    return { ...v, cx: (v.minX + v.maxX) / 2, cy: (v.minY + v.maxY) / 2 };
+    const minX = plots ? Math.min(v.minX, plots.minX) : v.minX;
+    const minY = plots ? Math.min(v.minY, plots.minY) : v.minY;
+    const maxX = plots ? Math.max(v.maxX, plots.maxX) : v.maxX;
+    const maxY = plots ? Math.max(v.maxY, plots.maxY) : v.maxY;
+    return {
+      minX,
+      minY,
+      maxX,
+      maxY,
+      w: maxX - minX,
+      h: maxY - minY,
+      cx: (minX + maxX) / 2,
+      cy: (minY + maxY) / 2,
+    };
   }
   return (
     plots ?? {
@@ -174,9 +170,9 @@ export function hallFocus(
     }
   }
   if (viewCenter) {
-    return { cx: viewCenter.x, cz: viewCenter.y, span: Math.max(extent.w, extent.h, 20) };
+    return { cx: viewCenter.x, cz: viewCenter.y, span: spanToFitBounds(extent, viewCenter) };
   }
-  return { cx: extent.cx, cz: extent.cy, span: Math.max(extent.w, extent.h, 20) };
+  return { cx: extent.cx, cz: extent.cy, span: spanToFitBounds(extent, null) };
 }
 
 function hitToWorld(point: THREE.Vector3, grid: number) {

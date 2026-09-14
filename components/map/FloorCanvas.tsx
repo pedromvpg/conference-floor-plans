@@ -744,7 +744,7 @@ export function FloorCanvas({
     const apply = () => {
       const svg = svgRef.current;
       const aspect = svg && svg.clientHeight > 0 ? svg.clientWidth / svg.clientHeight : 1;
-      setCam(camToFrame(frameAroundViewCenter(venueDrawingBounds(floor.calibration) ?? sceneBounds(floor.calibration, objects), floor.viewCenter), aspect));
+      setCam(camToFrame(frameAroundViewCenter(sceneBounds(floor.calibration, objects), floor.viewCenter), aspect));
     };
     apply();
     const svg = svgRef.current;
