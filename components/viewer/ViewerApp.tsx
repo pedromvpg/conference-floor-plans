@@ -215,6 +215,7 @@ function floorFromDoc(f: MapDocument["floors"][number], eventId: string): Floor 
       heightPx: f.underlay.heightPx,
     },
     basemap: f.basemap ?? null,
+    viewCenter: f.viewCenter ?? null,
     createdAt: "",
     updatedAt: "",
   };

@@ -56,6 +56,7 @@ export function buildMapDocument(input: {
           rotationDeg: cal?.rotationDeg ?? 0,
         },
         basemap: normalizeFloorBasemap(floor.basemap),
+        viewCenter: floor.viewCenter ?? null,
         features: { type: "FeatureCollection", features },
       };
     }),

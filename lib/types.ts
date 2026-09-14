@@ -61,7 +61,7 @@ export type LibraryAssetKind = "texture" | "model";
 
 export type ViewMode = "plan" | "hall";
 
-export type Tool = "select" | "rect" | "ellipse" | "polygon" | "icon" | "calibrate" | "label" | "image";
+export type Tool = "select" | "rect" | "ellipse" | "polygon" | "icon" | "calibrate" | "label" | "image" | "viewCenter";
 
 export type Ring = [number, number][];
 
@@ -124,6 +124,8 @@ export type Floor = {
   originalUrl: string | null;
   calibration: Calibration | null;
   basemap: FloorBasemap | null;
+  /** World-metre point the 2D/3D camera looks at on load. Null uses drawing/plots. */
+  viewCenter: { x: number; y: number } | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -240,6 +242,7 @@ export type MapDocumentFloor = {
   };
   /** Present when an OSM background was enabled at publish time. */
   basemap?: FloorBasemap | null;
+  viewCenter?: { x: number; y: number } | null;
   features: MapGeo.FeatureCollection;
 };
 

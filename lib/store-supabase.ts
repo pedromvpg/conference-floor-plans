@@ -21,6 +21,7 @@ import { parseStoredPolygon, serializePolygon } from "./bezier";
 import { nowIso } from "./store";
 import type { NewEventInput, NewLibraryAsset, Store } from "./store";
 import { normalizeObject } from "./appearance";
+import { normalizeViewCenter } from "./view-center";
 import { defaultExhibitKits, sortExhibitKits, withCurrentKitDefaults } from "./exhibit-kits";
 
 type EventRow = {
@@ -48,6 +49,7 @@ type FloorRow = {
   underlay_url: string | null;
   original_url: string | null;
   calibration: Calibration | null;
+  view_center: { x: number; y: number } | null;
   basemap: FloorBasemap | null;
   created_at: string;
   updated_at: string;
@@ -121,6 +123,7 @@ function floorFrom(r: FloorRow): Floor {
     originalUrl: r.original_url,
     calibration: r.calibration,
     basemap: normalizeFloorBasemap(r.basemap),
+    viewCenter: normalizeViewCenter(r.view_center),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -385,6 +388,7 @@ export class SupabaseStore implements Store {
     if (patch.originalUrl !== undefined) row.original_url = patch.originalUrl;
     if (patch.calibration !== undefined) row.calibration = patch.calibration;
     if (patch.basemap !== undefined) row.basemap = patch.basemap;
+    if (patch.viewCenter !== undefined) row.view_center = patch.viewCenter;
     const { data, error } = await this.sb.from("floors").update(row).eq("id", id).select("*").single();
     if (error) throw error;
     return floorFrom(data as FloorRow);
@@ -692,6 +696,7 @@ export class SupabaseStore implements Store {
           original_url: floor.originalUrl,
           calibration: floor.calibration,
           basemap: floor.basemap,
+          view_center: floor.viewCenter,
           created_at: floor.createdAt,
           updated_at: nowIso(),
         });

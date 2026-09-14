@@ -12,6 +12,7 @@ export function sliceKey(slice: DraftSlice): string {
       originalUrl: f.originalUrl,
       calibration: f.calibration,
       basemap: f.basemap,
+      viewCenter: f.viewCenter,
     })),
     objects: slice.objects.map((o) => ({
       id: o.id,

@@ -213,6 +213,7 @@ async function seedBhk26(db: Db): Promise<Db> {
       heightPx: zones.heightPx,
     },
     basemap: null,
+    viewCenter: null,
     createdAt: t,
     updatedAt: t,
   };
@@ -386,6 +387,7 @@ export class DemoStore implements Store {
         originalUrl: null,
         calibration: null,
         basemap: null,
+        viewCenter: null,
         createdAt: t,
         updatedAt: t,
       };
