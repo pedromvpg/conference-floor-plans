@@ -2,6 +2,7 @@
 
 import { Suspense } from "react";
 import { chairLodDistance } from "@/lib/exhibit-kits";
+import { stageSeatPlan } from "@/lib/stage-seating";
 import type { ExhibitKitKind } from "@/lib/types";
 import { facingObb, yawRad } from "@/lib/hall";
 import type { Ring } from "@/lib/types";
@@ -34,12 +35,11 @@ export function StageKit({
   const obb = facingObb(ring, facingDeg);
   const wallH = selected ? wallHeight + 0.4 : wallHeight;
   const deck = Math.max(0.85, platformHeight);
-  const isMain = kitKind !== "secondary_stage";
-  const platformD = isMain
-    ? Math.max(3.8, Math.min(6.8, obb.d * 0.5))
-    : Math.max(1.6, Math.min(3.2, obb.d * 0.36));
-  const aisle = isMain ? 2.2 : 1.2;
-  const rugD = Math.max(2.8, obb.d - platformD);
+  const { platformD, aisle, rugD, seatW, rugW, seatDepth, banks, platformW, wallW } = stageSeatPlan(
+    kitKind,
+    obb.w,
+    obb.d,
+  );
   const platformZ = obb.backZ + platformD / 2;
   const rugZ = obb.backZ + platformD + rugD / 2;
   const seatStartZ = obb.backZ + platformD + aisle;
@@ -57,29 +57,30 @@ export function StageKit({
   return (
     <group position={[obb.cx, 0, obb.cy]} rotation={[0, yawRad(facingDeg), 0]}>
       <mesh position={[0, deck / 2, platformZ]} castShadow receiveShadow>
-        <boxGeometry args={[obb.w, deck, platformD]} />
+          <boxGeometry args={[platformW, deck, platformD]} />
         <meshStandardMaterial color={color} roughness={0.62} />
       </mesh>
       <mesh position={[0, 0.03, rugZ]} receiveShadow>
-        <boxGeometry args={[obb.w * 0.98, 0.06, rugD]} />
+        <boxGeometry args={[rugW, 0.06, rugD]} />
         <meshStandardMaterial color={color} roughness={0.92} />
       </mesh>
       <mesh position={[obb.backX, deck + wallH / 2, obb.backZ + 0.09]} castShadow receiveShadow>
-        <boxGeometry args={[Math.max(0.6, obb.w - 0.08), wallH, 0.16]} />
+        <boxGeometry args={[Math.max(0.6, wallW - 0.08), wallH, 0.16]} />
         <meshStandardMaterial color={color} roughness={0.65} />
       </mesh>
       {logoUrl && obb.w >= 2 ? (
         <Suspense fallback={null}>
-          <LogoDecal url={logoUrl} width={Math.min(3.2, obb.w * 0.45)} z={obb.backZ + 0.2} y={deck + wallH * 0.55} />
+          <LogoDecal url={logoUrl} width={Math.min(3.2, wallW * 0.45)} z={obb.backZ + 0.2} y={deck + wallH * 0.55} />
         </Suspense>
       ) : null}
       <StageSeating
-        width={obb.w * 0.9}
+        width={seatW}
         startZ={seatStartZ}
-        depth={Math.max(2.2, rugD - aisle - 0.25)}
+        depth={seatDepth}
         lodDistance={chairLodDistance(kitKind)}
         color={color}
         enabled
+        banks={banks}
       />
       <FrontChevron depth={obb.d} selected={selected} />
     </group>
