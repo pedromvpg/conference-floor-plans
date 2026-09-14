@@ -84,13 +84,13 @@ set
 from public.events e,
   (
     values
-      ('kiosk', 2::double precision, 2::double precision, 2.2::double precision, null::double precision, 'Portal kiosk scale (~0.9 of the XR lintel model). Open front, slim posts.'),
-      ('small', 3, 3, 2.5, null, 'S-BOOTH zone from Bitcoin Asia XR.'),
-      ('medium', 3, 6, 2.8, null, 'M-BOOTH zone: 3 × 6 m, wall 2.8 m.'),
-      ('large', 6, 6, 2.8, null, 'L-BOOTH zone from Bitcoin Asia XR.'),
-      ('extra_large', 9.1, 8.9, 3.5, null, 'XL BOOTH zone 9.1 × 8.9 m, wall 3.5 m.'),
-      ('main_stage', 18, 8.5, 4.5, 0.9, 'XR main stage: 18 × 0.9 × 8.5 m purple platform; five LED panels (12 / 4 / 8 m × 4.5 m); truss; chairs LOD at 30 m.'),
-      ('secondary_stage', 14, 5, 3.5, 0.75, 'Genesis stage: 14 × 0.75 × 5 m orange platform, emissive LED wall, seats facing stage, LOD at 20 m.')
+      ('kiosk', 2::double precision, 2::double precision, 2.2::double precision, null::double precision, ''),
+      ('small', 3, 3, 2.5, null, ''),
+      ('medium', 6, 3, 2.8, null, ''),
+      ('large', 6, 6, 2.8, null, ''),
+      ('extra_large', 10, 8, 3.5, null, ''),
+      ('main_stage', 18, 8.5, 4.5, 0.9, ''),
+      ('secondary_stage', 14, 5, 3.5, 0.75, '')
   ) as v(kind, width_m, depth_m, wall_height_m, platform_height_m, instructions)
 where k.event_id = e.id
   and e.slug = 'bhk26'

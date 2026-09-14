@@ -44,47 +44,21 @@ export const DEFAULT_EXHIBIT_KITS: Record<
   medium: { widthM: 6, depthM: 3, wallHeightM: 2.5, platformHeightM: null },
   large: { widthM: 6, depthM: 6, wallHeightM: 2.5, platformHeightM: null },
   extra_large: { widthM: 9, depthM: 9, wallHeightM: 3.5, platformHeightM: null },
-  main_stage: { widthM: 18, depthM: 12, wallHeightM: 5, platformHeightM: 1.1 },
-  secondary_stage: { widthM: 8, depthM: 5, wallHeightM: 3.5, platformHeightM: 0.8 },
+  main_stage: { widthM: 18, depthM: 24, wallHeightM: 5, platformHeightM: 1.1 },
+  secondary_stage: { widthM: 12, depthM: 13, wallHeightM: 3.5, platformHeightM: 0.8 },
 };
 
 const BHK26_KITS: Record<
   ExhibitKitKind,
   { widthM: number; depthM: number; wallHeightM: number; platformHeightM: number | null; instructions: string }
 > = {
-  kiosk: {
-    widthM: 2,
-    depthM: 2,
-    wallHeightM: 2.2,
-    platformHeightM: null,
-    instructions: "Standing cabinet on a 2 × 2 m pad, 2.2 m tall.",
-  },
-  small: { widthM: 3, depthM: 3, wallHeightM: 2.5, platformHeightM: null, instructions: "S-BOOTH zone from Bitcoin Asia XR." },
-  medium: { widthM: 3, depthM: 6, wallHeightM: 2.8, platformHeightM: null, instructions: "M-BOOTH zone: 3 × 6 m, wall 2.8 m." },
-  large: { widthM: 6, depthM: 6, wallHeightM: 2.8, platformHeightM: null, instructions: "L-BOOTH zone from Bitcoin Asia XR." },
-  extra_large: {
-    widthM: 9.1,
-    depthM: 8.9,
-    wallHeightM: 3.5,
-    platformHeightM: null,
-    instructions: "XL BOOTH zone 9.1 × 8.9 m, wall 3.5 m.",
-  },
-  main_stage: {
-    widthM: 22,
-    depthM: 12,
-    wallHeightM: 5,
-    platformHeightM: 1.1,
-    instructions:
-      "Main stage: 22 × 12 m, 1.1 m platform, 5 m wall; aisle in front of the deck; chairs LOD at 30 m.",
-  },
-  secondary_stage: {
-    widthM: 14,
-    depthM: 5,
-    wallHeightM: 3.5,
-    platformHeightM: 0.75,
-    instructions:
-      "Genesis stage: 14 × 0.75 × 5 m orange platform, emissive LED wall, seats facing stage, LOD at 20 m.",
-  },
+  kiosk: { widthM: 2, depthM: 2, wallHeightM: 2.2, platformHeightM: null, instructions: "" },
+  small: { widthM: 3, depthM: 3, wallHeightM: 2.5, platformHeightM: null, instructions: "" },
+  medium: { widthM: 6, depthM: 3, wallHeightM: 2.8, platformHeightM: null, instructions: "" },
+  large: { widthM: 6, depthM: 6, wallHeightM: 2.8, platformHeightM: null, instructions: "" },
+  extra_large: { widthM: 10, depthM: 8, wallHeightM: 3.5, platformHeightM: null, instructions: "" },
+  main_stage: { widthM: 22, depthM: 24, wallHeightM: 5, platformHeightM: 1.1, instructions: "" },
+  secondary_stage: { widthM: 16, depthM: 13, wallHeightM: 3.5, platformHeightM: 0.75, instructions: "" },
 };
 
 export function defaultExhibitKits(eventId: string, slug?: string): ExhibitKit[] {
@@ -112,7 +86,7 @@ export function withCurrentKitDefaults(eventId: string, slug: string | undefined
   const byKind = new Map(kits.map((k) => [k.kind, k]));
   return fresh.map((d) => {
     const old = byKind.get(d.kind);
-    return old ? { ...old, widthM: d.widthM, depthM: d.depthM, wallHeightM: d.wallHeightM, platformHeightM: d.platformHeightM, instructions: d.instructions } : d;
+    return old ? { ...old, widthM: d.widthM, depthM: d.depthM, wallHeightM: d.wallHeightM, platformHeightM: d.platformHeightM } : d;
   });
 }
 
@@ -140,7 +114,7 @@ export function inferKitKindFromName(name: string, boothNumber = ""): ExhibitKit
 }
 
 export function chairLodDistance(kind: ExhibitKitKind | null | undefined): number {
-  return kind === "secondary_stage" ? 20 : 30;
+  return kind === "secondary_stage" ? 42 : 62;
 }
 
 export function appendKitInstruction(existing: string, note: string): string {
