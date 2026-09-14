@@ -1,7 +1,8 @@
-import { AMENITY_COLOR, amenityLabel } from "./amenities";
+import { amenityLabel } from "./amenities";
 import { pinIconSvgMarkup } from "./pin-icons";
 import { objectShape, rectangleCorners, svgPathD } from "./bezier";
 import { boothFillHex, darkenHex } from "./colors";
+import { resolvedIconPaint } from "./paint";
 import { ringBounds, ringCentroid, rotateRing, venueWorldRect } from "./geometry";
 import { displayLogoUrl } from "./hall";
 import {
@@ -14,9 +15,21 @@ import {
 import type { Floor, LibraryAsset, MapObject, Sponsor } from "./types";
 import { isMapPinObject, isPinObject, MAP_PIN_META } from "./types";
 
-const SCALE = 100;
 const NS = "http://www.w3.org/2000/svg";
 const INK = "http://www.inkscape.org/namespaces/inkscape";
+
+/** 1 SVG unit ≈ 1px in Figma ≈ 1mm on paper. 1:10 → 100 u/m; 1:100 → 10 u/m. */
+const UNITS_PER_M_1_TO_10 = 100;
+const UNITS_PER_M_1_TO_100 = 10;
+const FIGMA_MAX_EDGE = 2500;
+
+export function mapExportScale(worldW: number, worldH: number): { denom: 10 | 100; unitsPerMeter: number } {
+  const long = Math.max(worldW, worldH, 1);
+  if (long * UNITS_PER_M_1_TO_10 <= FIGMA_MAX_EDGE) {
+    return { denom: 10, unitsPerMeter: UNITS_PER_M_1_TO_10 };
+  }
+  return { denom: 100, unitsPerMeter: UNITS_PER_M_1_TO_100 };
+}
 
 function xmlEscape(value: string): string {
   return value
@@ -189,7 +202,6 @@ export type FloorPlanExportInput = {
 export function buildFloorPlanSvg(input: FloorPlanExportInput): string {
   const { floor, objects, sponsors, assets = [], venueSvg, name } = input;
   const used = new Set<string>();
-  const S = SCALE;
   const bySponsor = new Map(sponsors.map((s) => [s.id, s]));
   const cal = floor.calibration;
   const venue = cal ? venueWorldRect(cal) : null;
@@ -231,6 +243,9 @@ export function buildFloorPlanSvg(input: FloorPlanExportInput): string {
   maxX += pad;
   maxY += pad;
 
+  const { denom, unitsPerMeter: S } = mapExportScale(maxX - minX, maxY - minY);
+  const sw = Math.max(0.4, 1.5 * (S / 100));
+
   const parts: string[] = [];
   const venueRoot = venueSvg ? prepareVenueRoot(venueSvg) : null;
   const vb = venueSvg ? svgViewBox(venueSvg) : null;
@@ -260,13 +275,13 @@ export function buildFloorPlanSvg(input: FloorPlanExportInput): string {
       const sponsor = o.sponsorId ? bySponsor.get(o.sponsorId) : undefined;
       const title = objectTitle(o, sponsor);
       const oid = layerId(title, o.id.slice(0, 8), used);
-      const fill = boothFillHex(o.color, sponsor?.tier ?? "", "light");
+      const fill = boothFillHex(o.color, sponsor?.tier ?? "", "light", label === "Stages" ? "stage" : "booth");
       const stroke = darkenHex(fill, 0.45);
       const b = ringBounds(o.polygon!);
       const c = ringCentroid(o.polygon!);
       const rectOpen = boothRectMarkup(o, S);
       const shape = rectOpen
-        ? `${rectOpen} fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`
+        ? `${rectOpen} fill="${fill}" stroke="${stroke}" stroke-width="${num(sw)}"/>`
         : `<path d="${svgPathD(
             objectShape(o).map((n) => ({
               ...n,
@@ -278,10 +293,10 @@ export function buildFloorPlanSvg(input: FloorPlanExportInput): string {
               outDy: n.outDy * S,
             })),
             true,
-          )}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+          )}" fill="${fill}" stroke="${stroke}" stroke-width="${num(sw)}"/>`;
       const nameLabel = (sponsor?.name || o.name || "").trim();
       const boothLabel = (o.boothNumber || sponsor?.boothNumber || "").trim();
-      const fs = Math.max(8, Math.min(b.w, b.h) * S * 0.16);
+      const fs = Math.max(S * 0.08, Math.min(b.w, b.h) * S * 0.16);
       const texts: string[] = [];
       if (nameLabel) {
         texts.push(
@@ -307,14 +322,15 @@ export function buildFloorPlanSvg(input: FloorPlanExportInput): string {
   if (pins.length) {
     const gid = layerId("Icons", "icons", used);
     const kids = pins.map((o) => {
-      const color = isMapPinObject(o)
-        ? MAP_PIN_META[o.kind].color
-        : AMENITY_COLOR[o.amenityType ?? "info"];
+      const look = resolvedIconPaint(o.paint, o.color, "light");
       const title = objectTitle(o);
       const oid = layerId(title, o.id.slice(0, 8), used);
       const r = 0.55 * S;
-      const glyph = pinIconSvgMarkup(o.kind, o.amenityType, o.x! * S, o.y! * S, r * 1.35);
-      return `<g id="${oid}" inkscape:label="${xmlEscape(title)}"><circle cx="${num(o.x! * S)}" cy="${num(o.y! * S)}" r="${num(r)}" fill="${color}" stroke="#ffffff" stroke-width="2"/>${glyph}</g>`;
+      const glyph = pinIconSvgMarkup(o.kind, o.amenityType, o.x! * S, o.y! * S, r * 1.35, look.glyphHex);
+      const fill = look.fillNone ? "none" : look.fillHex;
+      const stroke = look.strokeNone ? "none" : look.strokeHex;
+      const sw = look.strokeNone ? 0 : Math.max(look.strokeWidth, 0) * S;
+      return `<g id="${oid}" inkscape:label="${xmlEscape(title)}" opacity="${num(look.opacity)}"><circle cx="${num(o.x! * S)}" cy="${num(o.y! * S)}" r="${num(r)}" fill="${fill}" fill-opacity="${num(look.fillOpacity)}" stroke="${stroke}" stroke-opacity="${num(look.strokeOpacity)}" stroke-width="${num(sw)}"/>${glyph}</g>`;
     });
     parts.push(`<g id="${gid}" inkscape:groupmode="layer" inkscape:label="Icons">${kids.join("")}</g>`);
   }
@@ -323,8 +339,8 @@ export function buildFloorPlanSvg(input: FloorPlanExportInput): string {
   const h = (maxY - minY) * S;
   const title = xmlEscape(name || floor.name || "Floor plan");
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="${NS}" xmlns:inkscape="${INK}" viewBox="${num(minX * S)} ${num(minY * S)} ${num(w)} ${num(h)}" width="${num(w)}" height="${num(h)}" fill="none">
-  <title>${title}</title>
+<svg xmlns="${NS}" xmlns:inkscape="${INK}" viewBox="${num(minX * S)} ${num(minY * S)} ${num(w)} ${num(h)}" width="${num(w)}" height="${num(h)}" fill="none" data-map-scale="1:${denom}" data-meters-per-unit="${num(1 / S)}">
+  <title>${title} (1:${denom})</title>
   ${parts.join("\n  ")}
 </svg>`;
 }
@@ -339,6 +355,20 @@ export function downloadSvgFile(svg: string, filename: string) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/** SVG 1.1 + XML header — Illustrator opens this reliably via File → Open / Place. */
+export function svgForIllustrator(svg: string): string {
+  let out = svg.trim();
+  if (!out.startsWith("<?xml")) out = `<?xml version="1.0" encoding="UTF-8"?>\n${out}`;
+  out = out.replace(/<svg\b([^>]*)>/, (_, attrs: string) => {
+    let a = attrs;
+    if (!/\bxmlns:xlink=/.test(a)) a += ` xmlns:xlink="http://www.w3.org/1999/xlink"`;
+    if (!/\bversion=/.test(a)) a += ` version="1.1"`;
+    if (!/\bxml:space=/.test(a)) a += ` xml:space="preserve"`;
+    return `<svg${a}>`;
+  });
+  return out;
 }
 
 export async function copySvgForFigma(svg: string): Promise<void> {
@@ -368,6 +398,29 @@ export async function copySvgForFigma(svg: string): Promise<void> {
     return;
   } catch {
     await navigator.clipboard.writeText(svg);
+  }
+}
+
+/** Plain SVG XML only — HTML clipboard (used for Figma) pastes as junk in Illustrator. */
+export async function copySvgForIllustrator(svg: string): Promise<void> {
+  const ai = svgForIllustrator(svg);
+  const plain = new Blob([ai], { type: "text/plain" });
+  const svgBlob = new Blob([ai], { type: "image/svg+xml" });
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "image/svg+xml": svgBlob,
+        "text/plain": plain,
+      }),
+    ]);
+    return;
+  } catch {
+    /* browsers often reject image/svg+xml */
+  }
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ "text/plain": plain })]);
+  } catch {
+    await navigator.clipboard.writeText(ai);
   }
 }
 
