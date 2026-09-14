@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
-import { AlignCenter, AlignLeft, AlignRight, Box, Building2, CalendarDays, ChevronDown, Circle, Combine, ImagePlus, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, RefreshCw, SlidersHorizontal, Square, Theater, Type, Undo2 } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Box, Building2, CalendarDays, ChevronDown, Circle, Combine, Crosshair, ImagePlus, LayoutGrid, MapPin, Maximize2, Menu, Pentagon, Plus, Redo2, RefreshCw, SlidersHorizontal, Square, Theater, Type, Undo2 } from "lucide-react";
 import { ObjectMediaFields } from "@/components/designer/ObjectMediaFields";
 import { SponsorCombobox } from "@/components/designer/SponsorCombobox";
 import { VenueLayersEditor } from "@/components/designer/VenueLayersEditor";
@@ -61,7 +61,7 @@ import { withInheritedFloorSettings, inheritedSettingsTargetId } from "@/lib/flo
 import { shouldSkipVenueSvgFetch, skipAfterVenueSvgPersist, type VenueSvgFetchSkip } from "@/lib/venue-svg-load";
 import { floorSizeMeters, metersFromPixels, ringBounds, scaleRingToSize } from "@/lib/geometry";
 import { commitShape, objectShape, rotateBezier, translateBezier, type BezierNode } from "@/lib/bezier";
-import { formatArea, formatSize, fromMeters, toMeters } from "@/lib/units";
+import { formatArea, formatLength, formatSize, fromMeters, toMeters } from "@/lib/units";
 import { useUnits } from "@/lib/use-units";
 import type {
   AmenityType,
@@ -755,6 +755,29 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       void persistSlice({ floors: nextFloors, objects }).catch(() => toast.error("Could not save map"));
     } else {
       basemapSaveTimer.current = setTimeout(save, 280);
+    }
+  }
+
+  const viewCenterSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function patchViewCenter(next: { x: number; y: number } | null, immediate = false) {
+    if (!floorRecord) return;
+    const targetId = floorRecord.id;
+    const nextFloors = bundleRef.current.floors.map((f) => (f.id === targetId ? { ...f, viewCenter: next } : f));
+    const objects = bundleRef.current.objects;
+    bundleRef.current = { ...bundleRef.current, floors: nextFloors };
+    setBundle((b) => ({ ...b, floors: nextFloors }));
+    if (viewCenterSaveTimer.current) clearTimeout(viewCenterSaveTimer.current);
+    const save = () => {
+      viewCenterSaveTimer.current = null;
+      void persistSlice({ floors: bundleRef.current.floors, objects: bundleRef.current.objects }).catch(() =>
+        toast.error("Could not save view center"),
+      );
+    };
+    if (immediate) {
+      void persistSlice({ floors: nextFloors, objects }).catch(() => toast.error("Could not save view center"));
+    } else {
+      viewCenterSaveTimer.current = setTimeout(save, 280);
     }
   }
 
@@ -1830,13 +1853,13 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     selectVenueLayer(null);
                     if (selectedId === VENUE_ID) setSelectedIds([]);
                     if (id === "map") {
-                      if (tool === "calibrate" || tool === "rect" || tool === "ellipse" || tool === "polygon" || tool === "label" || tool === "image") setTool("select");
+                      if (tool === "calibrate" || tool === "rect" || tool === "ellipse" || tool === "polygon" || tool === "label" || tool === "image" || tool === "viewCenter") setTool("select");
                       if (tool === "icon" && pinKind === "amenity") setTool("select");
                     } else if (id === "furniture") {
-                      if (tool === "calibrate" || tool === "rect" || tool === "ellipse" || tool === "polygon" || tool === "label" || tool === "image") setTool("select");
+                      if (tool === "calibrate" || tool === "rect" || tool === "ellipse" || tool === "polygon" || tool === "label" || tool === "image" || tool === "viewCenter") setTool("select");
                       if (tool === "icon") setTool("select");
                     } else {
-                      if (tool === "calibrate") setTool("select");
+                      if (tool === "calibrate" || tool === "viewCenter") setTool("select");
                       if (tool === "icon" && pinKind !== "amenity") setTool("select");
                     }
                   }
@@ -2442,6 +2465,52 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   </div>
                 ) : null}
 
+                <div className="space-y-2">
+                  <Label className="chrome-kicker">View center</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Where 2D and 3D look on load. Click the drawing to place it.
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    <Button
+                      size="sm"
+                      variant={tool === "viewCenter" ? "default" : "outline"}
+                      onClick={() => {
+                        if (viewMode !== "plan") {
+                          setFrameNonce(0);
+                          setVenueNonce((n) => n + 1);
+                          setViewMode("plan");
+                        }
+                        setTool(tool === "viewCenter" ? "select" : "viewCenter");
+                      }}
+                    >
+                      <Crosshair strokeWidth={1.5} />
+                      {tool === "viewCenter" ? "Click the plan" : "Set on plan"}
+                    </Button>
+                    {floor?.viewCenter ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          patchViewCenter(null, true);
+                          if (tool === "viewCenter") setTool("select");
+                        }}
+                      >
+                        Clear
+                      </Button>
+                    ) : null}
+                  </div>
+                  {floor?.viewCenter ? (
+                    <p className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {formatLength(floor.viewCenter.x, units, 1)}, {formatLength(floor.viewCenter.y, units, 1)}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">Using the drawing bounds until you set a point.</p>
+                  )}
+                  {tool === "viewCenter" ? (
+                    <p className="text-[11px] text-primary">Click the plan to set the load center. Esc cancels.</p>
+                  ) : null}
+                </div>
+
                 <div>
                   <Label className="chrome-kicker">Drawing layers</Label>
                   <input
@@ -2658,6 +2727,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   setStampKitKind(null);
                   setStampModelId(null);
                 }}
+                onSetViewCenter={(center) => {
+                  patchViewCenter(center, true);
+                  setTool("select");
+                }}
               />
             ) : (
               <FloorCanvas
@@ -2732,6 +2805,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 onToolChange={setTool}
                 deleteSelectedVertexRef={deleteSelectedVertexRef}
                 onSelectedVertexChange={setHasSelectedVertex}
+                onSetViewCenter={(center) => {
+                  patchViewCenter(center, true);
+                  setTool("select");
+                }}
               />
             )
           ) : (
