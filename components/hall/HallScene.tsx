@@ -31,6 +31,7 @@ import type {
   Calibration,
 } from "@/lib/types";
 import { isPinObject, isMapPinObject } from "@/lib/types";
+import type { ViewCenter } from "@/lib/view-center";
 import { BoothKit } from "./BoothKit";
 import { CustomModel } from "./CustomModel";
 import { HallRulers } from "./HallRulers";
@@ -66,6 +67,7 @@ export type HallSceneProps = {
   venueSvg?: string | null;
   showGround?: boolean;
   showObjectSizes?: boolean;
+  onSetViewCenter?: (center: { x: number; y: number }) => void;
 };
 
 export type HallExtent = {
@@ -153,6 +155,7 @@ export function hallFocus(
   objects: MapObject[],
   id: string | null,
   extent: HallExtent,
+  viewCenter?: ViewCenter | null,
 ): { cx: number; cz: number; span: number } {
   if (id) {
     const o = objects.find((x) => x.id === id);
@@ -169,6 +172,9 @@ export function hallFocus(
         return { cx: o.x, cz: o.y, span: 12 };
       }
     }
+  }
+  if (viewCenter) {
+    return { cx: viewCenter.x, cz: viewCenter.y, span: Math.max(extent.w, extent.h, 20) };
   }
   return { cx: extent.cx, cz: extent.cy, span: Math.max(extent.w, extent.h, 20) };
 }
@@ -218,6 +224,7 @@ export function HallScene({
   venueSvg = null,
   showGround = false,
   showObjectSizes = false,
+  onSetViewCenter,
 }: HallSceneProps) {
   const hall = HALL_THEME[tone];
   const canEdit = mode === "edit";
@@ -269,6 +276,10 @@ export function HallScene({
 
   function stampAt(x: number, y: number, ring?: Ring) {
     if (!canEdit) return;
+    if (tool === "viewCenter") {
+      onSetViewCenter?.({ x, y });
+      return;
+    }
     if (tool === "icon") {
       onCreateRef.current?.(
         stampPinObject({
@@ -443,7 +454,7 @@ export function HallScene({
     }
     e.stopPropagation();
     if (tool === "polygon") return;
-    if (tool === "icon" || presetMeters) {
+    if (tool === "viewCenter" || tool === "icon" || presetMeters) {
       stampAt(p.x, p.y);
       return;
     }
@@ -515,7 +526,18 @@ export function HallScene({
         <planeGeometry args={[Math.max(extent.w, 24) * 1.6, Math.max(extent.h, 24) * 1.6]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
-      {showGround ? <HallShadowFloor tone={tone} cx={extent.cx} cz={extent.cy} span={Math.max(extent.w, extent.h, 24)} /> : null}
+      {canEdit && floor.viewCenter ? (
+        <group position={[floor.viewCenter.x, 0.04, floor.viewCenter.y]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} userData={{ shadowMode: "none" }}>
+            <ringGeometry args={[0.55, 0.78, 32]} />
+            <meshBasicMaterial color="#f97316" depthWrite={false} />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} userData={{ shadowMode: "none" }}>
+            <circleGeometry args={[0.16, 20]} />
+            <meshBasicMaterial color="#f97316" depthWrite={false} />
+          </mesh>
+        </group>
+      ) : null}
       {floor.calibration && venueSvg ? (
         <HallVenuePaths
           markup={venueSvg}

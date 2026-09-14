@@ -67,6 +67,7 @@ export type HallCanvasProps = {
   lightIntensity?: number;
   fill?: number;
   venueSvg?: string | null;
+  onSetViewCenter?: (center: { x: number; y: number }) => void;
 };
 
 export function HallCanvas({
@@ -112,6 +113,7 @@ export function HallCanvas({
   lightIntensity = DEFAULT_HALL_VIEW.lightIntensity,
   fill = DEFAULT_HALL_VIEW.fill,
   venueSvg,
+  onSetViewCenter,
 }: HallCanvasProps) {
   const { resolvedTheme } = useTheme();
   const tone: MapTone = resolvedTheme === "light" ? "light" : "dark";
@@ -191,9 +193,22 @@ export function HallCanvas({
   }, [mode, selectedId]);
 
   const focus = useMemo(
-    () => hallFocus(objects, focusId, extent),
-    [objects, focusId, extent],
+    () => hallFocus(objects, focusId, extent, floor.viewCenter),
+    [objects, focusId, extent, floor.viewCenter],
   );
+
+  const viewCenterKey = floor.viewCenter ? `${floor.viewCenter.x},${floor.viewCenter.y}` : "";
+  const seenViewCenter = useRef<string | null>(null);
+  useEffect(() => {
+    if (seenViewCenter.current === null) {
+      seenViewCenter.current = viewCenterKey;
+      return;
+    }
+    if (seenViewCenter.current === viewCenterKey) return;
+    seenViewCenter.current = viewCenterKey;
+    setFocusId(null);
+    setCamNonce((n) => n + 1);
+  }, [viewCenterKey]);
 
   useEffect(() => {
     if (mode === "view") return;
@@ -261,6 +276,7 @@ export function HallCanvas({
     venueSvg: venueSvg !== undefined ? venueSvg : fetchedSvg,
     showGround: shaded,
     showObjectSizes,
+    onSetViewCenter,
   };
   const pose = { azimuth, elevation, distance };
   const startPose = useMemo(

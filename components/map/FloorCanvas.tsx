@@ -17,6 +17,7 @@ import type {
   Units,
 } from "@/lib/types";
 import { isPinObject, isMapPinObject, VENUE_ID } from "@/lib/types";
+import { frameAroundViewCenter } from "@/lib/view-center";
 import { PlanStage } from "@/components/map/PlanStage";
 import { leafletViewFromPlan, floorDeltaToEnu, offsetLatLng, roundBasemapCoord } from "@/lib/basemap";
 import {
@@ -164,6 +165,7 @@ type Props = {
   deleteSelectedVertexRef?: { current: (() => boolean) | null };
   onSelectedVertexChange?: (has: boolean) => void;
   showUnderlay?: boolean;
+  onSetViewCenter?: (center: { x: number; y: number }) => void;
 };
 
 type Cam = { x: number; y: number; w: number; h: number };
@@ -597,6 +599,7 @@ export function FloorCanvas({
   deleteSelectedVertexRef,
   onSelectedVertexChange,
   showUnderlay = true,
+  onSetViewCenter,
 }: Props) {
   const { resolvedTheme } = useTheme();
   const mapTone = resolvedTheme === "light" ? "light" : "dark";
@@ -741,7 +744,7 @@ export function FloorCanvas({
     const apply = () => {
       const svg = svgRef.current;
       const aspect = svg && svg.clientHeight > 0 ? svg.clientWidth / svg.clientHeight : 1;
-      setCam(camToFrame(venueDrawingBounds(floor.calibration) ?? sceneBounds(floor.calibration, objects), aspect));
+      setCam(camToFrame(frameAroundViewCenter(venueDrawingBounds(floor.calibration) ?? sceneBounds(floor.calibration, objects), floor.viewCenter), aspect));
     };
     apply();
     const svg = svgRef.current;
@@ -1437,6 +1440,12 @@ export function FloorCanvas({
     }
 
     const placingPin = tool === "icon";
+    if (tool === "viewCenter" && e.button === 0 && !spaceHeld.current) {
+      const p = snapPoint(w.x, w.y, null);
+      setGuides({ gx: p.gx, gy: p.gy });
+      onSetViewCenter?.({ x: p.x, y: p.y });
+      return;
+    }
     if (canEditObjects && e.button === 0 && !spaceHeld.current) {
       const ppmPin = svgUserToScreen(svgRef.current, cam.w, cam.h);
       const hrV = screenPx(HANDLE_HALF_PX, ppmPin);
@@ -2860,7 +2869,7 @@ export function FloorCanvas({
       className={`h-full w-full touch-none select-none ${osmOn ? "bg-transparent" : "bg-[var(--map-bg)]"} ${
         !canvasInteractive && !basemapInteractive ? "pointer-events-none" : ""
       } ${
-        tool === "calibrate" || tool === "icon" || tool === "label" || tool === "image" || tool === "ellipse"
+        tool === "calibrate" || tool === "icon" || tool === "label" || tool === "image" || tool === "ellipse" || tool === "viewCenter"
           ? "cursor-crosshair"
           : spacePan || basemapInteractive
             ? "cursor-grab"
@@ -3451,6 +3460,34 @@ export function FloorCanvas({
             );
           })()
         : null}
+      {mode === "edit" && floor.viewCenter ? (
+        <g pointerEvents="none" aria-hidden>
+          <circle
+            cx={floor.viewCenter.x}
+            cy={floor.viewCenter.y}
+            r={screenPx(9, pxPerMeterScreen)}
+            fill="none"
+            stroke="#f97316"
+            strokeWidth={screenPx(2, pxPerMeterScreen)}
+          />
+          <line
+            x1={floor.viewCenter.x - screenPx(14, pxPerMeterScreen)}
+            y1={floor.viewCenter.y}
+            x2={floor.viewCenter.x + screenPx(14, pxPerMeterScreen)}
+            y2={floor.viewCenter.y}
+            stroke="#f97316"
+            strokeWidth={screenPx(2, pxPerMeterScreen)}
+          />
+          <line
+            x1={floor.viewCenter.x}
+            y1={floor.viewCenter.y - screenPx(14, pxPerMeterScreen)}
+            x2={floor.viewCenter.x}
+            y2={floor.viewCenter.y + screenPx(14, pxPerMeterScreen)}
+            stroke="#f97316"
+            strokeWidth={screenPx(2, pxPerMeterScreen)}
+          />
+        </g>
+      ) : null}
     </svg>
     {showRulers ? (
       <MapRulers
