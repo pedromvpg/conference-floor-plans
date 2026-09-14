@@ -6,8 +6,7 @@ import { ChevronDown, ChevronLeft, LayoutGrid, MapPin, Search, SlidersHorizontal
 import { FloorCanvas } from "@/components/map/FloorCanvas";
 import { MapExportMenu } from "@/components/map/MapExportMenu";
 import { FloorSwitcher, HALL_VIEW_ASIDE_W, HallViewAside, ViewModeToggle } from "@/components/map/ViewModeToggle";
-import { DEFAULT_HALL_VIEW, type HallView } from "@/lib/hall-view";
-import { UnitsToggle } from "@/components/units-toggle";
+import { useMapViewPrefs } from "@/lib/use-map-view-prefs";
 import {
   Dialog,
   DialogContent,
@@ -38,9 +37,10 @@ import { amenityLabel } from "@/lib/amenities";
 import { ringBounds } from "@/lib/geometry";
 import { displayLogoUrl } from "@/lib/hall";
 import { formatSize } from "@/lib/units";
+import { isExhibitKitKind, inferKitKindFromName } from "@/lib/exhibit-kits";
 import { useUnits } from "@/lib/use-units";
 import { isMapPinObject, MAP_PIN_META } from "@/lib/types";
-import type { Appearance, Floor, MapDocument, MapObject, Sponsor, ViewMode } from "@/lib/types";
+import type { Appearance, Floor, MapDocument, MapObject, Sponsor } from "@/lib/types";
 
 const HallCanvas = dynamic(() => import("@/components/hall/HallCanvas"), {
   ssr: false,
@@ -119,6 +119,9 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
     const sponsor = airtableId ? byAir.get(airtableId) : undefined;
     const hall = {
       appearance: (p.appearance as Appearance) ?? null,
+      kitKind: isExhibitKitKind(String(p.kitKind ?? ""))
+        ? (p.kitKind as MapObject["kitKind"])
+        : inferKitKindFromName(String(p.name ?? ""), String(p.boothNumber ?? "")),
       facingDeg: Number(p.facingDeg ?? 0),
       modelAssetId: null as string | null,
       rugTextureAssetId: null as string | null,
@@ -149,6 +152,7 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
         sponsorId: null,
         amenityType: kind === "amenity" ? ((p.amenityType as MapObject["amenityType"]) ?? "info") : null,
         color: typeof p.color === "string" ? p.color : null,
+        paint: p.paint && typeof p.paint === "object" ? (p.paint as MapObject["paint"]) : null,
         ...hall,
         createdAt: "",
         updatedAt: "",
@@ -170,6 +174,7 @@ function objectsFromDoc(doc: MapDocument, floorId: string): { objects: MapObject
       sponsorId: sponsor?.id ?? null,
       amenityType: null,
       color: typeof p.color === "string" ? p.color : null,
+      paint: p.paint && typeof p.paint === "object" ? (p.paint as MapObject["paint"]) : null,
       ...hall,
       createdAt: "",
       updatedAt: "",
@@ -283,7 +288,23 @@ export function ViewerApp({
   highlightBooth?: string;
   highlightAirtable?: string;
 }) {
-  const [floorId, setFloorId] = useState(doc.floors[0]?.id ?? "");
+  const {
+    viewMode,
+    setViewMode,
+    hallView,
+    patchHallView,
+    hallSettingsOpen,
+    setHallSettingsOpen,
+    showObjectSizes,
+    setShowObjectSizes,
+    floorId,
+    setFloorId,
+  } = useMapViewPrefs(
+    doc.event.slug,
+    doc.floors[0]?.id ?? "",
+    "desktop-hall",
+    doc.floors,
+  );
   const [query, setQuery] = useState("");
   const [tier, setTier] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -295,13 +316,9 @@ export function ViewerApp({
   const [objectFilter, setObjectFilter] = useState<ObjectFilter>("all");
   const [objectSort, setObjectSort] = useState<ObjectSort>("name");
   const [objectSortDir, setObjectSortDir] = useState<SortDir>("asc");
-  const [viewMode, setViewMode] = useState<ViewMode>("plan");
-  const [hallView, setHallView] = useState<HallView>(DEFAULT_HALL_VIEW);
-  const [hallSettingsOpen, setHallSettingsOpen] = useState(false);
 
   useEffect(() => {
-    if (window.matchMedia("(min-width: 768px)").matches) setViewMode("hall");
-    else setSidebarOpen(false);
+    if (!window.matchMedia("(min-width: 768px)").matches) setSidebarOpen(false);
   }, []);
 
   const floorDocRaw = doc.floors.find((f) => f.id === floorId) ?? doc.floors[0];
@@ -548,11 +565,13 @@ export function ViewerApp({
               floor={floor}
               objects={objects}
               sponsors={sponsors}
+              kits={doc.kits ?? []}
               selectedId={selected?.id ?? null}
               highlightId={highlightId}
               frameNonce={frameNonce}
               venueNonce={venueNonce}
               units={units}
+              showObjectSizes={showObjectSizes}
               orthographic={hallView.orthographic}
               cuboids={hallView.cuboids}
               fog={hallView.fog}
@@ -582,6 +601,7 @@ export function ViewerApp({
               venueNonce={venueNonce}
               highlightId={highlightId}
               units={units}
+              showObjectSizes={showObjectSizes}
               onSelect={selectFromMap}
             />
           )
@@ -600,19 +620,17 @@ export function ViewerApp({
               setVenueNonce((n) => n + 1);
             }}
           />
-          {viewMode === "hall" ? (
-            <Button
-              size="icon-sm"
-              variant={hallSettingsOpen ? "secondary" : "ghost"}
-              className="size-8"
-              title="3D view"
-              aria-label="3D view settings"
-              aria-pressed={hallSettingsOpen}
-              onClick={() => setHallSettingsOpen((open) => !open)}
-            >
-              <SlidersHorizontal strokeWidth={1.5} />
-            </Button>
-          ) : null}
+          <Button
+            size="icon-sm"
+            variant={hallSettingsOpen ? "secondary" : "ghost"}
+            className="size-8"
+            title="View settings"
+            aria-label="View settings"
+            aria-pressed={hallSettingsOpen}
+            onClick={() => setHallSettingsOpen((open) => !open)}
+          >
+            <SlidersHorizontal strokeWidth={1.5} />
+          </Button>
           <span className="mx-0.5 hidden h-5 w-px bg-border sm:block" aria-hidden />
           <FloorSwitcher
             floors={[...doc.floors].sort((a, b) => a.order - b.order)}
@@ -622,17 +640,6 @@ export function ViewerApp({
               setSelectedId(null);
             }}
           />
-          <UnitsToggle units={units} onChange={setUnits} />
-          {floor ? (
-            <MapExportMenu
-              compact
-              floor={floor}
-              objects={objects}
-              sponsors={sponsors}
-              venueSvg={null}
-              filename={`${doc.event.slug}-${floor.name || "floor"}-plan.svg`}
-            />
-          ) : null}
           <ThemeToggle />
         </div>
       </main>
@@ -641,8 +648,27 @@ export function ViewerApp({
         <div className="absolute inset-y-0 right-0 z-10">
           <HallViewAside
             hallView={hallView}
-            onHallViewChange={(patch) => setHallView((prev) => ({ ...prev, ...patch }))}
+            onHallViewChange={patchHallView}
             onClose={() => setHallSettingsOpen(false)}
+            viewMode={viewMode}
+            units={units}
+            onUnitsChange={setUnits}
+            showObjectSizes={showObjectSizes}
+            onShowObjectSizesChange={setShowObjectSizes}
+            exportSlot={
+              floor ? (
+                <MapExportMenu
+                  stacked
+                  floor={floor}
+                  objects={objects}
+                  sponsors={sponsors}
+                  venueSvg={null}
+                  filename={`${doc.event.slug}-${floor.name || "floor"}-plan.svg`}
+                  viewMode={viewMode}
+                  hallView={hallView}
+                />
+              ) : null
+            }
           />
         </div>
       ) : null}

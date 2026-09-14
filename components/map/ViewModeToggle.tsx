@@ -1,12 +1,14 @@
 "use client";
 
-import { Box, Grid3x3, Ruler, Square, X } from "lucide-react";
+import type { CSSProperties, ReactNode } from "react";
+import { Box, Grid3x3, Ruler, Square, UnfoldHorizontal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { UnitsToggle } from "@/components/units-toggle";
 import type { HallView } from "@/lib/hall-view";
 import { sliderRangeStyle } from "@/lib/hall-view";
-import type { ViewMode } from "@/lib/types";
+import type { Units, ViewMode } from "@/lib/types";
 
 export function GridToggle({
   value,
@@ -50,6 +52,28 @@ export function RulersToggle({
   );
 }
 
+export function ObjectSizesToggle({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (show: boolean) => void;
+}) {
+  return (
+    <Button
+      size="icon-sm"
+      variant={value ? "secondary" : "ghost"}
+      className="size-8"
+      title={value ? "Hide measurements" : "Show measurements"}
+      aria-label={value ? "Hide measurements" : "Show measurements"}
+      aria-pressed={value}
+      onClick={() => onChange(!value)}
+    >
+      <UnfoldHorizontal strokeWidth={1.5} />
+    </Button>
+  );
+}
+
 export function FloorSwitcher({
   floors,
   value,
@@ -61,7 +85,7 @@ export function FloorSwitcher({
 }) {
   if (floors.length < 2) return null;
   return (
-    <div className="flex shrink-0 flex-nowrap justify-start gap-0.5 rounded-lg border border-border p-0.5" role="group" aria-label="Floor">
+    <div className="flex shrink-0 flex-nowrap justify-start gap-0.5 rounded-lg border border-border bg-background/80 p-0.5 shadow-sm backdrop-blur-md" role="group" aria-label="Floor">
       {floors.map((f, i) => (
         <button
           key={f.id}
@@ -140,7 +164,7 @@ function HallSlider({
         step={step}
         disabled={disabled}
         value={value}
-        style={sliderRangeStyle(min, max, value)}
+        style={sliderRangeStyle(min, max, value) as CSSProperties}
         onChange={(e) => onChange(Number(e.target.value))}
         className="chrome-slider mt-1 w-full"
       />
@@ -192,6 +216,36 @@ export function HallViewPanel({
 }) {
   return (
     <div className="space-y-5">
+      <div>
+        <p className="chrome-kicker mb-1.5">Style</p>
+        <HallToggle
+          checked={hallView.orthographic}
+          onChange={(orthographic) => onHallViewChange({ orthographic })}
+        >
+          Orthographic
+        </HallToggle>
+        <HallToggle checked={hallView.cuboids} onChange={(cuboids) => onHallViewChange({ cuboids })}>
+          Cuboids
+        </HallToggle>
+        <HallToggle checked={hallView.ao} onChange={(ao) => onHallViewChange({ ao })}>
+          AO
+        </HallToggle>
+        <HallToggle checked={hallView.shadows} onChange={(shadows) => onHallViewChange({ shadows })}>
+          Shadows
+        </HallToggle>
+        <HallToggle
+          checked={hallView.environment}
+          onChange={(environment) => onHallViewChange({ environment })}
+        >
+          Environment
+        </HallToggle>
+        <HallToggle
+          checked={hallView.pathTracing}
+          onChange={(pathTracing) => onHallViewChange({ pathTracing })}
+        >
+          Path tracing
+        </HallToggle>
+      </div>
       <div>
         <p className="chrome-kicker mb-1.5">Camera</p>
         <div className="space-y-2">
@@ -289,36 +343,6 @@ export function HallViewPanel({
           onChange={(fogIntensity) => onHallViewChange({ fogIntensity })}
         />
       </div>
-      <div>
-        <p className="chrome-kicker mb-1.5">Style</p>
-        <HallToggle
-          checked={hallView.orthographic}
-          onChange={(orthographic) => onHallViewChange({ orthographic })}
-        >
-          Orthographic
-        </HallToggle>
-        <HallToggle checked={hallView.cuboids} onChange={(cuboids) => onHallViewChange({ cuboids })}>
-          Cuboids
-        </HallToggle>
-        <HallToggle checked={hallView.ao} onChange={(ao) => onHallViewChange({ ao })}>
-          AO
-        </HallToggle>
-        <HallToggle checked={hallView.shadows} onChange={(shadows) => onHallViewChange({ shadows })}>
-          Shadows
-        </HallToggle>
-        <HallToggle
-          checked={hallView.environment}
-          onChange={(environment) => onHallViewChange({ environment })}
-        >
-          Environment
-        </HallToggle>
-        <HallToggle
-          checked={hallView.pathTracing}
-          onChange={(pathTracing) => onHallViewChange({ pathTracing })}
-        >
-          Path tracing
-        </HallToggle>
-      </div>
     </div>
   );
 }
@@ -329,22 +353,60 @@ export function HallViewAside({
   hallView,
   onHallViewChange,
   onClose,
+  viewMode,
+  units,
+  onUnitsChange,
+  exportSlot,
+  showObjectSizes = false,
+  onShowObjectSizesChange,
 }: {
   hallView: HallView;
   onHallViewChange: (patch: Partial<HallView>) => void;
   onClose: () => void;
+  viewMode?: ViewMode;
+  units?: Units;
+  onUnitsChange?: (units: Units) => void;
+  exportSlot?: ReactNode;
+  showObjectSizes?: boolean;
+  onShowObjectSizesChange?: (show: boolean) => void;
 }) {
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-l border-border bg-background">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-        <p className="min-w-0 flex-1 text-[13px] font-medium">3D view</p>
-        <Button size="icon-sm" variant="ghost" aria-label="Close 3D view" onClick={onClose}>
+        <p className="min-w-0 flex-1 text-[13px] font-medium">View</p>
+        <Button size="icon-sm" variant="ghost" aria-label="Close view settings" onClick={onClose}>
           <X strokeWidth={1.5} />
         </Button>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="px-3 py-3">
-          <HallViewPanel hallView={hallView} onHallViewChange={onHallViewChange} />
+        <div className="space-y-5 px-3 py-3">
+          {units && onUnitsChange ? (
+            <div>
+              <p className="chrome-kicker mb-1.5">Units</p>
+              <UnitsToggle units={units} onChange={onUnitsChange} />
+              {onShowObjectSizesChange ? (
+                <HallToggle checked={showObjectSizes} onChange={onShowObjectSizesChange}>
+                  Measurements
+                </HallToggle>
+              ) : null}
+            </div>
+          ) : onShowObjectSizesChange ? (
+            <div>
+              <p className="chrome-kicker mb-1.5">Display</p>
+              <HallToggle checked={showObjectSizes} onChange={onShowObjectSizesChange}>
+                Measurements
+              </HallToggle>
+            </div>
+          ) : null}
+          {exportSlot ? (
+            <div>
+              <p className="chrome-kicker mb-1.5">Download</p>
+              {exportSlot}
+            </div>
+          ) : null}
+          {viewMode !== "plan" ? (
+            <HallViewPanel hallView={hallView} onHallViewChange={onHallViewChange} />
+          ) : null}
         </div>
       </ScrollArea>
     </aside>
