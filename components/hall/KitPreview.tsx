@@ -7,8 +7,9 @@ import { BoothKit } from "./BoothKit";
 import { KioskKit } from "./KioskKit";
 import { StageKit } from "./StageKit";
 import { useTheme } from "@/components/theme-provider";
-import { boothFillHex, HALL_THEME, type MapTone } from "@/lib/colors";
+import { boothFillHex, FLOOR_PLATE_HEX, HALL_THEME, type MapTone } from "@/lib/colors";
 import { kitAppearance, rectRingFromKit } from "@/lib/exhibit-kits";
+import { stageKitBreakdown } from "@/lib/stage-seating";
 import type { ExhibitKit } from "@/lib/types";
 import "@/lib/three-timer-clock";
 
@@ -26,9 +27,13 @@ export function KitPreview({ kit }: { kit: ExhibitKit }) {
   const hall = HALL_THEME[tone];
   const ring = rectRingFromKit(kit.widthM, kit.depthM);
   const look = kitAppearance(kit.kind);
-  const span = Math.max(kit.widthM, kit.depthM, 4);
+  const span = Math.max(
+    look === "stage" ? stageKitBreakdown(kit).totalW * 1.05 : kit.widthM,
+    kit.depthM,
+    4,
+  );
   const aimY = (kit.platformHeightM ?? 0) + kit.wallHeightM * 0.35;
-  const kitColor = boothFillHex(null, "", tone, look === "stage" ? "stage" : look === "kiosk" ? "kiosk" : "booth");
+  const kitColor = boothFillHex(null, "", tone, "stage");
   return (
     <div className="h-48 overflow-hidden rounded-2xl border border-border" style={{ background: hall.bg }}>
       <Canvas
@@ -40,9 +45,9 @@ export function KitPreview({ kit }: { kit: ExhibitKit }) {
         <hemisphereLight args={[hall.sky, hall.ground, tone === "light" ? 0.85 : 0.7]} />
         <ambientLight intensity={tone === "light" ? 0.55 : 0.35} />
         <directionalLight position={[8, 12, 6]} intensity={tone === "light" ? 0.75 : 0.9} />
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]} receiveShadow>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]}>
           <planeGeometry args={[span * 4, span * 4]} />
-          <meshStandardMaterial color={hall.floor} roughness={1} />
+          <meshBasicMaterial color={FLOOR_PLATE_HEX} toneMapped={false} />
         </mesh>
         {look === "stage" ? (
           <StageKit

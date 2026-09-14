@@ -1,16 +1,13 @@
 export type MapTone = "light" | "dark";
 
-export const DEFAULT_BOOTH_HEX: Record<MapTone, string> = {
-  light: "#ecece8",
-  dark: "#e8e8e4",
-};
-
-export const FLOOR_PLATE_HEX = "#ffffff";
-
 export const DEFAULT_STAGE_HEX: Record<MapTone, string> = {
   light: "#ecece8",
   dark: "#e8e8e4",
 };
+
+export const DEFAULT_BOOTH_HEX: Record<MapTone, string> = DEFAULT_STAGE_HEX;
+
+export const FLOOR_PLATE_HEX = "#ffffff";
 
 export function tierFill(tier: string): string {
   const hue = tierHue(tier);
