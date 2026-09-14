@@ -1,12 +1,13 @@
-# Conference Maps
+# Conference Floor Plans
 
 Standalone floor-plan **designer** and public **viewer** for Bitcoin conferences. Replaces ExpoFP. Embed the published viewer URL in btc-app (`events.venue_map_url`) — this repo does not share a database with btc-app.
 
 ## What you get
 
 - Desktop-first designer: named plans, PDF/PNG/SVG underlay, two-click scale (m/ft), rectangles, polygons, amenity icons, **Plan / Hall** toggle, Airtable sponsor bind
-- Public viewer: pan/zoom, search, booth sheets, 3D hall, logos when they fit, `?booth=` / `?airtable=` highlight
-- **Assets** area: Sponsors, Agenda, and a texture/GLB library (sync caches Airtable attachments into the existing `maps` file store)
+- Public viewer: pan/zoom, search, booth sheets, 3D hall, logos when they fit. Query: `?booth=` / `?airtable=` highlight, `?view=3d` / `?view=2d`, `?floor=`, `?sizes=1`, plus hall flags (`ortho`, `fog`, `az`, `el`, …)
+- **Sponsors, Agenda, Library**: sync Airtable caches and upload textures/GLB (files go into the existing `maps` store)
+
 - Immutable publish snapshot + `GET /e/:slug/map.json` (native contract, version 1)
 - iframe / WebView friendly (`frame-ancestors *`)
 
@@ -20,7 +21,10 @@ npm run dev
 Open [http://localhost:3000](http://localhost:3000), continue as editor. **Bitcoin Asia 2026** (`/e/bhk26`) is seeded from the XR hall coordinates (schematic underlay + booth rectangles + amenities). Draft lives in `.data/`.
 
 Viewer: [http://localhost:3000/e/bhk26](http://localhost:3000/e/bhk26)  
+3D: [http://localhost:3000/e/bhk26?view=3d](http://localhost:3000/e/bhk26?view=3d)  
 JSON: [http://localhost:3000/e/bhk26/map.json](http://localhost:3000/e/bhk26/map.json)
+
+Viewer query params (override saved prefs): `view=3d|2d|hall|plan`, `floor=` (id or name), `sizes=1`, `grid=1`, `rulers=1`, `panel=1`, `booth=`, `airtable=`. Hall: `ortho`, `cuboids`, `fog`, `ao`, `shadows`, `env`, `pt`, `az`, `el`, `dist`, `sun`, `sunEl`, `light`, `fill`, `fogI`.
 
 Paste that viewer URL into btc-app admin → Venue Map.
 
@@ -40,7 +44,7 @@ The app uses the service role on the server. RLS still protects the tables from 
 - `V` select · `R` rectangle (in Hall with a booth selected: rotate +45°) · `P` polygon · `I` amenity icon
 - Two-click **Scale** + known length (Plan only)
 - Size presets: 3×3 m, 6×6 m, 10×10 m, 10×10 ft, 20×20 ft
-- Editor chrome: Designer · Assets · Settings
+- Editor chrome: Event · Sponsors · Agenda · Library · Settings · Designer (`/e/:slug/studio` is the hub)
 
 ## Hall coordinates
 
