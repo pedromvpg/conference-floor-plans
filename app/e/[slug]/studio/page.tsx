@@ -3,24 +3,21 @@ import { getSessionUser } from "@/lib/auth";
 import { getStore } from "@/lib/get-store";
 import { airtableEnvStatus } from "@/lib/airtable-conf";
 import { EditorNav } from "@/components/editor/EditorNav";
+import { EventHub } from "@/components/editor/EventHub";
 import { StudioShell } from "@/components/editor/StudioShell";
-import { SettingsForm } from "@/components/events/SettingsForm";
 
 export const dynamic = "force-dynamic";
 
-export default async function SettingsPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function EventStudioPage({ params }: { params: Promise<{ slug: string }> }) {
   const user = await getSessionUser();
   if (!user) redirect("/login");
   const { slug } = await params;
-  const event = await getStore().getEventBySlug(slug);
-  if (!event) redirect("/events");
+  const draft = await getStore().getDraft(slug);
+  if (!draft) redirect("/events");
   return (
     <StudioShell>
-      <EditorNav slug={slug} current="settings" title="Settings" />
-      <SettingsForm
-        event={{ ...event, airtableToken: event.airtableToken ? "set" : "" }}
-        envStatus={airtableEnvStatus(event.slug)}
-      />
+      <EditorNav slug={slug} current="studio" title={draft.event.name} />
+      <EventHub draft={draft} airtableLoaded={Boolean(airtableEnvStatus(slug).loadedKey)} />
     </StudioShell>
   );
 }

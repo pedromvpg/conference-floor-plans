@@ -3,10 +3,10 @@
 import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, LayoutGrid, List } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import type { MapEvent, Sponsor } from "@/lib/types";
+import { StudioKicker, StudioPanel, StudioPills, studioFieldClass, studioPillClass } from "@/components/editor/studio-ui";
 
 type Filter = "all" | "cached" | "uncached";
 type Layout = "grid" | "list";
@@ -91,145 +91,111 @@ export function SponsorsAssetsForm({
   }, [sponsors, query, filter, sort, sortDir]);
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader className="border-b">
-          <p className="chrome-kicker">Airtable</p>
-          <CardTitle className="mt-1">Cache sponsors</CardTitle>
-          <CardDescription>
-            Reads <code className="font-mono text-[11px]">CONF_BITCOINASIA2026</code> (sponsorsToken, sponsorsBaseId,
-            sponsorsTable). Pulls <code className="font-mono text-[11px]">Logo Color URL</code> /{" "}
-            <code className="font-mono text-[11px]">Logo Color</code>, then Webflow fields. Rasters are downscaled; SVGs
-            stay as-is. Read-only token is enough.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pt-4">
-          <p className="font-mono text-[11px] text-muted-foreground">
-            {syncedAt
-              ? `${cachedCount} logos cached · last sync ${new Date(syncedAt).toLocaleString()}`
-              : "Never synced"}
+    <div className="space-y-8">
+      <StudioPanel className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <StudioKicker>Cache</StudioKicker>
+          <p className="mt-3 text-[40px] leading-none font-semibold tracking-[-0.05em]">{cachedCount}</p>
+          <p className="mt-2 text-[14px] text-muted-foreground">
+            logos of {sponsors.length}
+            {syncedAt ? ` · last sync ${new Date(syncedAt).toLocaleString("en-GB")}` : " · never synced"}
           </p>
-        </CardContent>
-        <CardFooter className="justify-end">
-          <Button type="button" onClick={() => void sync()} disabled={busy}>
-            {busy ? "Caching…" : "Start caching"}
-          </Button>
-        </CardFooter>
-      </Card>
+        </div>
+        <Button type="button" variant="inverse" size="lg" onClick={() => void sync()} disabled={busy}>
+          {busy ? "Caching…" : "Cache logos"}
+        </Button>
+      </StudioPanel>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="chrome-kicker mr-auto">Sponsors</h2>
+      <div className="flex flex-wrap items-center gap-3">
         <Input
-          className="max-w-xs"
+          className={`max-w-xs ${studioFieldClass}`}
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Find a logo…"
         />
-        {(["all", "cached", "uncached"] as const).map((f) => (
-          <Button
-            key={f}
+        <StudioPills label="Cache filter">
+          {(["all", "cached", "uncached"] as const).map((f) => (
+            <button key={f} type="button" className={studioPillClass(filter === f)} onClick={() => setFilter(f)}>
+              {f === "all" ? "All" : f === "cached" ? "Cached" : "Not cached"}
+            </button>
+          ))}
+        </StudioPills>
+        <StudioPills label="Sort">
+          {(["tier", "name"] as const).map((key) => (
+            <button
+              key={key}
+              type="button"
+              className={studioPillClass(sort === key)}
+              onClick={() => {
+                if (sort === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                else {
+                  setSort(key);
+                  setSortDir("asc");
+                }
+              }}
+            >
+              {key === "tier" ? "Tier" : "Name"}
+              {sort === key ? sortDir === "asc" ? <ArrowUp className="ml-1 inline size-3.5" /> : <ArrowDown className="ml-1 inline size-3.5" /> : null}
+            </button>
+          ))}
+        </StudioPills>
+        <StudioPills label="Layout">
+          <button
             type="button"
-            size="sm"
-            variant={filter === f ? "default" : "outline"}
-            onClick={() => setFilter(f)}
-          >
-            {f === "all" ? "All" : f === "cached" ? "Cached" : "Not cached"}
-          </Button>
-        ))}
-        <Button
-          type="button"
-          size="sm"
-          variant={sort === "name" ? "default" : "outline"}
-          onClick={() => {
-            if (sort === "name") setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-            else {
-              setSort("name");
-              setSortDir("asc");
-            }
-          }}
-        >
-          Name
-          {sort === "name" ? sortDir === "asc" ? <ArrowUp /> : <ArrowDown /> : null}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={sort === "tier" ? "default" : "outline"}
-          onClick={() => {
-            if (sort === "tier") setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-            else {
-              setSort("tier");
-              setSortDir("asc");
-            }
-          }}
-        >
-          Tier
-          {sort === "tier" ? sortDir === "asc" ? <ArrowUp /> : <ArrowDown /> : null}
-        </Button>
-        <div className="flex border border-border" role="group" aria-label="Layout">
-          <Button
-            type="button"
-            size="icon-sm"
-            variant={layout === "grid" ? "default" : "ghost"}
-            className="rounded-none"
+            className={studioPillClass(layout === "grid")}
             aria-label="Grid view"
             aria-pressed={layout === "grid"}
             onClick={() => setLayout("grid")}
           >
-            <LayoutGrid />
-          </Button>
-          <Button
+            <LayoutGrid className="size-4" />
+          </button>
+          <button
             type="button"
-            size="icon-sm"
-            variant={layout === "list" ? "default" : "ghost"}
-            className="rounded-none"
+            className={studioPillClass(layout === "list")}
             aria-label="List view"
             aria-pressed={layout === "list"}
             onClick={() => setLayout("list")}
           >
-            <List />
-          </Button>
-        </div>
+            <List className="size-4" />
+          </button>
+        </StudioPills>
       </div>
 
       {!sponsors.length ? (
-        <p className="text-sm text-muted-foreground">No sponsors cached yet. Start caching when Airtable is configured.</p>
+        <p className="text-[15px] text-muted-foreground">No sponsors cached yet. Cache logos when Airtable is configured.</p>
       ) : !visible.length ? (
-        <p className="text-sm text-muted-foreground">
+        <p className="text-[15px] text-muted-foreground">
           {query.trim() ? `No sponsors matching “${query.trim()}”.` : "No sponsors in this filter."}
         </p>
       ) : layout === "grid" ? (
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 md:grid-cols-7 lg:grid-cols-9">
           {visible.map((s) => (
-            <div key={s.id} className="relative aspect-square overflow-hidden border border-border bg-white">
+            <div
+              key={s.id}
+              className="relative aspect-square overflow-hidden rounded-[18px] bg-[#fcfcfc]"
+              title={s.name}
+            >
               <Logo src={s.logoUrl} name={s.name} />
               <span
-                className={`absolute right-1.5 top-1.5 size-2 rounded-full border border-background ${
-                  s.logoUrl ? "bg-emerald-500" : "bg-muted-foreground/50"
-                }`}
+                className={`absolute top-2 right-2 size-1.5 rounded-full ${s.logoUrl ? "bg-[#ff9500]" : "bg-black/25"}`}
               />
-              <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-background/90 to-transparent px-1.5 pb-1 pt-4 text-[10px]">
-                {s.name}
-              </span>
             </div>
           ))}
         </div>
       ) : (
-        <div className="border border-border">
+        <ul className="divide-y divide-border border-y border-border">
           {visible.map((s) => (
-            <div key={s.id} className="chrome-row border-b border-border last:border-b-0">
-              <div className="size-10 shrink-0 overflow-hidden border border-border bg-white">
+            <li key={s.id} className="flex items-center gap-3 py-3">
+              <div className="size-11 shrink-0 overflow-hidden rounded-[12px] bg-[#fcfcfc]">
                 <Logo src={s.logoUrl} name={s.name} />
               </div>
-              <span className="min-w-0 flex-1 truncate text-[13px]">{s.name}</span>
-              <span className="font-mono text-[10px] text-muted-foreground">{s.boothNumber || "—"}</span>
-              <span className="w-48 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
-                {s.tier || "no tier"}
-              </span>
-            </div>
+              <span className="min-w-0 flex-1 truncate text-[15px]">{s.name}</span>
+              <span className="hidden font-mono text-[12px] text-muted-foreground sm:inline">{s.boothNumber || "—"}</span>
+              <span className="w-36 shrink-0 text-right font-mono text-[12px] text-muted-foreground">{s.tier || "no tier"}</span>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </div>
   );
@@ -239,11 +205,11 @@ function Logo({ src, name }: { src: string; name: string }) {
   if (src) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={src} alt="" className="h-full w-full object-contain p-1.5" />
+      <img src={src} alt="" className="h-full w-full object-contain p-2" />
     );
   }
   return (
-    <div className="flex h-full items-center justify-center text-lg text-muted-foreground">
+    <div className="flex h-full items-center justify-center text-lg text-black/35">
       {(name || "?").trim().charAt(0).toUpperCase()}
     </div>
   );

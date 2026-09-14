@@ -2,20 +2,12 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import type { MapEvent } from "@/lib/types";
+import type { MapEvent, Units } from "@/lib/types";
 import { useUnits } from "@/lib/use-units";
-import { UnitsToggle } from "@/components/units-toggle";
+import { StudioKicker, StudioPanel, StudioPills, studioFieldClass, studioPillClass } from "@/components/editor/studio-ui";
 
 export function SettingsForm({
   event,
@@ -58,82 +50,82 @@ export function SettingsForm({
   }
 
   return (
-    <div className="space-y-6">
-      <form onSubmit={(e) => void save(e)}>
-        <Card>
-          <CardHeader className="border-b">
-            <p className="chrome-kicker">Event</p>
-            <CardTitle className="mt-1">Details</CardTitle>
-            <CardDescription>
-              Airtable lives in <code className="font-mono text-[11px]">CONF_BITCOINASIA2026</code> (same JSON as
-              conference-screens). Never stored on the event.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4 pt-4 sm:grid-cols-2">
-            <div className="sm:col-span-2 border border-border bg-muted/30 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-              {envLoaded ? (
-                <>Loaded {envStatus.loadedKey} from .env / Vercel.</>
-              ) : (
-                <>
-                  Missing {envStatus.keys.join(" or ")}. Add the screens JSON to .env.local (and Vercel). Restart
-                  next after changing env.
-                </>
-              )}
-            </div>
-            <div className="sm:col-span-2">
-              <Label htmlFor="event-name">Name</Label>
-              <Input
-                id="event-name"
-                className="mt-1"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-          </CardContent>
-          <CardFooter className="justify-end">
-            <Button type="submit">Save settings</Button>
-          </CardFooter>
-        </Card>
-      </form>
-
-      <Card>
-        <CardHeader className="border-b">
-          <p className="chrome-kicker">Display</p>
-          <CardTitle className="mt-1">Units</CardTitle>
-          <CardDescription>
-            Lengths in the designer and viewer. Stored in this browser.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pt-4">
-          <div className="flex items-center justify-between gap-4">
-            <Label>Metres or feet</Label>
-            <UnitsToggle units={units} onChange={setUnits} />
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="border-b">
-          <p className="chrome-kicker">Access</p>
-          <CardTitle className="mt-1">Invite editor</CardTitle>
-          <CardDescription>Editors can open the designer and publish maps.</CardDescription>
-        </CardHeader>
-        <CardContent className="pt-4">
-          <div className="flex flex-col gap-2 sm:flex-row">
+    <div className="grid gap-4 lg:grid-cols-2">
+      <form className="lg:col-span-2" onSubmit={(e) => void save(e)}>
+        <StudioPanel>
+          <StudioKicker>Event</StudioKicker>
+          <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.04em]">Name and Airtable</h2>
+          <p className="mt-2 max-w-xl text-[14px] leading-relaxed text-muted-foreground">
+            Airtable lives in env JSON, same as conference-screens. It is never stored on the event row.
+          </p>
+          <p className="mt-4 rounded-full border border-border bg-muted px-4 py-2 font-mono text-[12px] text-muted-foreground">
+            {envLoaded
+              ? `Loaded ${envStatus.loadedKey}`
+              : `Missing ${envStatus.keys.join(" or ")} — add the screens JSON and restart`}
+          </p>
+          <div className="mt-6 max-w-xl">
+            <Label htmlFor="event-name" className="text-muted-foreground">
+              Name
+            </Label>
             <Input
-              id="invite-email"
-              type="email"
-              value={invite}
-              onChange={(e) => setInvite(e.target.value)}
-              placeholder="producer@company.com"
-              aria-label="Editor email"
+              id="event-name"
+              className={`mt-2 ${studioFieldClass}`}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
             />
-            <Button type="button" variant="outline" onClick={() => void addEditor()}>
-              Invite
+          </div>
+          <div className="mt-6 flex justify-end">
+            <Button type="submit" variant="inverse" size="lg">
+              Save settings
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </StudioPanel>
+      </form>
+
+      <StudioPanel>
+        <StudioKicker>Display</StudioKicker>
+        <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.04em]">Units</h2>
+        <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">
+          Lengths in the designer and viewer. Stored in this browser.
+        </p>
+        <div className="mt-6">
+          <StudioPills label="Measurement units">
+            {(["m", "ft"] as Units[]).map((u) => (
+              <button
+                key={u}
+                type="button"
+                aria-pressed={units === u}
+                className={studioPillClass(units === u)}
+                onClick={() => setUnits(u)}
+              >
+                {u === "m" ? "Metres" : "Feet"}
+              </button>
+            ))}
+          </StudioPills>
+        </div>
+      </StudioPanel>
+
+      <StudioPanel>
+        <StudioKicker>Access</StudioKicker>
+        <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.04em]">Invite editor</h2>
+        <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">
+          Editors can open the designer and publish maps.
+        </p>
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+          <Input
+            id="invite-email"
+            type="email"
+            className={studioFieldClass}
+            value={invite}
+            onChange={(e) => setInvite(e.target.value)}
+            placeholder="producer@company.com"
+            aria-label="Editor email"
+          />
+          <Button type="button" variant="glass" size="lg" onClick={() => void addEditor()}>
+            Invite
+          </Button>
+        </div>
+      </StudioPanel>
     </div>
   );
 }

@@ -10,6 +10,14 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "**" },
     ],
   },
+  async redirects() {
+    return [
+      { source: "/e/:slug/assets", destination: "/e/:slug/library", permanent: false },
+      { source: "/e/:slug/assets/sponsors", destination: "/e/:slug/sponsors", permanent: false },
+      { source: "/e/:slug/assets/agenda", destination: "/e/:slug/agenda", permanent: false },
+      { source: "/e/:slug/assets/library", destination: "/e/:slug/library", permanent: false },
+    ];
+  },
   async headers() {
     return [
       {

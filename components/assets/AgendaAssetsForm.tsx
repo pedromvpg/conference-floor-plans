@@ -2,9 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import type { AgendaSession, AgendaSpeaker, MapEvent } from "@/lib/types";
+import { StudioKicker, StudioPanel } from "@/components/editor/studio-ui";
 
 export function AgendaAssetsForm({
   event,
@@ -69,80 +69,78 @@ export function AgendaAssetsForm({
   const speakerById = useMemo(() => new Map(speakers.map((s) => [s.airtableId, s])), [speakers]);
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader className="border-b">
-          <p className="chrome-kicker">Airtable</p>
-          <CardTitle className="mt-1">Agenda & speakers</CardTitle>
-          <CardDescription>
-            Same <code className="font-mono text-[11px]">CONF_BITCOINASIA2026</code> as bitcoinAsia2026 screens
-            (agendaBaseId / agendaTable / speakersTable). Field names match BA26.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pt-4">
-          <p className="font-mono text-[11px] text-muted-foreground">
-            {envStatus.loadedKey ? `Loaded ${envStatus.loadedKey}` : `Missing ${envStatus.keys.join(" or ")}`}
+    <div className="space-y-8">
+      <StudioPanel className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <StudioKicker>Cache</StudioKicker>
+          <p className="mt-3 text-[40px] leading-none font-semibold tracking-[-0.05em]">{sessions.length}</p>
+          <p className="mt-2 max-w-lg text-[14px] text-muted-foreground">
+            sessions · {speakers.length} speakers
             {" · "}
-            {agendaAt ? `Agenda ${new Date(agendaAt).toLocaleString()}` : "Agenda never synced"}
+            {envStatus.loadedKey ? envStatus.loadedKey : `Missing ${envStatus.keys.join(" or ")}`}
             {" · "}
-            {speakersAt ? `Speakers ${new Date(speakersAt).toLocaleString()}` : "Speakers never synced"}
+            {agendaAt ? `agenda ${new Date(agendaAt).toLocaleString("en-GB")}` : "agenda never synced"}
+            {" · "}
+            {speakersAt ? `speakers ${new Date(speakersAt).toLocaleString("en-GB")}` : "speakers never synced"}
           </p>
-        </CardContent>
-        <CardFooter className="justify-end gap-2">
-          <Button type="button" variant="outline" onClick={() => void syncSpeakers()} disabled={busy}>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="glass" size="lg" onClick={() => void syncSpeakers()} disabled={busy}>
             Sync speakers
           </Button>
-          <Button type="button" onClick={() => void syncAgenda()} disabled={busy}>
+          <Button type="button" variant="inverse" size="lg" onClick={() => void syncAgenda()} disabled={busy}>
             Sync agenda
           </Button>
-        </CardFooter>
-      </Card>
+        </div>
+      </StudioPanel>
 
-      <div>
-        <p className="chrome-kicker">Speakers</p>
-        <div className="mt-2 space-y-1">
-          {speakers.map((s) => (
-            <div key={s.id} className="chrome-row px-2">
-              {s.photoUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={s.photoUrl} alt="" className="h-8 w-8 object-cover" />
-              ) : (
-                <span className="h-8 w-8 bg-muted" />
-              )}
-              <span className="min-w-0 flex-1 truncate text-[13px]">{s.name}</span>
-            </div>
-          ))}
+      <div className="grid gap-10 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+        <div>
+          <StudioKicker>Speakers</StudioKicker>
+          <ul className="mt-4 divide-y divide-border border-y border-border">
+            {speakers.map((s) => (
+              <li key={s.id} className="flex items-center gap-3 py-2.5">
+                {s.photoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={s.photoUrl} alt="" className="size-10 rounded-full object-cover" />
+                ) : (
+                  <span className="size-10 rounded-full bg-muted" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-[14px]">{s.name}</span>
+              </li>
+            ))}
+          </ul>
           {!speakers.length ? (
-            <p className="text-sm text-muted-foreground">No speakers cached. Sync speakers to store durable headshots.</p>
+            <p className="mt-3 text-[14px] text-muted-foreground">No speakers cached. Sync speakers to store headshots.</p>
           ) : null}
         </div>
-      </div>
 
-      <div>
-        <p className="chrome-kicker">Sessions</p>
-        <div className="mt-2 space-y-4">
-          {grouped.map(([stage, items]) => (
-            <div key={stage}>
-              <p className="chrome-kicker pb-1">{stage}</p>
-              {items.map((s) => (
-                <div key={s.id} className="border-b border-border px-1 py-2 last:border-b-0">
-                  <p className="text-[13px]">{s.title || "Untitled"}</p>
-                  <p className="font-mono text-[10px] text-muted-foreground">
-                    {s.startUnix ? new Date(s.startUnix * 1000).toLocaleString() : "No start"}
-                    {s.sessionType ? ` · ${s.sessionType}` : ""}
-                  </p>
-                  {s.speakerIds.length ? (
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      {s.speakerIds.map((id) => speakerById.get(id)?.name ?? id).join(", ")}
-                    </p>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ))}
-          {!sessions.length ? (
-            <p className="text-sm text-muted-foreground">No sessions cached yet.</p>
-          ) : null}
+        <div>
+          <StudioKicker>Sessions</StudioKicker>
+          <div className="mt-4 space-y-8">
+            {grouped.map(([stage, items]) => (
+              <div key={stage}>
+                <p className="font-mono text-[12px] tracking-wide text-muted-foreground uppercase">{stage}</p>
+                <ul className="mt-2 divide-y divide-border border-y border-border">
+                  {items.map((s) => (
+                    <li key={s.id} className="py-3">
+                      <p className="text-[15px] tracking-[-0.02em]">{s.title || "Untitled"}</p>
+                      <p className="mt-1 font-mono text-[12px] text-muted-foreground">
+                        {s.startUnix ? new Date(s.startUnix * 1000).toLocaleString("en-GB") : "No start"}
+                        {s.sessionType ? ` · ${s.sessionType}` : ""}
+                      </p>
+                      {s.speakerIds.length ? (
+                        <p className="mt-1 text-[13px] text-muted-foreground">
+                          {s.speakerIds.map((id) => speakerById.get(id)?.name ?? id).join(", ")}
+                        </p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+            {!sessions.length ? <p className="text-[14px] text-muted-foreground">No sessions cached yet.</p> : null}
+          </div>
         </div>
       </div>
     </div>

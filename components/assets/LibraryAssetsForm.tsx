@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import type { LibraryAsset, LibraryAssetKind } from "@/lib/types";
+import { StudioKicker, StudioPanel, studioFieldClass } from "@/components/editor/studio-ui";
 
 export function LibraryAssetsForm({ slug, initial }: { slug: string; initial: LibraryAsset[] }) {
   const [assets, setAssets] = useState(initial);
@@ -48,24 +48,25 @@ export function LibraryAssetsForm({ slug, initial }: { slug: string; initial: Li
   const models = assets.filter((a) => a.kind === "model");
 
   return (
-    <div className="space-y-6">
-      <UploadCard
-        title="Textures"
-        description="PNG, JPG, WebP, or SVG for logos, booth backgrounds, rugs, walls, and decals."
-        accept="image/png,image/jpeg,image/webp,image/svg+xml"
-        kind="texture"
-        busy={busy}
-        onUpload={upload}
-      />
-      <UploadCard
-        title="Models"
-        description="GLB or GLTF for custom booths and stages. +Z is the open front. 15 MB max."
-        accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
-        kind="model"
-        busy={busy}
-        onUpload={upload}
-      />
-
+    <div className="space-y-8">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <UploadCard
+          title="Textures"
+          description="PNG, JPG, WebP, or SVG for logos, rugs, walls, and decals."
+          accept="image/png,image/jpeg,image/webp,image/svg+xml"
+          kind="texture"
+          busy={busy}
+          onUpload={upload}
+        />
+        <UploadCard
+          title="Models"
+          description="GLB or GLTF. +Z is the open front. 15 MB max."
+          accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
+          kind="model"
+          busy={busy}
+          onUpload={upload}
+        />
+      </div>
       <Grid title="Textures" items={textures} onDelete={remove} busy={busy} />
       <Grid title="Models" items={models} onDelete={remove} busy={busy} />
     </div>
@@ -89,29 +90,36 @@ function UploadCard({
 }) {
   const [name, setName] = useState("");
   return (
-    <Card>
-      <CardHeader className="border-b">
-        <p className="chrome-kicker">Library</p>
-        <CardTitle className="mt-1">{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2 pt-4 sm:flex-row sm:items-end">
+    <StudioPanel>
+      <StudioKicker>Upload</StudioKicker>
+      <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.04em]">{title}</h2>
+      <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">{description}</p>
+      <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex-1">
-          <Label>Name</Label>
-          <Input className="mt-1" value={name} onChange={(e) => setName(e.target.value)} placeholder="Optional" />
+          <Label className="text-muted-foreground">Name</Label>
+          <Input
+            className={`mt-2 ${studioFieldClass}`}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Optional"
+          />
         </div>
-        <Input
-          type="file"
-          accept={accept}
-          disabled={busy}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) void onUpload(kind, file, name);
-            e.target.value = "";
-          }}
-        />
-      </CardContent>
-    </Card>
+        <label className="inline-flex h-10 cursor-pointer items-center justify-center rounded-full bg-foreground px-5 text-sm font-medium text-background hover:opacity-90">
+          Choose file
+          <input
+            type="file"
+            className="sr-only"
+            accept={accept}
+            disabled={busy}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void onUpload(kind, file, name);
+              e.target.value = "";
+            }}
+          />
+        </label>
+      </div>
+    </StudioPanel>
   );
 }
 
@@ -128,32 +136,31 @@ function Grid({
 }) {
   return (
     <div>
-      <p className="chrome-kicker">{title}</p>
-      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
-        {items.map((a) => (
-          <div key={a.id} className="border border-border p-2">
-            <div className="flex h-20 items-center justify-center bg-muted/40">
-              {a.kind === "texture" ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={a.url} alt="" className="max-h-20 max-w-full object-contain" />
-              ) : (
-                <span className="font-mono text-[10px] text-muted-foreground">GLB</span>
-              )}
+      <StudioKicker>{title}</StudioKicker>
+      {items.length ? (
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 md:grid-cols-6">
+          {items.map((a) => (
+            <div key={a.id} className="overflow-hidden rounded-[18px] border border-border">
+              <div className="flex h-28 items-center justify-center bg-[#fcfcfc]">
+                {a.kind === "texture" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={a.url} alt="" className="max-h-24 max-w-full object-contain" />
+                ) : (
+                  <span className="font-mono text-[12px] text-black/40">GLB</span>
+                )}
+              </div>
+              <div className="flex items-center justify-between gap-2 px-3 py-2">
+                <p className="min-w-0 truncate text-[13px]">{a.name}</p>
+                <Button size="xs" variant="ghost" className="text-muted-foreground hover:text-foreground" disabled={busy} onClick={() => onDelete(a.id)}>
+                  Delete
+                </Button>
+              </div>
             </div>
-            <p className="mt-2 truncate text-[12px]">{a.name}</p>
-            <Button
-              size="sm"
-              variant="destructive"
-              className="mt-1"
-              disabled={busy}
-              onClick={() => onDelete(a.id)}
-            >
-              Delete
-            </Button>
-          </div>
-        ))}
-      </div>
-      {!items.length ? <p className="mt-2 text-sm text-muted-foreground">Nothing uploaded yet.</p> : null}
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-[14px] text-muted-foreground">Nothing uploaded yet.</p>
+      )}
     </div>
   );
 }

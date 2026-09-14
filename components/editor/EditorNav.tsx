@@ -1,46 +1,57 @@
 import Link from "next/link";
+import { studioNavItems, type StudioSection } from "@/lib/studio-nav";
 import { ThemeToggle } from "@/components/theme-toggle";
+
+export type EditorSection = StudioSection;
 
 export function EditorNav({
   slug,
   current,
   title,
-  kicker,
 }: {
   slug: string;
-  current: "designer" | "assets" | "settings";
+  current: EditorSection;
   title: string;
-  kicker?: string;
 }) {
-  const items = [
-    { id: "designer" as const, href: `/e/${slug}/edit`, label: "Designer" },
-    { id: "assets" as const, href: `/e/${slug}/assets`, label: "Assets" },
-    { id: "settings" as const, href: `/e/${slug}/settings`, label: "Settings" },
-  ];
+  const items = studioNavItems(slug);
   return (
-    <header className="mb-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <header className="mb-10">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="chrome-kicker">{kicker ?? `/e/${slug}`}</p>
-          <h1 className="mt-1 text-xl font-semibold">{title}</h1>
-        </div>
-        <div className="flex items-center gap-1">
-          {items.map((item) => (
-            <Link
-              key={item.id}
-              href={item.href}
-              className={`px-2.5 py-1.5 text-[11px] font-medium ${
-                current === item.id
-                  ? "border-b-2 border-primary text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {item.label}
+          <p className="flex items-center gap-2 text-[13px] font-medium tracking-[0.16em] text-muted-foreground uppercase">
+            <span className="size-1.5 rounded-full bg-primary" aria-hidden />
+            <Link href="/" className="hover:text-foreground">
+              Floor plans
             </Link>
-          ))}
-          <ThemeToggle />
+            <span className="text-muted-foreground/50">/</span>
+            <Link href="/events" className="hover:text-foreground">
+              Events
+            </Link>
+            <span className="text-muted-foreground/50">/</span>
+            <Link href={`/e/${slug}/studio`} className="hover:text-foreground">
+              {slug}
+            </Link>
+          </p>
+          <h1 className="mt-3 text-[36px] leading-none font-semibold tracking-[-0.04em] sm:text-[44px]">{title}</h1>
         </div>
+        <ThemeToggle />
       </div>
+      <nav
+        className="mt-6 inline-flex flex-wrap gap-1 rounded-full bg-muted p-1.5 text-[14px] font-medium text-muted-foreground"
+        aria-label="Event sections"
+      >
+        {items.map((item) => (
+          <Link
+            key={item.id}
+            href={item.href}
+            className={`rounded-full px-4 py-2 ${
+              current === item.id ? "bg-foreground text-background" : "hover:bg-muted hover:text-foreground"
+            }`}
+          >
+            {item.label}
+          </Link>
+        ))}
+      </nav>
     </header>
   );
 }
