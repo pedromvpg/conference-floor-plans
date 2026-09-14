@@ -16,7 +16,7 @@ import type {
   Tool,
   Units,
 } from "@/lib/types";
-import { isPinObject, isMapPinObject, MAP_PIN_META, VENUE_ID } from "@/lib/types";
+import { isPinObject, isMapPinObject, VENUE_ID } from "@/lib/types";
 import { PlanStage } from "@/components/map/PlanStage";
 import { leafletViewFromPlan, floorDeltaToEnu, offsetLatLng, roundBasemapCoord } from "@/lib/basemap";
 import {
@@ -42,20 +42,22 @@ import {
   snapToPixel,
   snapScalar,
   snapToShapeNodes,
+  nearestClearances,
   snapTranslation,
   squareRectRing,
   translateRing,
   venueWorldRect,
   type BoundsHandle,
 } from "@/lib/geometry";
-import { formatSize, gridSize, snap } from "@/lib/units";
+import { formatLength, formatSize, gridSize, snap } from "@/lib/units";
 import { MapRulers } from "@/components/map/MapRulers";
-import { AMENITY_COLOR } from "@/lib/amenities";
 import { pinLucideIcon } from "@/lib/pin-icons";
+import { paintIsNone, parseShapePaint, resolvedIconPaint } from "@/lib/paint";
 import { tierFill } from "@/lib/colors";
 import { newId, nowIso } from "@/lib/store";
 import { stampPinObject } from "@/lib/new-object";
 import { hallDefaults } from "@/lib/appearance";
+import { kitStampName } from "@/lib/exhibit-kits";
 import { displayLogoUrl, objectUrls } from "@/lib/hall";
 import {
   applyBoundsToBezier,
@@ -115,6 +117,7 @@ type Props = {
   presetMeters?: { w: number; d: number } | null;
   stampAppearance?: Appearance | null;
   stampModelAssetId?: string | null;
+  stampKitKind?: MapObject["kitKind"];
   constrainProportions?: boolean;
   selectedIds?: string[];
   onSelect?: (id: string | null) => void;
@@ -127,6 +130,8 @@ type Props = {
   underlayOpacity?: number;
   showGrid?: boolean;
   showRulers?: boolean;
+  /** Width/depth labels on object edges. Defaults on in the editor. */
+  showObjectSizes?: boolean;
   snapToObjects?: boolean;
   snapToUnits?: boolean;
   /** Increment to animate the camera so `selectedId` fills the view. */
@@ -169,11 +174,12 @@ const STROKE_SELECTED_PX = 2;
 const STROKE_DEFAULT_PX = 1;
 const SNAP_GUIDE_PX = 1;
 const PIN_SCREEN_PX = 22;
+const PIN_SCREEN_PX_VIEW = 30;
 const PIN_LOCAL_H = 4;
 const PIN_LOCAL_D = 2.3;
 
-function pinWorldScale(ppm: number, mapPin: boolean) {
-  return screenPx(PIN_SCREEN_PX, ppm) / (mapPin ? PIN_LOCAL_H : PIN_LOCAL_D);
+function pinWorldScale(ppm: number, mapPin: boolean, pinPx = PIN_SCREEN_PX) {
+  return screenPx(pinPx, ppm) / (mapPin ? PIN_LOCAL_H : PIN_LOCAL_D);
 }
 
 function svgUserToScreen(svg: SVGSVGElement | null, camW: number, camH: number): number {
@@ -300,8 +306,9 @@ function handleXY(
 function amenityBounds(
   o: MapObject,
   ppm: number,
+  pinPx = PIN_SCREEN_PX,
 ): { minX: number; minY: number; maxX: number; maxY: number; w: number; h: number } {
-  const r = screenPx(PIN_SCREEN_PX, ppm) / 2;
+  const r = screenPx(pinPx, ppm) / 2;
   const x = o.x ?? 0;
   const y = o.y ?? 0;
   return { minX: x - r, minY: y - r, maxX: x + r, maxY: y + r, w: r * 2, h: r * 2 };
@@ -320,6 +327,135 @@ function rotateAround(
   const dx = x - cx;
   const dy = y - cy;
   return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos];
+}
+
+/** Keep map labels readable: never inverted (head-down). */
+function uprightTextRotation(worldDeg: number): number {
+  const a = ((worldDeg % 360) + 360) % 360;
+  return a > 90 && a < 270 ? worldDeg + 180 : worldDeg;
+}
+
+function ClearanceGuides({
+  spans,
+  units,
+  ppm,
+}: {
+  spans: ReturnType<typeof nearestClearances>;
+  units: Units;
+  ppm: number;
+}) {
+  const stroke = screenPx(1.15, ppm);
+  const tick = screenPx(5, ppm);
+  const font = screenPx(10, ppm);
+  const padX = screenPx(4, ppm);
+  const padY = screenPx(2.2, ppm);
+  const color = "#0369a1";
+  return (
+    <g pointerEvents="none">
+      {spans.map((s) => {
+        const horizontal = s.dir === "left" || s.dir === "right";
+        const mx = (s.x1 + s.x2) / 2;
+        const my = (s.y1 + s.y2) / 2;
+        const label = formatLength(s.gap, units, s.gap < 1 ? 2 : 1);
+        const approxW = label.length * font * 0.58;
+        const boxW = approxW + padX * 2;
+        const boxH = font + padY * 2;
+        return (
+          <g key={s.dir}>
+            <line x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2} stroke={color} strokeWidth={stroke} />
+            {horizontal ? (
+              <>
+                <line x1={s.x1} y1={s.y1 - tick} x2={s.x1} y2={s.y1 + tick} stroke={color} strokeWidth={stroke} />
+                <line x1={s.x2} y1={s.y2 - tick} x2={s.x2} y2={s.y2 + tick} stroke={color} strokeWidth={stroke} />
+              </>
+            ) : (
+              <>
+                <line x1={s.x1 - tick} y1={s.y1} x2={s.x1 + tick} y2={s.y1} stroke={color} strokeWidth={stroke} />
+                <line x1={s.x2 - tick} y1={s.y2} x2={s.x2 + tick} y2={s.y2} stroke={color} strokeWidth={stroke} />
+              </>
+            )}
+            <rect
+              x={mx - boxW / 2}
+              y={my - boxH / 2}
+              width={boxW}
+              height={boxH}
+              rx={screenPx(2, ppm)}
+              fill="var(--map-bg, #fff)"
+              fillOpacity={0.92}
+              stroke={color}
+              strokeWidth={screenPx(0.8, ppm)}
+            />
+            <text
+              x={mx}
+              y={my}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fontSize={font}
+              fill={color}
+              fontFamily="var(--font-mono), ui-monospace, monospace"
+              fontWeight={700}
+            >
+              {label}
+            </text>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function ObjectEdgeSizes({
+  cx,
+  cy,
+  facingDeg,
+  local,
+  units,
+  ppm,
+}: {
+  cx: number;
+  cy: number;
+  facingDeg: number;
+  local: { minX: number; minY: number; maxX: number; maxY: number; w: number; h: number };
+  units: Units;
+  ppm: number;
+}) {
+  const pad = screenPx(6, ppm);
+  const font = screenPx(8, ppm);
+  const midX = (local.minX + local.maxX) / 2;
+  const midY = (local.minY + local.maxY) / 2;
+  const rot = (x: number, y: number) => rotateAround(cx, cy, facingDeg, x, y);
+  const [wx, wy] = rot(midX, local.maxY + pad);
+  const [hx, hy] = rot(local.maxX + pad, midY);
+  const wRot = uprightTextRotation(facingDeg);
+  const hRot = uprightTextRotation(facingDeg - 90);
+  return (
+    <g pointerEvents="none">
+      <text
+        x={wx}
+        y={wy}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fontSize={font}
+        fill="var(--map-label-muted)"
+        fontFamily="var(--font-mono), ui-monospace, monospace"
+        transform={`rotate(${wRot} ${wx} ${wy})`}
+      >
+        {formatLength(local.w, units)}
+      </text>
+      <text
+        x={hx}
+        y={hy}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fontSize={font}
+        fill="var(--map-label-muted)"
+        fontFamily="var(--font-mono), ui-monospace, monospace"
+        transform={`rotate(${hRot} ${hx} ${hy})`}
+      >
+        {formatLength(local.h, units)}
+      </text>
+    </g>
+  );
 }
 
 /** Front is local +Y after un-yaw (matches 3D +Z / back wall at local −Y). */
@@ -422,6 +558,7 @@ export function FloorCanvas({
   presetMeters = null,
   stampAppearance = null,
   stampModelAssetId = null,
+  stampKitKind = null,
   constrainProportions = true,
   onSelect,
   onSelectIds,
@@ -433,6 +570,7 @@ export function FloorCanvas({
   underlayOpacity = 1,
   showGrid = mode === "edit",
   showRulers = mode === "edit",
+  showObjectSizes = mode === "edit",
   snapToObjects = true,
   snapToUnits = false,
   frameNonce = 0,
@@ -564,6 +702,7 @@ export function FloorCanvas({
   const altSnapOff = useRef(false);
   const [guides, setGuides] = useState<{ gx: number[]; gy: number[] }>({ gx: [], gy: [] });
   const [hoverHandle, setHoverHandle] = useState<BoundsHandle | "rotate" | null>(null);
+  const [movingClearance, setMovingClearance] = useState(false);
 
   function cancelCamAnim() {
     if (camAnim.current != null) {
@@ -682,6 +821,7 @@ export function FloorCanvas({
   const venueRect = liveCal ? venueWorldRect(liveCal) : null;
   const canEditVenue = mode === "edit" && editLayer === "venue";
   const canEditObjects = mode === "edit" && editLayer === "objects";
+  const pinPx = mode === "view" ? PIN_SCREEN_PX_VIEW : PIN_SCREEN_PX;
   const drawVenueShapes = canEditVenue && Boolean(underlaySvg);
   const activeIds = selectedIds?.length ? selectedIds : selectedId ? [selectedId] : [];
   const selectedSet = useMemo(() => new Set(activeIds), [activeIds.join("|")]);
@@ -712,7 +852,7 @@ export function FloorCanvas({
         o.polygon?.length
           ? ringBounds(o.polygon)
           : isPinObject(o) && o.x != null && o.y != null
-            ? amenityBounds(o, ppm)
+            ? amenityBounds(o, ppm, pinPx)
             : objectFrameBounds(o);
       acc = expandBounds(acc, b);
     }
@@ -858,6 +998,7 @@ export function FloorCanvas({
     const next = appendSvgRect(underlaySvg, minX, minY, maxX - minX, maxY - minY);
     onCommitVenueSvg?.(next);
     onSelectVenueElement?.(lastSvgLayerId(next));
+    onToolChange?.("select");
     return true;
   }
 
@@ -877,6 +1018,7 @@ export function FloorCanvas({
     const next = appendSvgEllipse(underlaySvg, minX + w / 2, minY + h / 2, Math.max(1, w / 2), Math.max(1, h / 2));
     onCommitVenueSvg?.(next);
     onSelectVenueElement?.(lastSvgLayerId(next));
+    onToolChange?.("select");
     return true;
   }
 
@@ -888,6 +1030,7 @@ export function FloorCanvas({
     const next = appendSvgBezier(underlaySvg, svgNodes, closed);
     onCommitVenueSvg?.(next);
     onSelectVenueElement?.(lastSvgLayerId(next));
+    onToolChange?.("select");
     return true;
   }
 
@@ -898,6 +1041,7 @@ export function FloorCanvas({
     const next = appendSvgText(underlaySvg, p.x, p.y, "Label");
     onCommitVenueSvg?.(next);
     onSelectVenueElement?.(lastSvgLayerId(next));
+    onToolChange?.("select");
     return true;
   }
 
@@ -1033,7 +1177,7 @@ export function FloorCanvas({
   const hitTest = useCallback(
     (x: number, y: number): MapObject | null => {
       const ppm = svgUserToScreen(svgRef.current, cam.w, cam.h);
-      const pinSlop = screenPx(PIN_SCREEN_PX * 0.7, ppm);
+      const pinSlop = screenPx(pinPx * 0.7, ppm);
       for (let i = objects.length - 1; i >= 0; i--) {
         const o = objects[i];
         if (isPinObject(o) && o.x != null && o.y != null) {
@@ -1319,7 +1463,7 @@ export function FloorCanvas({
       const solePin =
         selectedSet.size === 1 ? objects.find((o) => selectedSet.has(o.id) && isMapPinObject(o)) : undefined;
       if (solePin && solePin.x != null && solePin.y != null) {
-        const rh = rotateHandlePos(amenityBounds(solePin, ppmPin), hrV * 3.2);
+        const rh = rotateHandlePos(amenityBounds(solePin, ppmPin, pinPx), hrV * 3.2);
         if (hypot(w.x - rh.hx, w.y - rh.hy) <= hrV * 1.8) {
           drag.current = {
             id: solePin.id,
@@ -1597,7 +1741,7 @@ export function FloorCanvas({
         const ppmObj = svgUserToScreen(svgRef.current, cam.w, cam.h);
         const hrV = screenPx(HANDLE_HALF_PX, ppmObj);
         if (isPinObject(sole) && sole.x != null && sole.y != null) {
-          const rh = rotateHandlePos(amenityBounds(sole, ppmObj), hrV * 3.2);
+          const rh = rotateHandlePos(amenityBounds(sole, ppmObj, pinPx), hrV * 3.2);
           if (hypot(w.x - rh.hx, w.y - rh.hy) <= hrV * 1.8) {
             drag.current = {
               id: sole.id,
@@ -2053,6 +2197,7 @@ export function FloorCanvas({
           y: null,
         };
         pendingMove.current = null;
+        setMovingClearance(true);
       }
     }
     if (!drag.current && tool === "select") {
@@ -2102,7 +2247,7 @@ export function FloorCanvas({
         } else if (selected && isPinObject(selected) && selected.x != null && selected.y != null) {
           const ppmH = svgUserToScreen(svgRef.current, cam.w, cam.h);
           const hrH = screenPx(HANDLE_HALF_PX, ppmH);
-          const rh = rotateHandlePos(amenityBounds(selected, ppmH), hrH * 3.2);
+          const rh = rotateHandlePos(amenityBounds(selected, ppmH, pinPx), hrH * 3.2);
           setHoverHandle(hypot(w.x - rh.hx, w.y - rh.hy) <= hrH * 1.8 ? "rotate" : null);
         } else {
           setHoverHandle(null);
@@ -2302,13 +2447,13 @@ export function FloorCanvas({
       y: null,
       rotation: 0,
       boothNumber: "",
-      name: stampAppearance === "stage" ? "Stage" : "",
+      name: kitStampName(stampKitKind ?? "small") || (stampAppearance === "stage" ? "Stage" : ""),
       sponsorId: null,
       amenityType: null,
       color: null,
       description: "",
       eventDate: "",
-      ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
+      ...hallDefaults({ appearance: stampAppearance, kitKind: stampKitKind, modelAssetId: stampModelAssetId }),
       createdAt: t,
       updatedAt: t,
     });
@@ -2333,13 +2478,13 @@ export function FloorCanvas({
       y: null,
       rotation: 0,
       boothNumber: "",
-      name: stampAppearance === "stage" ? "Stage" : "",
+      name: kitStampName(stampKitKind ?? "small") || (stampAppearance === "stage" ? "Stage" : ""),
       sponsorId: null,
       amenityType: null,
       color: null,
       description: "",
       eventDate: "",
-      ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
+      ...hallDefaults({ appearance: stampAppearance, kitKind: stampKitKind, modelAssetId: stampModelAssetId }),
       createdAt: t,
       updatedAt: t,
     });
@@ -2403,6 +2548,7 @@ export function FloorCanvas({
     }
     viewPress.current = null;
     setGuides({ gx: [], gy: [] });
+    setMovingClearance(false);
   }
 
   function finishPolygon(closed: boolean, nodes = draftNodes) {
@@ -2432,13 +2578,13 @@ export function FloorCanvas({
       y: null,
       rotation: 0,
       boothNumber: "",
-      name: stampAppearance === "stage" ? "Stage" : "",
+      name: kitStampName(stampKitKind ?? "small") || (stampAppearance === "stage" ? "Stage" : ""),
       sponsorId: null,
       amenityType: null,
       color: null,
       description: "",
       eventDate: "",
-      ...hallDefaults({ appearance: stampAppearance, modelAssetId: stampModelAssetId }),
+      ...hallDefaults({ appearance: stampAppearance, kitKind: stampKitKind, modelAssetId: stampModelAssetId }),
       createdAt: t,
       updatedAt: t,
     });
@@ -2556,6 +2702,23 @@ export function FloorCanvas({
   }, []);
   const pxPerMeterScreen = svgUserToScreen(svgRef.current, cam.w, cam.h);
   void viewportTick;
+  const clearanceSpans = (() => {
+    if (!movingClearance || !canEditObjects) return [];
+    const subject = objectSelectionBounds(pxPerMeterScreen);
+    if (!subject) return [];
+    const others = objects
+      .filter((o) => !selectedSet.has(o.id) && o.id !== VENUE_ID)
+      .map((o) =>
+        o.polygon?.length
+          ? ringBounds(o.polygon)
+          : isPinObject(o) && o.x != null && o.y != null
+            ? amenityBounds(o, pxPerMeterScreen, pinPx)
+            : objectFrameBounds(o),
+      )
+      .filter((b): b is NonNullable<typeof b> => Boolean(b));
+    const maxGap = Math.max(6, Math.min(16, cam.w * 0.22));
+    return nearestClearances(subject, others, maxGap);
+  })();
   const handleR = screenPx(HANDLE_HALF_PX, pxPerMeterScreen);
   const strokeSelected = screenPx(STROKE_SELECTED_PX, pxPerMeterScreen);
   const strokeDefault = screenPx(STROKE_DEFAULT_PX, pxPerMeterScreen);
@@ -2871,39 +3034,30 @@ export function FloorCanvas({
         const boothLabel = (o.boothNumber || sponsor?.boothNumber || "").trim();
         const showName = Boolean(nameLabel) && nameLabel !== boothLabel;
         const showBooth = Boolean(boothLabel);
-        const hasLabel = showName || showBooth;
         const twoLine = showName && showBooth;
-        const sizeLabel = formatSize(b.w, b.h, units);
-        const showSize = screenW > 44 && screenH > 22;
+        const showSize = showObjectSizes && screenW > 44 && screenH > 22;
         const nameFont = Math.min(b.w, b.h) * (showLogo ? 0.12 : twoLine ? 0.13 : 0.18);
         const boothFont = Math.min(b.w, b.h) * (showLogo ? 0.1 : twoLine ? 0.11 : 0.16);
         const nameY = showLogo
           ? b.maxY - b.h * (twoLine ? 0.28 : 0.22)
-          : showSize
-            ? c.y - b.h * (twoLine ? 0.16 : 0.08)
-            : twoLine
-              ? c.y - b.h * 0.08
-              : c.y;
+          : twoLine
+            ? c.y - b.h * 0.08
+            : c.y;
         const boothY = showName
           ? showLogo
             ? b.maxY - b.h * 0.16
-            : showSize
-              ? c.y
-              : c.y + b.h * 0.1
+            : c.y + b.h * 0.1
           : showLogo
             ? b.maxY - b.h * 0.22
-            : showSize
-              ? c.y - b.h * 0.08
-              : c.y;
-        const sizeY = hasLabel
-          ? showLogo
-            ? b.maxY - b.h * 0.06
-            : c.y + b.h * (twoLine ? 0.18 : 0.14)
-          : c.y;
+            : c.y;
         const local = rotateRing(o.polygon, -(o.facingDeg ?? 0));
         const lb = ringBounds(local);
+        const paint = parseShapePaint(o.paint);
+        const fillOverride = paint.fill ?? o.color;
+        const fillOff = paintIsNone(fillOverride);
+        const strokeOff = paintIsNone(paint.stroke);
         return (
-          <g key={o.id} pointerEvents={canEditVenue ? "none" : undefined}>
+          <g key={o.id} pointerEvents={canEditVenue ? "none" : undefined} opacity={paint.opacity}>
             <path
               d={svgPathD(objectShape(o), true)}
               fill={
@@ -2911,11 +3065,28 @@ export function FloorCanvas({
                   ? "rgba(249, 115, 22, 0.45)"
                   : fillUrl
                     ? "transparent"
-                    : o.color || tierFill(sponsor?.tier ?? "")
+                    : fillOff
+                      ? "none"
+                      : fillOverride || tierFill(sponsor?.tier ?? "")
               }
-              fillOpacity={mode === "edit" && !fillUrl ? 0.36 : 0.9}
-              stroke={selected || pulsing ? "#f97316" : highlighted ? "#f97316" : "var(--map-stroke)"}
-              strokeWidth={selected || pulsing ? strokeSelected : strokeDefault}
+              fillOpacity={mode === "edit" && !fillUrl ? 0.36 * paint.fillOpacity : 0.9 * paint.fillOpacity}
+              stroke={
+                selected || pulsing || highlighted
+                  ? "#f97316"
+                  : strokeOff
+                    ? "none"
+                    : paint.stroke && paint.stroke !== "none"
+                      ? paint.stroke
+                      : "var(--map-stroke)"
+              }
+              strokeOpacity={paint.strokeOpacity}
+              strokeWidth={
+                selected || pulsing
+                  ? strokeSelected
+                  : paint.strokeWidth > 0
+                    ? paint.strokeWidth
+                    : strokeDefault
+              }
               className={pulsing ? "map-frame-pulse" : undefined}
             />
             {fillUrl ? (
@@ -2987,18 +3158,14 @@ export function FloorCanvas({
               </text>
             ) : null}
             {showSize ? (
-              <text
-                x={c.x}
-                y={sizeY}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                fontSize={Math.min(b.w, b.h) * 0.1}
-                fill="var(--map-label-muted)"
-                fontFamily="var(--font-mono), ui-monospace, monospace"
-                pointerEvents="none"
-              >
-                {sizeLabel}
-              </text>
+              <ObjectEdgeSizes
+                cx={c.x}
+                cy={c.y}
+                facingDeg={o.facingDeg ?? 0}
+                local={lb}
+                units={units}
+                ppm={pxPerMeterScreen}
+              />
             ) : null}
             {mode === "edit" && Math.min(screenW, screenH) > 18 ? (
               <FacingHint
@@ -3019,15 +3186,16 @@ export function FloorCanvas({
         const highlighted = o.id === highlightId;
         const pulsing = o.id === pulseId;
         const mapPin = isMapPinObject(o);
-        const color = mapPin ? MAP_PIN_META[o.kind].color : AMENITY_COLOR[o.amenityType ?? "info"];
+        const look = resolvedIconPaint(o.paint, o.color);
         const Icon = pinLucideIcon(o.kind, o.amenityType);
-        const s = pinWorldScale(pxPerMeterScreen, mapPin);
+        const s = pinWorldScale(pxPerMeterScreen, mapPin, pinPx);
         const glyph = mapPin ? 1.05 : 1.15;
         return (
           <g
             key={o.id}
             transform={`translate(${o.x} ${o.y}) rotate(${o.rotation ?? 0}) scale(${s})`}
             pointerEvents={canEditVenue ? "none" : undefined}
+            opacity={look.opacity}
           >
             {pulsing ? (
               <circle r={mapPin ? 2.5 : 1.5} fill="none" stroke="#f97316" strokeWidth={0.18} className="map-frame-pulse" />
@@ -3035,20 +3203,36 @@ export function FloorCanvas({
             {mapPin ? (
               <path
                 d="M0 -1.85 C1.15 -1.85 1.7 -0.85 1.7 0.05 C1.7 0.95 0 2.15 0 2.15 C0 2.15 -1.7 0.95 -1.7 0.05 C-1.7 -0.85 -1.15 -1.85 0 -1.85 Z"
-                fill={color}
-                stroke={selected || highlighted ? "#fff" : "var(--map-icon-ring)"}
-                strokeWidth={selected ? 0.2 : 0.12}
+                fill={look.fillNone ? "none" : look.fill}
+                fillOpacity={look.fillOpacity}
+                stroke={look.strokeNone ? "none" : look.stroke}
+                strokeOpacity={look.strokeOpacity}
+                strokeWidth={look.strokeWidth}
               />
             ) : (
               <circle
                 r={1.15}
-                fill={color}
-                stroke={selected || highlighted ? "#fff" : "var(--map-icon-ring)"}
-                strokeWidth={selected ? 0.2 : 0.12}
+                fill={look.fillNone ? "none" : look.fill}
+                fillOpacity={look.fillOpacity}
+                stroke={look.strokeNone ? "none" : look.stroke}
+                strokeOpacity={look.strokeOpacity}
+                strokeWidth={look.strokeWidth}
               />
             )}
+            {selected || highlighted ? (
+              mapPin ? (
+                <path
+                  d="M0 -1.85 C1.15 -1.85 1.7 -0.85 1.7 0.05 C1.7 0.95 0 2.15 0 2.15 C0 2.15 -1.7 0.95 -1.7 0.05 C-1.7 -0.85 -1.15 -1.85 0 -1.85 Z"
+                  fill="none"
+                  stroke="#fff"
+                  strokeWidth={0.16}
+                />
+              ) : (
+                <circle r={1.15} fill="none" stroke="#fff" strokeWidth={0.16} />
+              )
+            ) : null}
             <g transform={`translate(${-glyph / 2} ${mapPin ? -1.28 : -glyph / 2})`}>
-              <Icon width={glyph} height={glyph} color="#fff" strokeWidth={2.35} aria-hidden />
+              <Icon width={glyph} height={glyph} color={look.glyph} strokeWidth={2.35} aria-hidden />
             </g>
           </g>
         );
@@ -3177,6 +3361,9 @@ export function FloorCanvas({
           pointerEvents="none"
         />
       ))}
+      {clearanceSpans.length ? (
+        <ClearanceGuides spans={clearanceSpans} units={units} ppm={pxPerMeterScreen} />
+      ) : null}
       {mode === "edit" && tool === "select"
         ? (() => {
             if (canEditObjects && selectedSet.size > 1) {
@@ -3205,7 +3392,7 @@ export function FloorCanvas({
               canEditObjects && selected?.polygon
                 ? ringBounds(selected.polygon)
                 : canEditObjects && selected && isPinObject(selected)
-                  ? amenityBounds(selected, pxPerMeterScreen)
+                  ? amenityBounds(selected, pxPerMeterScreen, pinPx)
                   : null;
             const shape = canEditObjects && selected?.polygon ? objectShape(selected) : [];
             return (

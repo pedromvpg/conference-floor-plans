@@ -9,7 +9,8 @@ import {
   tessellate,
   type BezierNode,
 } from "./bezier";
-import { metersFromPixels } from "./geometry";
+import { metersFromPixels, openRing } from "./geometry";
+import polygonClipping from "polygon-clipping";
 import type { Calibration, Ring } from "./types";
 
 const LAYER_ATTR = "data-cm-layer";
@@ -186,7 +187,7 @@ export function appendSvgText(markup: string, x: number, y: number, text = "Labe
   el.setAttribute("y", String(y));
   el.setAttribute("fill", SHAPE_STROKE);
   el.setAttribute("font-size", String(fs));
-  el.setAttribute("font-family", "system-ui, sans-serif");
+  el.setAttribute("font-family", "Inter, var(--font-sans), ui-sans-serif, system-ui, sans-serif");
   el.setAttribute("font-weight", weightAttr("bold"));
   el.setAttribute("text-anchor", anchorFromAlign("center"));
   el.setAttribute("dominant-baseline", "middle");
@@ -505,7 +506,7 @@ export function svgVenueWorldLabels(markup: string, cal: Calibration): SvgVenueW
       const [fsx, fsy] = svgLocalToRoot(el, lx, ly + fs);
       const fsWorld = svgToWorld(fsx, fsy, vb, cal);
       const fontSize = Math.hypot(fsWorld.x - origin.x, fsWorld.y - origin.y);
-      if (!(fontSize > 0) || !Number.isFinite(origin.x + origin.y)) continue;
+      if (!Number.isFinite(origin.x + origin.y + fontSize) || fontSize <= 0 || fontSize > 40) continue;
       out.push({
         text,
         x: origin.x,
@@ -516,7 +517,8 @@ export function svgVenueWorldLabels(markup: string, cal: Calibration): SvgVenueW
         rotation: Math.atan2(along.y - origin.y, along.x - origin.x),
       });
     }
-    return out;
+    out.sort((a, b) => b.fontSize - a.fontSize);
+    return out.slice(0, 80);
   } catch {
     return [];
   }
@@ -790,6 +792,135 @@ export function setSvgLayerName(markup: string, id: string, name: string): strin
     el.removeAttribute(NAME_ATTR);
   }
   return new XMLSerializer().serializeToString(root);
+}
+
+export type PathfinderOp = "unite" | "subtract" | "intersect" | "exclude";
+
+export function pathfinderSvgLayers(
+  markup: string,
+  ids: string[],
+  op: PathfinderOp,
+): { markup: string; id: string | null; error?: string } {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (unique.length < 2) return { markup, id: null, error: "Select at least two shapes" };
+  const root = parseRoot(markup);
+  const selected = collectNodes(root).filter((el) => unique.includes(el.getAttribute(LAYER_ATTR) || ""));
+  if (selected.length < 2) return { markup, id: null, error: "Select at least two shapes" };
+  if (selected.some((el) => isLocked(el))) {
+    return { markup, id: null, error: "Unlock selected layers first" };
+  }
+
+  const geoms: polygonClipping.MultiPolygon[] = [];
+  const paintFrom: Element[] = [];
+  for (const el of selected) {
+    const mp = elementMultiPolygon(el);
+    if (!mp?.length) continue;
+    geoms.push(mp);
+    paintFrom.push(el);
+  }
+  if (geoms.length < 2) {
+    return { markup, id: null, error: "Pathfinder needs two closed shapes" };
+  }
+
+  let result: polygonClipping.MultiPolygon;
+  try {
+    if (op === "unite") result = polygonClipping.union(geoms[0], ...geoms.slice(1));
+    else if (op === "intersect") result = polygonClipping.intersection(geoms[0], ...geoms.slice(1));
+    else if (op === "exclude") result = polygonClipping.xor(geoms[0], ...geoms.slice(1));
+    else result = polygonClipping.difference(geoms[0], ...geoms.slice(1));
+  } catch {
+    return { markup, id: null, error: "Could not combine those shapes" };
+  }
+  const d = pathDFromMultiPolygon(result);
+  if (!d) return { markup, id: null, error: "Those shapes do not overlap" };
+
+  const keep = selected[0];
+  const parent = keep.parentElement;
+  if (!parent) return { markup, id: null, error: "Could not combine those shapes" };
+  const path = root.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
+  copyShapePaint(paintFrom[0], path);
+  path.setAttribute("d", d);
+  path.setAttribute("fill-rule", "evenodd");
+  path.setAttribute(NAME_ATTR, pathfinderName(op, keep));
+  parent.insertBefore(path, keep);
+  for (const el of selected) el.remove();
+  ensureLayerIds(root);
+  return {
+    markup: new XMLSerializer().serializeToString(root),
+    id: path.getAttribute(LAYER_ATTR),
+  };
+}
+
+function pathfinderName(op: PathfinderOp, keep: Element): string {
+  const existing = (keep.getAttribute(NAME_ATTR) || "").trim();
+  if (existing) return existing;
+  if (op === "unite") return "Unite";
+  if (op === "subtract") return "Subtract";
+  if (op === "intersect") return "Intersect";
+  return "Exclude";
+}
+
+function copyShapePaint(from: Element, to: Element) {
+  for (const name of [
+    "fill",
+    "stroke",
+    "stroke-width",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "stroke-opacity",
+    "fill-opacity",
+    "opacity",
+  ]) {
+    const v = from.getAttribute(name);
+    if (v) to.setAttribute(name, v);
+  }
+  if (!to.hasAttribute("fill")) to.setAttribute("fill", SHAPE_FILL);
+  if (!to.hasAttribute("stroke")) to.setAttribute("stroke", SHAPE_STROKE);
+  if (!to.hasAttribute("stroke-width")) to.setAttribute("stroke-width", "2");
+}
+
+function clipClose(ring: Ring): polygonClipping.Ring | null {
+  const pts = openRing(ring).filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+  if (pts.length < 3) return null;
+  const closed: polygonClipping.Ring = pts.map(([x, y]) => [x, y]);
+  closed.push([pts[0][0], pts[0][1]]);
+  return closed;
+}
+
+function elementMultiPolygon(el: Element): polygonClipping.MultiPolygon | null {
+  const kind = localName(el);
+  if (kind === "g" || kind === "a") {
+    const out: polygonClipping.MultiPolygon = [];
+    for (const kid of graphicChildren(el)) {
+      const mp = elementMultiPolygon(kid);
+      if (mp) out.push(...mp);
+    }
+    return out.length ? out : null;
+  }
+  if (kind === "text" || kind === "image" || kind === "use") return null;
+  const local = elementPolyline(el);
+  if (!local?.closed || local.points.length < 3) return null;
+  const ring = clipClose(local.points.map(([x, y]) => svgLocalToRoot(el, x, y)));
+  if (!ring) return null;
+  return [[ring]];
+}
+
+function pathDFromMultiPolygon(mp: polygonClipping.MultiPolygon): string {
+  const parts: string[] = [];
+  for (const poly of mp) {
+    for (const ring of poly) {
+      const pts = openRing(ring as Ring);
+      if (pts.length < 3) continue;
+      parts.push(
+        `${pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${roundPathCoord(x)} ${roundPathCoord(y)}`).join("")}Z`,
+      );
+    }
+  }
+  return parts.join("");
+}
+
+function roundPathCoord(n: number): number {
+  return Math.round(n * 1000) / 1000;
 }
 
 export function groupSvgLayers(

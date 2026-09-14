@@ -454,3 +454,86 @@ export function snapTranslation(
   );
   return { dx: ndx, dy: ndy, gx, gy };
 }
+
+export type Aabb = { minX: number; minY: number; maxX: number; maxY: number };
+
+export type ClearanceSpan = {
+  dir: "left" | "right" | "up" | "down";
+  gap: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+};
+
+/** Nearest positive gap from `subject` to other axis-aligned boxes, one per side. */
+export function nearestClearances(subject: Aabb, others: Aabb[], maxGap: number): ClearanceSpan[] {
+  const eps = 1e-6;
+  let left: ClearanceSpan | null = null;
+  let right: ClearanceSpan | null = null;
+  let up: ClearanceSpan | null = null;
+  let down: ClearanceSpan | null = null;
+
+  const keep = (cur: ClearanceSpan | null, next: ClearanceSpan) =>
+    !cur || next.gap < cur.gap ? next : cur;
+
+  for (const o of others) {
+    const overlapY = Math.min(subject.maxY, o.maxY) - Math.max(subject.minY, o.minY);
+    const overlapX = Math.min(subject.maxX, o.maxX) - Math.max(subject.minX, o.minX);
+    if (overlapX > eps && overlapY > eps) continue;
+
+    if (overlapY > eps) {
+      const midY = (Math.max(subject.minY, o.minY) + Math.min(subject.maxY, o.maxY)) / 2;
+      const rightGap = o.minX - subject.maxX;
+      const leftGap = subject.minX - o.maxX;
+      if (rightGap >= -eps && rightGap <= maxGap) {
+        right = keep(right, {
+          dir: "right",
+          gap: Math.max(0, rightGap),
+          x1: subject.maxX,
+          y1: midY,
+          x2: o.minX,
+          y2: midY,
+        });
+      }
+      if (leftGap >= -eps && leftGap <= maxGap) {
+        left = keep(left, {
+          dir: "left",
+          gap: Math.max(0, leftGap),
+          x1: o.maxX,
+          y1: midY,
+          x2: subject.minX,
+          y2: midY,
+        });
+      }
+    }
+
+    if (overlapX > eps) {
+      const midX = (Math.max(subject.minX, o.minX) + Math.min(subject.maxX, o.maxX)) / 2;
+      const downGap = o.minY - subject.maxY;
+      const upGap = subject.minY - o.maxY;
+      if (downGap >= -eps && downGap <= maxGap) {
+        down = keep(down, {
+          dir: "down",
+          gap: Math.max(0, downGap),
+          x1: midX,
+          y1: subject.maxY,
+          x2: midX,
+          y2: o.minY,
+        });
+      }
+      if (upGap >= -eps && upGap <= maxGap) {
+        up = keep(up, {
+          dir: "up",
+          gap: Math.max(0, upGap),
+          x1: midX,
+          y1: o.maxY,
+          x2: midX,
+          y2: subject.minY,
+        });
+      }
+    }
+  }
+
+  return [left, right, up, down].filter((s): s is ClearanceSpan => Boolean(s));
+}
