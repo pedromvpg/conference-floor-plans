@@ -58,6 +58,7 @@ import { displayLogoUrl } from "@/lib/hall";
 import { useMapViewPrefs } from "@/lib/use-map-view-prefs";
 import { DEFAULT_FLOOR_BASEMAP, BASEMAP_COORD_STEP, bearingSliderValue, parseLatLngPaste, roundBasemapCoord, wrapBearingDeg } from "@/lib/basemap";
 import { withInheritedFloorSettings, inheritedSettingsTargetId } from "@/lib/floor-settings";
+import { shouldSkipVenueSvgFetch, skipAfterVenueSvgPersist, type VenueSvgFetchSkip } from "@/lib/venue-svg-load";
 import { floorSizeMeters, metersFromPixels, ringBounds, scaleRingToSize } from "@/lib/geometry";
 import { commitShape, objectShape, rotateBezier, translateBezier, type BezierNode } from "@/lib/bezier";
 import { formatArea, formatSize, fromMeters, toMeters } from "@/lib/units";
@@ -444,7 +445,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const futureRef = useRef<DraftSlice[]>([]);
   const coalesceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const versionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const skipSvgFetchUrl = useRef<string | null>(null);
+  const skipSvgFetch = useRef<VenueSvgFetchSkip | null>(null);
+  const venueSvgByFloorRef = useRef(new Map<string, string>());
+  const loadedFloorIdRef = useRef<string | null>(null);
+  const venueSvgRef = useRef<string | null>(null);
+  const activeFloorIdRef = useRef("");
   const venueSvgSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const objectClipboardRef = useRef<MapObject[] | null>(null);
   const pasteGenRef = useRef(1);
@@ -465,6 +470,8 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   );
   const floorRecord = floorsSorted.find((f) => f.id === floorId) ?? floorsSorted[0];
   const floor = floorRecord ? withInheritedFloorSettings(floorRecord, floorsSorted) : undefined;
+  venueSvgRef.current = venueSvg;
+  activeFloorIdRef.current = floor?.id ?? "";
   const objects = bundle.objects.filter((o) => o.floorId === floor?.id);
   const venueSelected = selectedIds.length === 1 && selectedIds[0] === VENUE_ID;
   const multiSelected = selectedIds.filter((id) => id !== VENUE_ID).length > 1;
@@ -565,25 +572,51 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   }, [viewMode, slug]);
 
   useEffect(() => {
+    const id = floor?.id;
     const url = floor?.underlayUrl;
-    if (!url) {
+    if (!id) {
       setVenueSvg(null);
       return;
     }
-    if (skipSvgFetchUrl.current === url) return;
+    const floorChanged = loadedFloorIdRef.current !== id;
+    if (floorChanged) {
+      setSelectedVenueEl(null);
+      setSelectedVenueEls([]);
+      setVenueSvg(venueSvgByFloorRef.current.get(id) ?? null);
+    }
+    loadedFloorIdRef.current = id;
+    if (!url) {
+      if (!venueSvgByFloorRef.current.has(id)) setVenueSvg(null);
+      return;
+    }
+    if (
+      shouldSkipVenueSvgFetch({
+        floorChanged,
+        floorId: id,
+        underlayUrl: url,
+        skip: skipSvgFetch.current,
+      })
+    ) {
+      return;
+    }
     let cancelled = false;
     void fetch(url)
       .then((res) => (res.ok ? res.text() : Promise.reject(new Error("Could not load drawing"))))
       .then((text) => {
         if (cancelled || !text.includes("<svg")) return;
+        let next = text;
         try {
-          setVenueSvg(serializeSvg(text));
+          next = serializeSvg(text);
         } catch {
-          setVenueSvg(text);
+          next = text;
         }
+        venueSvgByFloorRef.current.set(id, next);
+        if (activeFloorIdRef.current === id) setVenueSvg(next);
       })
       .catch(() => {
-        if (!cancelled) setVenueSvg(null);
+        if (!cancelled && activeFloorIdRef.current === id && !venueSvgByFloorRef.current.has(id)) {
+          setVenueSvg(null);
+        }
       });
     return () => {
       cancelled = true;
@@ -1011,7 +1044,13 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     });
     if (!res.ok) throw new Error(await res.text());
     const updated = (await res.json()) as Floor;
-    skipSvgFetchUrl.current = updated.underlayUrl;
+    venueSvgByFloorRef.current.set(targetFloorId, svg);
+    skipSvgFetch.current = skipAfterVenueSvgPersist({
+      viewingFloorId: activeFloorIdRef.current,
+      targetFloorId,
+      hasLocalSvg: Boolean(venueSvgByFloorRef.current.get(targetFloorId)),
+      underlayUrl: updated.underlayUrl ?? "",
+    });
     setBundle((b) => ({
       ...b,
       floors: b.floors.map((f) => (f.id === updated.id ? updated : f)),
@@ -1053,6 +1092,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     const id = floor?.id;
     if (!id) return;
     markHistory();
+    venueSvgByFloorRef.current.set(id, next);
     setVenueSvg(next);
     setSaveLabel("Saving…");
     if (venueSvgSaveTimer.current) clearTimeout(venueSvgSaveTimer.current);
@@ -2621,6 +2661,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
               />
             ) : (
               <FloorCanvas
+                key={floor.id}
                 mode="edit"
                 floor={floor}
                 objects={objects}
@@ -2680,7 +2721,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                 selectedVenueElementIds={sidebarTab === "venue" ? selectedVenueEls : []}
                 onHoverVenueElement={setHoverLayerId}
                 onSelectVenueElement={(id, additive) => selectVenueLayer(id, additive)}
-                onPreviewVenueSvg={setVenueSvg}
+                onPreviewVenueSvg={(svg) => {
+                  const id = activeFloorIdRef.current;
+                  if (id) venueSvgByFloorRef.current.set(id, svg);
+                  setVenueSvg(svg);
+                }}
                 onCommitVenueSvg={(svg) => commitVenueSvg(svg)}
                 venueStampHref={venueStampHref}
                 venueStampAspect={venueStampAspect}
