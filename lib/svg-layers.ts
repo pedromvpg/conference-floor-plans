@@ -1809,10 +1809,26 @@ function writeOpacityAttr(el: Element, name: "fill-opacity" | "stroke-opacity", 
 function opaqueColor(value: string): string | null {
   const v = value.trim();
   if (/^#[0-9a-fA-F]{8}$/.test(v)) return v.slice(0, 7);
+  if (/^#[0-9a-fA-F]{6}$/.test(v)) return v;
   const rgb = v.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
-  if (!rgb) return null;
-  const hex = (n: string) => Number(n).toString(16).padStart(2, "0");
-  return `#${hex(rgb[1])}${hex(rgb[2])}${hex(rgb[3])}`;
+  if (rgb) {
+    const hex = (n: string) => Number(n).toString(16).padStart(2, "0");
+    return `#${hex(rgb[1])}${hex(rgb[2])}${hex(rgb[3])}`;
+  }
+  const hsl = v.match(/^hsla?\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%/i);
+  if (!hsl) return null;
+  const h = Number(hsl[1]);
+  const s = Number(hsl[2]) / 100;
+  const l = Number(hsl[3]) / 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const c = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * c)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
 }
 
 export type SvgElementPaint = {
@@ -1853,7 +1869,8 @@ export function setSvgElementPaint(
   const el = findLayer(root, id);
   if (!el) return markup;
   if (paint.fill !== undefined) {
-    setPaintProp(el, "fill", paint.fill === "" ? "none" : paint.fill);
+    const raw = paint.fill === "" ? "none" : paint.fill;
+    setPaintProp(el, "fill", raw === "none" ? "none" : opaqueColor(raw) ?? raw);
   }
   if (paint.stroke !== undefined) {
     setPaintProp(el, "stroke", paint.stroke === "" ? "none" : paint.stroke);

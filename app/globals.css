@@ -94,7 +94,7 @@
   --map-label-muted: #696969;
   --map-venue-stroke: #b0b0b0;
   --map-geom-l: 68%;
-  --map-geom-a: 0.48;
+  --map-geom-a: 1;
 }
 
 .dark {
@@ -142,7 +142,7 @@
   --map-label-muted: #8a8a8a;
   --map-venue-stroke: #555555;
   --map-geom-l: 38%;
-  --map-geom-a: 0.38;
+  --map-geom-a: 1;
 }
 
 @layer base {

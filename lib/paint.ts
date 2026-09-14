@@ -37,7 +37,23 @@ export function paintToHex(value: string | null | undefined, fallback: string): 
     const hex = (n: string) => Number(n).toString(16).padStart(2, "0");
     return `#${hex(rgb[1])}${hex(rgb[2])}${hex(rgb[3])}`;
   }
+  const hsl = v.match(/^hsla?\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%/i);
+  if (hsl) return hslToHex(Number(hsl[1]), Number(hsl[2]), Number(hsl[3]));
   return fallback;
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const sat = s / 100;
+  const lig = l / 100;
+  const a = sat * Math.min(lig, 1 - lig);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const c = lig - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * c)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
 }
 
 function clamp01(n: number): number {
@@ -119,7 +135,7 @@ export function resolvedIconPaint(
     : override && !override.startsWith("var(")
       ? paintToHex(override, themeIconFillHex(tone))
       : themeIconFillHex(tone);
-  const fill = fillNone ? "none" : override && /^#|^rgb/.test(override) ? fillHex : THEME_ICON_FILL;
+  const fill = fillNone ? "none" : fillHex;
   const strokeNone = p.stroke == null || paintIsNone(p.stroke) || p.strokeWidth <= 0;
   const strokeHex = strokeNone ? themeIconFillHex(tone) : paintToHex(p.stroke, "#0a0a0a");
   const glyphHex = contrastingGlyph(fillHex);

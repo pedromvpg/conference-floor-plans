@@ -51,9 +51,10 @@ import {
 } from "@/lib/geometry";
 import { formatLength, formatSize, gridSize, snap } from "@/lib/units";
 import { MapRulers } from "@/components/map/MapRulers";
+import { useTheme } from "@/components/theme-provider";
 import { pinLucideIcon } from "@/lib/pin-icons";
-import { paintIsNone, parseShapePaint, resolvedIconPaint } from "@/lib/paint";
-import { tierFill } from "@/lib/colors";
+import { paintIsNone, paintToHex, parseShapePaint, resolvedIconPaint } from "@/lib/paint";
+import { boothFillHex } from "@/lib/colors";
 import { newId, nowIso } from "@/lib/store";
 import { stampPinObject } from "@/lib/new-object";
 import { hallDefaults } from "@/lib/appearance";
@@ -597,6 +598,8 @@ export function FloorCanvas({
   onSelectedVertexChange,
   showUnderlay = true,
 }: Props) {
+  const { resolvedTheme } = useTheme();
+  const mapTone = resolvedTheme === "light" ? "light" : "dark";
   const svgRef = useRef<SVGSVGElement>(null);
   const nestRef = useRef<SVGSVGElement>(null);
   const lastVenuePreview = useRef<string | null>(null);
@@ -3067,9 +3070,11 @@ export function FloorCanvas({
                     ? "transparent"
                     : fillOff
                       ? "none"
-                      : fillOverride || tierFill(sponsor?.tier ?? "")
+                      : fillOverride && /^#|^rgb|^hsl/i.test(fillOverride)
+                        ? paintToHex(fillOverride, "#ecece8")
+                        : boothFillHex(o.color, sponsor?.tier ?? "")
               }
-              fillOpacity={mode === "edit" && !fillUrl ? 0.36 * paint.fillOpacity : 0.9 * paint.fillOpacity}
+              fillOpacity={paint.fillOpacity}
               stroke={
                 selected || pulsing || highlighted
                   ? "#f97316"
@@ -3099,7 +3104,7 @@ export function FloorCanvas({
                   height={lb.h}
                   transform={`rotate(${o.facingDeg ?? 0} ${c.x} ${c.y})`}
                   preserveAspectRatio="xMidYMid slice"
-                  opacity={mode === "edit" ? 0.88 : 1}
+                  opacity={paint.fillOpacity}
                 />
                 {highlighted || pulsing ? (
                   <path d={svgPathD(objectShape(o), true)} fill="rgba(249, 115, 22, 0.28)" />
@@ -3186,7 +3191,7 @@ export function FloorCanvas({
         const highlighted = o.id === highlightId;
         const pulsing = o.id === pulseId;
         const mapPin = isMapPinObject(o);
-        const look = resolvedIconPaint(o.paint, o.color);
+        const look = resolvedIconPaint(o.paint, o.color, mapTone);
         const Icon = pinLucideIcon(o.kind, o.amenityType);
         const s = pinWorldScale(pxPerMeterScreen, mapPin, pinPx);
         const glyph = mapPin ? 1.05 : 1.15;
@@ -3196,6 +3201,7 @@ export function FloorCanvas({
             transform={`translate(${o.x} ${o.y}) rotate(${o.rotation ?? 0}) scale(${s})`}
             pointerEvents={canEditVenue ? "none" : undefined}
             opacity={look.opacity}
+            style={{ filter: "drop-shadow(0 1px 1.25px rgb(0 0 0 / 0.35))" }}
           >
             {pulsing ? (
               <circle r={mapPin ? 2.5 : 1.5} fill="none" stroke="#f97316" strokeWidth={0.18} className="map-frame-pulse" />
@@ -3203,7 +3209,7 @@ export function FloorCanvas({
             {mapPin ? (
               <path
                 d="M0 -1.85 C1.15 -1.85 1.7 -0.85 1.7 0.05 C1.7 0.95 0 2.15 0 2.15 C0 2.15 -1.7 0.95 -1.7 0.05 C-1.7 -0.85 -1.15 -1.85 0 -1.85 Z"
-                fill={look.fillNone ? "none" : look.fill}
+                fill={look.fillNone ? "none" : look.fillHex}
                 fillOpacity={look.fillOpacity}
                 stroke={look.strokeNone ? "none" : look.stroke}
                 strokeOpacity={look.strokeOpacity}
@@ -3212,7 +3218,7 @@ export function FloorCanvas({
             ) : (
               <circle
                 r={1.15}
-                fill={look.fillNone ? "none" : look.fill}
+                fill={look.fillNone ? "none" : look.fillHex}
                 fillOpacity={look.fillOpacity}
                 stroke={look.strokeNone ? "none" : look.stroke}
                 strokeOpacity={look.strokeOpacity}
