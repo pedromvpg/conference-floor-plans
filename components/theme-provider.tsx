@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { useServerInsertedHTML } from "next/navigation";
 
 export type Theme = "light" | "dark";
@@ -13,7 +13,8 @@ type ThemeContextValue = {
 };
 
 const STORAGE_KEY = "theme";
-const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("${STORAGE_KEY}");var d=document.documentElement;if(t==="light"){d.classList.remove("dark");d.classList.add("light");d.style.colorScheme="light"}else{d.classList.add("dark");d.classList.remove("light");d.style.colorScheme="dark"}}catch(e){}})()`;
+const THEME_EVENT = "conference-floor-plans-theme";
+export const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem("${STORAGE_KEY}");var d=document.documentElement;if(t==="light"){d.classList.remove("dark");d.classList.add("light");d.style.colorScheme="light"}else{d.classList.add("dark");d.classList.remove("light");d.style.colorScheme="dark"}}catch(e){}})()`;
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 function applyTheme(theme: Theme) {
@@ -21,6 +22,37 @@ function applyTheme(theme: Theme) {
   root.classList.remove("light", "dark");
   root.classList.add(theme);
   root.style.colorScheme = theme;
+}
+
+function getSnapshot(): Theme {
+  return document.documentElement.classList.contains("light") ? "light" : "dark";
+}
+
+function getServerSnapshot(): Theme {
+  return "dark";
+}
+
+function subscribe(onStoreChange: () => void) {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === STORAGE_KEY) onStoreChange();
+  };
+  window.addEventListener("storage", onStorage);
+  window.addEventListener(THEME_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener(THEME_EVENT, onStoreChange);
+  };
+}
+
+function writeTheme(next: string) {
+  const theme: Theme = next === "light" ? "light" : "dark";
+  try {
+    localStorage.setItem(STORAGE_KEY, theme);
+  } catch {
+    /* ignore quota / private mode */
+  }
+  applyTheme(theme);
+  window.dispatchEvent(new Event(THEME_EVENT));
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -31,30 +63,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     return <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />;
   });
 
-  const [theme, setThemeState] = useState<Theme>("dark");
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      const next = stored === "light" ? "light" : "dark";
-      setThemeState(next);
-      applyTheme(next);
-    } catch {
-      applyTheme("dark");
-    }
-  }, []);
-
-  const setTheme = useCallback((next: string) => {
-    const theme: Theme = next === "light" ? "light" : "dark";
-    setThemeState(theme);
-    try {
-      localStorage.setItem(STORAGE_KEY, theme);
-    } catch {
-      /* ignore quota / private mode */
-    }
-    applyTheme(theme);
-  }, []);
-
+  const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const setTheme = useCallback((next: string) => writeTheme(next), []);
   const value = useMemo(
     () => ({ theme, resolvedTheme: theme, setTheme, themes: ["light", "dark"] as Theme[] }),
     [theme, setTheme],
@@ -64,12 +74,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useTheme() {
-  return (
-    useContext(ThemeContext) ?? {
-      theme: "dark" as const,
-      resolvedTheme: "dark" as const,
-      setTheme: () => {},
-      themes: ["light", "dark"] as Theme[],
-    }
-  );
+  const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const setTheme = useCallback((next: string) => writeTheme(next), []);
+  return {
+    theme,
+    resolvedTheme: theme,
+    setTheme,
+    themes: ["light", "dark"] as Theme[],
+  };
 }

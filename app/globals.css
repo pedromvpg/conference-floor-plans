@@ -51,91 +51,95 @@
 
 :root {
   color-scheme: light;
-  --background: #f4f4f1;
-  --foreground: #161616;
+  --background: #fcfcfc;
+  --foreground: #0a0a0a;
   --card: #ffffff;
-  --card-foreground: #161616;
+  --card-foreground: #0a0a0a;
   --popover: #ffffff;
-  --popover-foreground: #161616;
-  --primary: #f97316;
-  --primary-foreground: #161616;
-  --secondary: #ecece8;
-  --secondary-foreground: #161616;
-  --muted: #ecece8;
-  --muted-foreground: #6a6a64;
-  --accent: #ecece8;
-  --accent-foreground: #c2410c;
+  --popover-foreground: #0a0a0a;
+  --primary: #ff9500;
+  --primary-foreground: #0a0a0a;
+  --secondary: #f0f0f0;
+  --secondary-foreground: #0a0a0a;
+  --muted: #f0f0f0;
+  --muted-foreground: #696969;
+  --accent: #f0f0f0;
+  --accent-foreground: #f97316;
   --destructive: #dc2626;
-  --border: #d4d4ce;
-  --input: #d4d4ce;
+  --border: #e5e5e5;
+  --input: #e5e5e5;
   --ring: #f97316;
   --chart-1: #f97316;
   --chart-2: #888888;
   --chart-3: #666666;
   --chart-4: #444444;
   --chart-5: #222222;
-  --radius: 8px;
-  --sidebar: #ecece8;
-  --sidebar-foreground: #161616;
+  --radius: 16px;
+  --sidebar: #f0f0f0;
+  --sidebar-foreground: #0a0a0a;
   --sidebar-primary: #f97316;
-  --sidebar-primary-foreground: #161616;
-  --sidebar-accent: #e2e2dc;
-  --sidebar-accent-foreground: #c2410c;
-  --sidebar-border: #d4d4ce;
+  --sidebar-primary-foreground: #0a0a0a;
+  --sidebar-accent: #e8e8e8;
+  --sidebar-accent-foreground: #f97316;
+  --sidebar-border: #e5e5e5;
   --sidebar-ring: #f97316;
-  --map-bg: #f4f4f1;
-  --map-grid: #d4d4ce;
-  --map-void: #e4e4de;
-  --map-stroke: #b8b8b0;
+  --map-bg: #fcfcfc;
+  --map-grid: #e5e5e5;
+  --map-void: #f0f0f0;
+  --map-stroke: #c8c8c8;
   --map-icon-ring: #ffffff;
-  --map-label: #161616;
-  --map-label-muted: #6a6a64;
-  --map-venue-stroke: #a8a8a0;
+  --map-icon-fill: #fcfcfc;
+  --map-icon-glyph: #0a0a0a;
+  --map-label: #0a0a0a;
+  --map-label-muted: #696969;
+  --map-venue-stroke: #b0b0b0;
   --map-geom-l: 68%;
   --map-geom-a: 0.48;
 }
 
 .dark {
   color-scheme: dark;
-  --background: #000000;
-  --foreground: #ffffff;
-  --card: #111111;
-  --card-foreground: #ffffff;
-  --popover: #111111;
-  --popover-foreground: #ffffff;
-  --primary: #f97316;
-  --primary-foreground: #000000;
-  --secondary: #111111;
-  --secondary-foreground: #ffffff;
-  --muted: #111111;
-  --muted-foreground: #888888;
-  --accent: #111111;
+  --background: #0a0a0a;
+  --foreground: #fcfcfc;
+  --card: #141414;
+  --card-foreground: #fcfcfc;
+  --popover: #141414;
+  --popover-foreground: #fcfcfc;
+  --primary: #ff9500;
+  --primary-foreground: #0a0a0a;
+  --secondary: #171717;
+  --secondary-foreground: #fcfcfc;
+  --muted: #171717;
+  --muted-foreground: #8a8a8a;
+  --accent: #171717;
   --accent-foreground: #f97316;
   --destructive: #ef4444;
-  --border: #333333;
-  --input: #333333;
+  --border: #262626;
+  --input: #262626;
   --ring: #f97316;
   --chart-1: #f97316;
   --chart-2: #888888;
   --chart-3: #666666;
   --chart-4: #444444;
   --chart-5: #222222;
-  --radius: 8px;
-  --sidebar: #161616;
-  --sidebar-foreground: #ffffff;
+  --radius: 16px;
+  --sidebar: #111111;
+  --sidebar-foreground: #fcfcfc;
   --sidebar-primary: #f97316;
-  --sidebar-primary-foreground: #000000;
-  --sidebar-accent: #222222;
+  --sidebar-primary-foreground: #0a0a0a;
+  --sidebar-accent: #1a1a1a;
   --sidebar-accent-foreground: #f97316;
-  --sidebar-border: #2e2e2e;
+  --sidebar-border: #262626;
   --sidebar-ring: #f97316;
-  --map-bg: #000000;
-  --map-grid: #333333;
-  --map-void: #111111;
-  --map-stroke: #3a3a3a;
-  --map-icon-ring: #111111;
-  --map-label: #f4f4f1;
-  --map-label-muted: #888888;
+  --map-bg: #0a0a0a;
+  --map-grid: #262626;
+  --map-void: #141414;
+  --map-stroke: #333333;
+  --map-icon-ring: #141414;
+  --map-icon-fill: #0a0a0a;
+  --map-icon-glyph: #fcfcfc;
+  --map-label: #fcfcfc;
+  --map-label-muted: #8a8a8a;
   --map-venue-stroke: #555555;
   --map-geom-l: 38%;
   --map-geom-a: 0.38;
@@ -244,6 +248,11 @@
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.1);
 }
 
+.map-pin-mark {
+  background: var(--map-icon-fill);
+  color: var(--map-icon-glyph);
+}
+
 .chrome-row {
   display: flex;
   width: calc(100% - 8px);
@@ -293,7 +302,8 @@
 }
 
 .chrome-pill[data-active="true"] {
-  background: var(--muted);
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--background));
   color: var(--foreground);
 }
 
