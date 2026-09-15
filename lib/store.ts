@@ -71,11 +71,35 @@ export interface Store {
   putFile(path: string, body: Buffer, contentType: string): Promise<string>;
 }
 
+const SUPABASE_ENV = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+] as const;
+
+function envPresent(name: string): boolean {
+  return Boolean(process.env[name]?.trim());
+}
+
+export function missingSupabaseEnv(): string[] {
+  return SUPABASE_ENV.filter((name) => !envPresent(name));
+}
+
 export function isSupabaseConfigured(): boolean {
-  return Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL &&
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY &&
-      process.env.SUPABASE_SERVICE_ROLE_KEY,
+  return missingSupabaseEnv().length === 0;
+}
+
+/** File-backed `.data/` store. Never on Vercel — the function FS is read-only. */
+export function canUseDemoStore(): boolean {
+  return !process.env.VERCEL && !isSupabaseConfigured();
+}
+
+export function supabaseRequiredError(): Error {
+  const missing = missingSupabaseEnv();
+  return new Error(
+    missing.length
+      ? `Supabase is not configured on this deployment (missing ${missing.join(", ")}). Set those Vercel env vars for Production/Preview and redeploy. Local .data/ storage cannot save on Vercel.`
+      : "Supabase client could not be created.",
   );
 }
 

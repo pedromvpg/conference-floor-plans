@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { createServerSupabase } from "./supabase/server";
-import { isSupabaseConfigured } from "./store";
+import { canUseDemoStore } from "./store";
 import { getStore } from "./get-store";
 
 export const DEMO_COOKIE = "maps_demo_session";
@@ -8,7 +8,7 @@ export const DEMO_COOKIE = "maps_demo_session";
 export type SessionUser = { email: string; demo: boolean };
 
 export async function getSessionUser(): Promise<SessionUser | null> {
-  if (!isSupabaseConfigured()) {
+  if (canUseDemoStore()) {
     const jar = await cookies();
     if (jar.get(DEMO_COOKIE)?.value === "1") {
       return { email: "demo@local", demo: true };

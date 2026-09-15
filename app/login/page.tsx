@@ -3,10 +3,12 @@ import { LoginForm } from "@/components/auth/LoginForm";
 import { HallSchematic } from "@/components/marketing/HallSchematic";
 import { SiteHeader } from "@/components/chrome/SiteHeader";
 import { Button } from "@/components/ui/button";
-import { isSupabaseConfigured } from "@/lib/store";
+import { canUseDemoStore, isSupabaseConfigured, missingSupabaseEnv } from "@/lib/store";
 
 export default function LoginPage() {
-  const demo = !isSupabaseConfigured();
+  const demo = canUseDemoStore();
+  const needsSupabase = !demo && !isSupabaseConfigured();
+  const missing = missingSupabaseEnv();
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <SiteHeader
@@ -24,10 +26,12 @@ export default function LoginPage() {
           <p className="mt-4 max-w-md text-[16px] leading-relaxed text-muted-foreground">
             {demo
               ? "Local demo — no Supabase. Production uses invited email magic links."
-              : "Trace halls, bind sponsors, publish a map the attendee app can embed."}
+              : needsSupabase
+                ? `This Vercel deployment cannot save until you set ${missing.join(", ")} in project Environment Variables (Production and Preview) and redeploy. The local .data/ file store is read-only on Vercel.`
+                : "Trace halls, bind sponsors, publish a map the attendee app can embed."}
           </p>
           <div className="mt-10">
-            <LoginForm demo={demo} />
+            {needsSupabase ? null : <LoginForm demo={demo} />}
           </div>
         </div>
         <div className="hidden overflow-hidden p-6 lg:block">
