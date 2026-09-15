@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = {
   title: "Docs — Conference Floor Plans",
-  description: "Studio workflow, viewer query params, embed contract, and hall coordinates.",
+  description: "Studio workflow, viewer query params, embed contract, hall coordinates, and local vs Vercel testing.",
 };
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ const toc = [
   ["#embed", "Embed"],
   ["#json", "map.json"],
   ["#hall", "Hall space"],
-  ["#run", "Run it"],
+  ["#run", "Local vs deploy"],
 ] as const;
 
 const studioNav = [
@@ -151,9 +151,9 @@ export default async function DocsPage() {
             How to draw, publish, and embed a map.
           </h1>
           <p className="mt-5 max-w-2xl text-[16px] leading-relaxed text-muted-foreground">
-            Editor routes, keyboard tools, viewer query strings, iframe embed, GeoJSON, and hall axes. This
-            studio does not share a database with the attendee app — publish a snapshot, then embed or fetch
-            map.json.
+            Editor routes, keyboard tools, viewer query strings, iframe embed, GeoJSON, hall axes, and how to
+            run the app locally versus on Vercel. This studio does not share a database with the attendee app —
+            publish a snapshot, then embed or fetch map.json.
           </p>
           <div className="mt-6 flex flex-wrap gap-2">
             <Button asChild variant="inverse" size="sm">
@@ -352,30 +352,105 @@ export default async function DocsPage() {
 
           <section id="run" className="mt-16 scroll-mt-28">
             <h2 className="border-b border-border pb-3 text-[13px] font-medium tracking-[0.16em] text-foreground/70 uppercase">
-              Run it
+              Local vs deploy
             </h2>
-            <div className="mt-6 grid gap-4 lg:grid-cols-2">
-              <div className="rounded-xl border border-border p-5">
-                <h3 className="text-[16px] font-medium">Local demo</h3>
-                <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">
-                  No Supabase. Draft lives in <Code>.data/</Code>. Bitcoin Asia 2026 is seeded at{" "}
-                  <Code>/e/bhk26</Code>.
-                </p>
-                <pre className="mt-4 overflow-x-auto rounded-lg bg-muted p-3 font-mono text-[12.5px] text-foreground/80">
-                  {`npm install
-npm run dev`}
-                </pre>
-              </div>
-              <div className="rounded-xl border border-border p-5">
-                <h3 className="text-[16px] font-medium">Production</h3>
-                <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">
-                  Vercel + your Supabase project. Run <Code>supabase/schema.sql</Code>, public Storage bucket{" "}
-                  <Code>maps</Code>, magic-link redirect <Code>/auth/callback</Code>, allowlist via{" "}
-                  <Code>allowed_editors</Code> or <Code>ALLOWED_EMAILS</Code>. Airtable tokens stay in env, not on
-                  the event row.
-                </p>
-              </div>
+            <p className="mt-5 max-w-2xl text-[15px] leading-relaxed text-muted-foreground">
+              Two storage modes. Local demo writes a JSON file on your machine. Vercel cannot do that (the function
+              filesystem is read-only), so the hosted app must use Supabase. Same UI; different login and
+              persistence.
+            </p>
+            <div className="mt-6 overflow-x-auto rounded-xl border border-border">
+              <table className="w-full min-w-[36rem] text-left text-[14px]">
+                <thead className="bg-muted text-[12px] tracking-wide text-muted-foreground uppercase">
+                  <tr>
+                    <th className="px-4 py-3 font-medium"> </th>
+                    <th className="px-4 py-3 font-medium">Your laptop</th>
+                    <th className="px-4 py-3 font-medium">Vercel (preview or production)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border text-muted-foreground">
+                  <tr className="align-top">
+                    <td className="px-4 py-3 font-medium text-foreground">Who can edit</td>
+                    <td className="px-4 py-3">Anyone. Sign in → Continue as editor. No email.</td>
+                    <td className="px-4 py-3">
+                      Invited work emails only (magic link). Address must be in <Code>allowed_editors</Code> or{" "}
+                      <Code>ALLOWED_EMAILS</Code>.
+                    </td>
+                  </tr>
+                  <tr className="align-top">
+                    <td className="px-4 py-3 font-medium text-foreground">Where drafts live</td>
+                    <td className="px-4 py-3">
+                      <Code>.data/db.json</Code> on disk (gitignored). Yours alone; wipe by deleting{" "}
+                      <Code>.data/</Code>.
+                    </td>
+                    <td className="px-4 py-3">Shared Supabase Postgres. Uploads go in the public <Code>maps</Code> bucket.</td>
+                  </tr>
+                  <tr className="align-top">
+                    <td className="px-4 py-3 font-medium text-foreground">Seeded map</td>
+                    <td className="px-4 py-3">
+                      Bitcoin Asia 2026 is created automatically at <Code>/e/bhk26</Code>.
+                    </td>
+                    <td className="px-4 py-3">Only what is in the database. Seed or create events in studio.</td>
+                  </tr>
+                  <tr className="align-top">
+                    <td className="px-4 py-3 font-medium text-foreground">Public viewer</td>
+                    <td className="px-4 py-3">
+                      <Code>/e/:slug</Code> after you publish locally. Fine for iframe tests on localhost.
+                    </td>
+                    <td className="px-4 py-3">
+                      Same paths on the Vercel URL. No login needed to view a published map or{" "}
+                      <Code>/e/:slug/map.json</Code>.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
+
+            <h3 className="mt-10 text-[16px] font-medium">Try it on your machine</h3>
+            <p className="mt-2 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
+              Clone the repo. Leave Supabase env vars empty (see <Code>.env.example</Code>). Then:
+            </p>
+            <pre className="mt-4 overflow-x-auto rounded-xl border border-border bg-muted p-4 font-mono text-[12.5px] leading-relaxed text-foreground/80">
+              {`npm install
+npm run dev`}
+            </pre>
+            <ol className="mt-4 max-w-2xl list-decimal space-y-2 pl-5 text-[14px] leading-relaxed text-muted-foreground">
+              <li>
+                Open <Code>http://localhost:3000</Code>, sign in, choose <strong>Continue as editor</strong>.
+              </li>
+              <li>
+                Open Event <Code>bhk26</Code> → Designer. Draw, undo, save. That write hits{" "}
+                <Code>.data/</Code>, not the cloud.
+              </li>
+              <li>
+                Publish, then open <Code>/e/bhk26</Code> and <Code>/e/bhk26?view=3d</Code> in another tab (or an
+                iframe) to see the attendee view.
+              </li>
+            </ol>
+            <p className="mt-4 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
+              Optional: copy <Code>.env.example</Code> to <Code>.env.local</Code> and fill Supabase if you want
+              local to talk to the same database as production. Then login becomes magic link, same as Vercel.
+            </p>
+
+            <h3 className="mt-10 text-[16px] font-medium">Try the hosted app</h3>
+            <ol className="mt-3 max-w-2xl list-decimal space-y-2 pl-5 text-[14px] leading-relaxed text-muted-foreground">
+              <li>Ask an admin to add your work email to the editor allowlist, then open the Vercel URL.</li>
+              <li>
+                Sign in with a magic link. “Continue as editor” is disabled on Vercel — a file store there cannot
+                save (<Code>EROFS</Code> on <Code>.data/</Code>).
+              </li>
+              <li>
+                Anyone can open the public viewer and <Code>map.json</Code> without an account. Editing and publish
+                need the magic-link session.
+              </li>
+            </ol>
+            <p className="mt-4 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
+              Operators: Vercel env must include <Code>NEXT_PUBLIC_SUPABASE_URL</Code>,{" "}
+              <Code>NEXT_PUBLIC_SUPABASE_ANON_KEY</Code>, and <Code>SUPABASE_SERVICE_ROLE_KEY</Code> (plus Airtable{" "}
+              <Code>CONF_BITCOINASIA2026</Code> if you sync sponsors). Run <Code>supabase/schema.sql</Code>, public
+              bucket <Code>maps</Code>, magic-link redirect <Code>/auth/callback</Code>. Tokens stay in env, not on
+              the event row.
+            </p>
             <p className="mt-6 text-[13px] leading-relaxed text-muted-foreground">
               Stack: Next.js 16 (App Router, proxy.ts), React 19, Vercel Fluid Compute, Supabase Postgres + Storage,
               Airtable caches, three.js + R3F, optional MapLibre, shadcn/ui + Tailwind 4, pdfjs + sharp.

@@ -11,30 +11,57 @@ Standalone floor-plan **designer** and public **viewer** for Bitcoin conferences
 - Immutable publish snapshot + `GET /e/:slug/map.json` (native contract, version 1)
 - iframe / WebView friendly (`frame-ancestors *`)
 
-## Local demo (no Supabase)
+## Testing: local vs deployed
+
+The UI is the same. Persistence is not.
+
+| | Your laptop (`npm run dev`) | Vercel preview / production |
+| --- | --- | --- |
+| **Login** | Sign in → **Continue as editor**. No email. | Magic link to an allowlisted work email. Demo login is off. |
+| **Saves** | Gitignored `.data/db.json` on disk | Shared Supabase (Postgres + `maps` storage bucket) |
+| **Seed** | Bitcoin Asia 2026 at `/e/bhk26` | Only events already in that database |
+| **Viewer** | `/e/:slug` after local publish | Same paths on the Vercel host; no login to view |
+
+Vercel functions have a **read-only** filesystem. Writing `.data/` there fails with `EROFS`. Do not expect “Continue as editor” on the hosted URL.
+
+In-app copy of this: `/docs` → **Local vs deploy**.
+
+### Try it locally (any teammate)
 
 ```bash
+git clone <this-repo>
+cd conference-floor-plans
 npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), continue as editor. **Bitcoin Asia 2026** (`/e/bhk26`) is seeded from the XR hall coordinates (schematic underlay + booth rectangles + amenities). Draft lives in `.data/`.
+Leave `NEXT_PUBLIC_SUPABASE_*` and `SUPABASE_SERVICE_ROLE_KEY` empty (see `.env.example`). Open [http://localhost:3000](http://localhost:3000), continue as editor, open **bhk26**, draw in Designer, publish, then check:
 
-Viewer: [http://localhost:3000/e/bhk26](http://localhost:3000/e/bhk26)  
-3D: [http://localhost:3000/e/bhk26?view=3d](http://localhost:3000/e/bhk26?view=3d)  
-JSON: [http://localhost:3000/e/bhk26/map.json](http://localhost:3000/e/bhk26/map.json)
+- Viewer: [http://localhost:3000/e/bhk26](http://localhost:3000/e/bhk26)
+- 3D: [http://localhost:3000/e/bhk26?view=3d](http://localhost:3000/e/bhk26?view=3d)
+- JSON: [http://localhost:3000/e/bhk26/map.json](http://localhost:3000/e/bhk26/map.json)
+
+Your draft is only on that machine. Delete `.data/` to reset.
 
 Viewer query params (override saved prefs): `view=3d|2d|hall|plan`, `floor=` (id or name), `sizes=1`, `grid=1`, `rulers=1`, `panel=1`, `booth=`, `airtable=`. Hall: `ortho`, `cuboids`, `fog`, `ao`, `shadows`, `env`, `pt`, `az`, `el`, `dist`, `sun`, `sunEl`, `light`, `fill`, `fogI`.
 
-Paste that viewer URL into btc-app admin → Venue Map.
+Paste a published viewer URL into btc-app admin → Venue Map.
 
-## Production (Vercel + own Supabase)
+### Try the Vercel app (shared data)
+
+1. Ask an operator to add your email to `allowed_editors` or `ALLOWED_EMAILS`.
+2. Open the deployment URL → Sign in → magic link.
+3. Edit and publish against the shared database. Anyone can still open `/e/:slug` without an account.
+
+To point **local** at that same database, copy `.env.example` → `.env.local`, fill the three Supabase keys, restart `npm run dev`. Login then matches production (magic link, not demo).
+
+## Production setup (operators)
 
 1. Create a Supabase project. Run [`supabase/schema.sql`](supabase/schema.sql).
 2. Create a **public** Storage bucket named `maps`.
-3. Auth: enable email magic links. Redirect URL: `https://<host>/auth/callback`.
-4. Insert your production emails into `allowed_editors`, or set `ALLOWED_EMAILS`.
-5. `vercel link` this repo, set env from `.env.example`, deploy.
+3. Auth: enable email magic links. Redirect URL: `https://<host>/auth/callback` (and `http://localhost:3000/auth/callback` if developing against the same project).
+4. Insert editor emails into `allowed_editors`, or set `ALLOWED_EMAILS`.
+5. `vercel link` this repo. Set env from `.env.example` for Production **and** Preview — including `SUPABASE_SERVICE_ROLE_KEY`. Redeploy.
 6. Airtable: same `CONF_BITCOINASIA2026` JSON as conference-screens bitcoinAsia2026 (Vercel env + `.env.local`). Tokens and table ids are not stored on the event.
 
 The app uses the service role on the server. RLS still protects the tables from the anon key.
