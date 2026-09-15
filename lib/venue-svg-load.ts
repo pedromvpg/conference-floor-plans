@@ -1,6 +1,6 @@
 export type VenueSvgFetchSkip = { floorId: string; url: string };
 
-function isSvgUrl(url: string | null | undefined): boolean {
+function isSvgUrl(url: string | null | undefined): url is string {
   if (!url) return false;
   return url.split("?")[0].toLowerCase().endsWith(".svg");
 }
