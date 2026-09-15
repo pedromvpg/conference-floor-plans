@@ -3,6 +3,7 @@
 import { useLayoutEffect, useEffect, useRef, type RefObject } from "react";
 import { Map as MaplibreMap, type StyleSpecification } from "maplibre-gl";
 import { useTheme } from "@/components/theme-provider";
+import { floorDeltaToEnu, offsetLatLng, zoomDeltaToMatchSpan } from "@/lib/basemap";
 import type { FloorBasemap } from "@/lib/types";
 
 export type LeafletCam = {
@@ -15,6 +16,7 @@ export type LeafletCam = {
 };
 
 const CARTO_KEY = process.env.NEXT_PUBLIC_CARTO_BASEMAP_KEY?.trim() ?? "";
+const LOCK_SPAN_M = 10;
 
 function withCartoKey(url: string) {
   if (!CARTO_KEY) return url;
@@ -51,48 +53,86 @@ type Props = {
   camera: LeafletCam;
   svgRef: RefObject<SVGSVGElement | null>;
   hall: HallLock;
+  syncKey?: number;
 };
 
-function pinHallToSvg(map: MaplibreMap, svg: SVGSVGElement, hall: HallLock) {
+function svgToMapPx(svg: SVGSVGElement, mapEl: HTMLElement, x: number, y: number) {
   const ctm = svg.getScreenCTM();
-  if (!ctm) return;
+  if (!ctm) return null;
   const pt = svg.createSVGPoint();
-  pt.x = hall.x;
-  pt.y = hall.y;
-  const hallScreen = pt.matrixTransform(ctm);
-  const rect = map.getContainer().getBoundingClientRect();
-  const wantX = hallScreen.x - rect.left;
-  const wantY = hallScreen.y - rect.top;
-  const got = map.project({ lng: hall.lng, lat: hall.lat });
-  const dx = got.x - wantX;
-  const dy = got.y - wantY;
-  if (Math.abs(dx) > 0.02 || Math.abs(dy) > 0.02) {
-    map.panBy([dx, dy], { duration: 0, animate: false });
-  }
+  pt.x = x;
+  pt.y = y;
+  const screen = pt.matrixTransform(ctm);
+  const rect = mapEl.getBoundingClientRect();
+  return { x: screen.x - rect.left, y: screen.y - rect.top };
 }
 
-function applyCamera(map: MaplibreMap, camera: LeafletCam, svg: SVGSVGElement | null, hall: HallLock) {
-  if (!map.isStyleLoaded()) return;
+function lockMapToSvg(map: MaplibreMap, camera: LeafletCam, svg: SVGSVGElement | null, hall: HallLock) {
+  if (!map.isStyleLoaded()) return false;
   const zoom = Number.isFinite(camera.zoom) ? Math.min(24, Math.max(0, camera.zoom)) : 16;
   const lat = Number.isFinite(camera.lat) ? camera.lat : 0;
   const lng = Number.isFinite(camera.lng) ? camera.lng : 0;
   const bearing = Number.isFinite(camera.bearing) ? camera.bearing : 0;
+  map.stop();
   map.jumpTo({ center: [lng, lat], zoom, bearing, pitch: 0 });
-  if (svg) pinHallToSvg(map, svg, hall);
+  if (!svg) return true;
+  const container = map.getContainer();
+  const want = svgToMapPx(svg, container, hall.x, hall.y);
+  const want2 = svgToMapPx(svg, container, hall.x + LOCK_SPAN_M, hall.y);
+  if (!want || !want2) return true;
+  const { east, north } = floorDeltaToEnu(LOCK_SPAN_M, 0, bearing);
+  const p2 = offsetLatLng(hall.lat, hall.lng, east, north);
+  const got = map.project({ lng: hall.lng, lat: hall.lat });
+  const got2 = map.project({ lng: p2.lng, lat: p2.lat });
+  const dz = zoomDeltaToMatchSpan(
+    Math.hypot(got2.x - got.x, got2.y - got.y),
+    Math.hypot(want2.x - want.x, want2.y - want.y),
+  );
+  if (Math.abs(dz) > 1e-4) {
+    map.jumpTo({
+      center: [lng, lat],
+      zoom: Math.min(24, Math.max(0, map.getZoom() - dz)),
+      bearing,
+      pitch: 0,
+    });
+  }
+  const pinned = map.project({ lng: hall.lng, lat: hall.lat });
+  const dx = pinned.x - want.x;
+  const dy = pinned.y - want.y;
+  if (Math.abs(dx) > 0.02 || Math.abs(dy) > 0.02) {
+    map.panBy([dx, dy], { duration: 0, animate: false });
+  }
+  return true;
 }
 
-export function OsmBasemap({ view, camera, svgRef, hall }: Props) {
+export function OsmBasemap({ view, camera, svgRef, hall, syncKey = 0 }: Props) {
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme !== "light";
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MaplibreMap | null>(null);
-  const readyRef = useRef(false);
+  const rafRef = useRef(0);
   const cameraRef = useRef(camera);
   cameraRef.current = camera;
   const hallRef = useRef(hall);
   hallRef.current = hall;
   const svgBoxRef = useRef(svgRef);
   svgBoxRef.current = svgRef;
+
+  function runLock() {
+    const map = mapRef.current;
+    if (!map) return;
+    lockMapToSvg(map, cameraRef.current, svgBoxRef.current.current, hallRef.current);
+  }
+
+  function scheduleLock() {
+    const map = mapRef.current;
+    if (!map) return;
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      runLock();
+      rafRef.current = requestAnimationFrame(runLock);
+    });
+  }
 
   useEffect(() => {
     const host = hostRef.current;
@@ -126,25 +166,33 @@ export function OsmBasemap({ view, camera, svgRef, hall }: Props) {
     });
     map.touchZoomRotate.disable();
     const onReady = () => {
-      readyRef.current = true;
       map.resize();
-      applyCamera(map, cameraRef.current, svgBoxRef.current.current, hallRef.current);
+      scheduleLock();
     };
     map.on("load", onReady);
+    map.on("style.load", onReady);
     mapRef.current = map;
     const ro = new ResizeObserver(() => {
       map.resize();
-      if (readyRef.current) applyCamera(map, cameraRef.current, svgBoxRef.current.current, hallRef.current);
+      scheduleLock();
     });
     ro.observe(host);
+    const onWin = () => {
+      map.resize();
+      scheduleLock();
+    };
+    window.addEventListener("resize", onWin);
+    window.visualViewport?.addEventListener("resize", onWin);
     const raf = requestAnimationFrame(() => {
       map.resize();
-      if (readyRef.current) applyCamera(map, cameraRef.current, svgBoxRef.current.current, hallRef.current);
+      scheduleLock();
     });
     return () => {
       cancelAnimationFrame(raf);
+      cancelAnimationFrame(rafRef.current);
+      window.removeEventListener("resize", onWin);
+      window.visualViewport?.removeEventListener("resize", onWin);
       ro.disconnect();
-      readyRef.current = false;
       map.remove();
       mapRef.current = null;
       el.remove();
@@ -161,20 +209,26 @@ export function OsmBasemap({ view, camera, svgRef, hall }: Props) {
       styleOnce.current = true;
       return;
     }
-    readyRef.current = false;
     map.setStyle(cartoRasterStyle(dark));
-    map.once("load", () => {
-      readyRef.current = true;
-      map.resize();
-      applyCamera(map, cameraRef.current, svgBoxRef.current.current, hallRef.current);
-    });
   }, [dark]);
 
   useLayoutEffect(() => {
-    const map = mapRef.current;
-    if (!map || !readyRef.current) return;
-    applyCamera(map, camera, svgRef.current, hall);
-  }, [camera.lat, camera.lng, camera.zoom, camera.bearing, camera.east, camera.north, hall.x, hall.y, hall.lat, hall.lng, svgRef]);
+    scheduleLock();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    camera.lat,
+    camera.lng,
+    camera.zoom,
+    camera.bearing,
+    camera.east,
+    camera.north,
+    hall.x,
+    hall.y,
+    hall.lat,
+    hall.lng,
+    syncKey,
+    svgRef,
+  ]);
 
   useEffect(() => {
     const map = mapRef.current;

@@ -94,6 +94,13 @@ export function leafletZoomForMetersPerPx(lat: number, metersPerPx: number): num
   return Math.min(24, Math.max(0, z));
 }
 
+/** Zoom delta so a map-screen span matches the same floor span on the SVG. */
+export function zoomDeltaToMatchSpan(mapPx: number, svgPx: number): number {
+  if (!(mapPx > 0.5) || !(svgPx > 0.5)) return 0;
+  const dz = Math.log2(mapPx / svgPx);
+  return Number.isFinite(dz) ? dz : 0;
+}
+
 export function offsetLatLng(lat: number, lng: number, eastM: number, northM: number) {
   const a = lngLatToMercator(lng, lat);
   const m = meterInMercatorUnits(lat);

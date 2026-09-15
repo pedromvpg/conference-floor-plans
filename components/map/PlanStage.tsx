@@ -14,6 +14,7 @@ export function PlanStage({
   leafletCam,
   svgRef,
   hall,
+  syncKey,
   onWheel,
   children,
 }: {
@@ -21,6 +22,7 @@ export function PlanStage({
   leafletCam?: LeafletCam | null;
   svgRef: RefObject<SVGSVGElement | null>;
   hall: { x: number; y: number; lat: number; lng: number };
+  syncKey?: number;
   onWheel?: (e: WheelEvent) => void;
   children: ReactNode;
 }) {
@@ -28,7 +30,7 @@ export function PlanStage({
   return (
     <div className="relative h-full w-full overflow-clip" onWheel={onWheel}>
       {show && basemap && leafletCam ? (
-        <OsmBasemap view={basemap} camera={leafletCam} svgRef={svgRef} hall={hall} />
+        <OsmBasemap view={basemap} camera={leafletCam} svgRef={svgRef} hall={hall} syncKey={syncKey} />
       ) : null}
       <div className="absolute inset-0 z-10">{children}</div>
     </div>

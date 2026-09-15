@@ -100,8 +100,10 @@ import {
   svgElementRotation,
   svgInnerMarkup,
   svgViewBox,
+  svgDrawingBox,
   translateSvgElement,
 } from "@/lib/svg-layers";
+import { fetchVenueSvgMarkup, nestedVenuePlacement } from "@/lib/venue-svg-load";
 
 type Props = {
   mode: "edit" | "view";
@@ -124,8 +126,10 @@ type Props = {
   selectedIds?: string[];
   onSelect?: (id: string | null) => void;
   onSelectIds?: (ids: string[]) => void;
-  onChangeObject?: (obj: MapObject) => void;
-  onChangeObjects?: (objs: MapObject[]) => void;
+  onChangeObject?: (obj: MapObject, meta?: { live?: boolean }) => void;
+  onChangeObjects?: (objs: MapObject[], meta?: { live?: boolean }) => void;
+  onBeginHistory?: () => void;
+  onEndHistory?: () => void;
   onCreateObject?: (obj: MapObject) => void;
   onCalibrated?: (cal: Calibration, previous: Calibration | null) => void;
   knownLengthMeters?: number;
@@ -192,6 +196,15 @@ function svgUserToScreen(svg: SVGSVGElement | null, camW: number, camH: number):
     if (w > 0 && h > 0) return Math.min(w / Math.max(camW, 1e-6), h / Math.max(camH, 1e-6));
   }
   return 10;
+}
+
+function camWithAspect(c: Cam, aspect: number): Cam {
+  if (!Number.isFinite(aspect) || aspect <= 1e-9) return c;
+  const nextH = c.w / aspect;
+  if (Math.abs(nextH - c.h) < 1e-6) return c;
+  const cx = c.x + c.w / 2;
+  const cy = c.y + c.h / 2;
+  return { x: c.x, y: cy - nextH / 2, w: c.w, h: nextH };
 }
 
 function screenPx(px: number, ppm: number): number {
@@ -567,6 +580,8 @@ export function FloorCanvas({
   onSelectIds,
   onChangeObject,
   onChangeObjects,
+  onBeginHistory,
+  onEndHistory,
   onCreateObject,
   onCalibrated,
   knownLengthMeters = 10,
@@ -601,11 +616,55 @@ export function FloorCanvas({
   showUnderlay = true,
   onSetViewCenter,
 }: Props) {
+  const gestureHistory = useRef(false);
+  const onBeginHistoryRef = useRef(onBeginHistory);
+  const onEndHistoryRef = useRef(onEndHistory);
+  onBeginHistoryRef.current = onBeginHistory;
+  onEndHistoryRef.current = onEndHistory;
+
+  function beginGestureHistory() {
+    if (gestureHistory.current) return;
+    gestureHistory.current = true;
+    onBeginHistoryRef.current?.();
+  }
+
+  function endGestureHistory() {
+    if (!gestureHistory.current) return;
+    gestureHistory.current = false;
+    onEndHistoryRef.current?.();
+  }
+
+  function emitObject(obj: MapObject, live: boolean) {
+    if (live) beginGestureHistory();
+    onChangeObject?.(obj, live ? { live: true } : undefined);
+  }
+
+  function emitObjects(objs: MapObject[], live: boolean) {
+    if (live) beginGestureHistory();
+    onChangeObjects?.(objs, live ? { live: true } : undefined);
+  }
   const { resolvedTheme } = useTheme();
   const mapTone = resolvedTheme === "light" ? "light" : "dark";
   const svgRef = useRef<SVGSVGElement>(null);
   const nestRef = useRef<SVGSVGElement>(null);
   const lastVenuePreview = useRef<string | null>(null);
+  const [fetchedUnderlaySvg, setFetchedUnderlaySvg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (underlaySvg !== undefined) {
+      setFetchedUnderlaySvg(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchVenueSvgMarkup(floor.underlayUrl).then((text) => {
+      if (!cancelled) setFetchedUnderlaySvg(text);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [underlaySvg, floor.underlayUrl]);
+
+  const displayUnderlaySvg = underlaySvg ?? fetchedUnderlaySvg;
   const svgElDrag = useRef<{
     id: string;
     mode: "move" | "vertex" | "handle-in" | "handle-out" | "rotate" | "resize";
@@ -795,9 +854,9 @@ export function FloorCanvas({
   useEffect(() => () => cancelCamAnim(), []);
 
   useEffect(() => {
-    if (underlaySvg) {
+    if (displayUnderlaySvg) {
       try {
-        const vb = svgViewBox(underlaySvg);
+        const vb = svgViewBox(displayUnderlaySvg);
         if (vb) {
           setImgNat({ w: vb.w, h: vb.h });
           return;
@@ -812,7 +871,7 @@ export function FloorCanvas({
     const probe = new Image();
     probe.onload = () => setImgNat({ w: probe.naturalWidth, h: probe.naturalHeight });
     probe.src = href;
-  }, [floor.underlayUrl, underlaySvg]);
+  }, [floor.underlayUrl, displayUnderlaySvg]);
 
   useEffect(() => {
     if (tool !== "calibrate") {
@@ -901,14 +960,14 @@ export function FloorCanvas({
       }
     }
     if (!next.length) return;
-    if (onChangeObjects) onChangeObjects(next);
-    else next.forEach((o) => onChangeObject?.(o));
+    emitObjects(next, true);
   }
 
   function commitGroupMove(
     starts: { id: string; polygon: Ring | null; path?: BezierNode[] | null; x: number | null; y: number | null }[],
     dx: number,
     dy: number,
+    live = false,
   ) {
     let usedDx = dx;
     let usedDy = dy;
@@ -951,8 +1010,7 @@ export function FloorCanvas({
       }
     }
     if (!next.length) return;
-    if (onChangeObjects) onChangeObjects(next);
-    else next.forEach((o) => onChangeObject?.(o));
+    emitObjects(next, live);
   }
   const underlayW = venueRect?.w ?? (imgNat?.w ?? 0);
   const underlayH = venueRect?.h ?? (imgNat?.h ?? 0);
@@ -2278,7 +2336,7 @@ export function FloorCanvas({
     if (drag.current) {
       const d = drag.current;
       if (d.starts?.length && d.mode === "move") {
-        commitGroupMove(d.starts, w.x - d.ox, w.y - d.oy);
+        commitGroupMove(d.starts, w.x - d.ox, w.y - d.oy, true);
         return;
       }
       if (d.starts?.length && d.mode === "rotate" && d.startAngle != null) {
@@ -2293,18 +2351,18 @@ export function FloorCanvas({
           let nextDeg = d.startRot + (angleDeg(d.ox, d.oy, w.x, w.y) - d.startAngle);
           if (e.shiftKey) nextDeg = snapDeg(nextDeg, 15);
           if (isPinObject(obj)) {
-            onChangeObject?.({ ...obj, rotation: nextDeg, facingDeg: nextDeg });
+            emitObject({ ...obj, rotation: nextDeg, facingDeg: nextDeg }, true);
             return;
           }
           const startPath = d.path?.length ? d.path : obj.polygon ? objectShape({ ...obj, polygon: d.polygon, path: d.path }) : [];
           const rotated = commitShape(rotateBezier(startPath, nextDeg - d.startRot));
-          onChangeObject?.({
+          emitObject({
             ...obj,
             polygon: rotated.polygon,
             path: rotated.path,
             facingDeg: nextDeg,
             rotation: nextDeg,
-          });
+          }, true);
           return;
         }
         if ((d.mode === "vertex" || d.mode === "handle-in" || d.mode === "handle-out") && d.path && d.vertex != null) {
@@ -2330,7 +2388,7 @@ export function FloorCanvas({
             nextPath = dragHandle(d.path, d.vertex, d.mode === "handle-out" ? "out" : "in", x, y, e.altKey);
           }
           const next = commitShape(nextPath);
-          onChangeObject?.({ ...obj, ...next });
+          emitObject({ ...obj, ...next }, true);
           return;
         }
         if (d.mode === "resize" && d.polygon && d.handle && d.startBounds) {
@@ -2347,11 +2405,11 @@ export function FloorCanvas({
           const path = d.path?.length
             ? applyBoundsToBezier(d.path, d.startBounds, nextB)
             : null;
-          onChangeObject?.({
+          emitObject({
             ...obj,
             polygon: path ? tessellate(path, true) : applyBoundsToRing(d.polygon, nextB),
             path,
-          });
+          }, true);
           setGuides({ gx: [nextB.minX, nextB.maxX], gy: [nextB.minY, nextB.maxY] });
           return;
         }
@@ -2362,7 +2420,7 @@ export function FloorCanvas({
           const rawY = (d.y ?? 0) + dy;
           const p = snapPoint(rawX, rawY, obj.id);
           setGuides({ gx: p.gx, gy: p.gy });
-          onChangeObject?.({ ...obj, x: p.x, y: p.y });
+          emitObject({ ...obj, x: p.x, y: p.y }, true);
         } else if (d.polygon) {
           if (!altSnapOff.current) {
             const pix = snapBase((d.polygon[0]?.[0] ?? 0) + dx, (d.polygon[0]?.[1] ?? 0) + dy);
@@ -2381,11 +2439,11 @@ export function FloorCanvas({
           } else {
             setGuides({ gx: [], gy: [] });
           }
-          onChangeObject?.({
+          emitObject({
             ...obj,
             polygon: translateRing(d.polygon, dx, dy),
             path: d.path?.length ? translateBezier(d.path, dx, dy) : obj.path ? translateBezier(objectShape(obj), dx, dy) : null,
-          });
+          }, true);
         }
       }
       return;
@@ -2552,6 +2610,7 @@ export function FloorCanvas({
     setDraftRect(null);
     penPress.current = null;
     drag.current = null;
+    endGestureHistory();
     panLast.current = null;
     if (mode === "view" && viewPress.current && !viewPress.current.moved && remaining === 0) {
       const w = toWorld(e.clientX, e.clientY);
@@ -2706,7 +2765,12 @@ export function FloorCanvas({
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
-    const bump = () => setViewportTick((n) => n + 1);
+    const bump = () => {
+      setViewportTick((n) => n + 1);
+      if (svg.clientWidth > 0 && svg.clientHeight > 0) {
+        setCam((c) => camWithAspect(c, svg.clientWidth / svg.clientHeight));
+      }
+    };
     bump();
     const ro = new ResizeObserver(bump);
     ro.observe(svg);
@@ -2831,14 +2895,31 @@ export function FloorCanvas({
   const underlayHref = floor.underlayUrl;
   let underlayVb: { x: number; y: number; w: number; h: number } | null = null;
   let underlayInner: string | null = null;
-  if (underlaySvg) {
+  let venueNest = {
+    x: underlayX,
+    y: underlayY,
+    w: underlayW || size.w,
+    h: underlayH || size.h,
+    vb: null as { x: number; y: number; w: number; h: number } | null,
+  };
+  if (displayUnderlaySvg) {
     try {
-      underlayVb = svgViewBox(underlaySvg);
-      underlayInner = svgInnerMarkup(underlaySvg, {
+      underlayVb = svgViewBox(displayUnderlaySvg);
+      underlayInner = svgInnerMarkup(displayUnderlaySvg, {
         hoverId: underlayHoverLayerId,
         selectedId: selectedVenueElementId,
         selectedIds: selectedVenueElementIds,
       });
+      if (underlayVb && underlayW > 0 && underlayH > 0) {
+        const draw = svgDrawingBox(displayUnderlaySvg) ?? underlayVb;
+        const placed = nestedVenuePlacement(underlayVb, draw, {
+          x: underlayX,
+          y: underlayY,
+          w: underlayW,
+          h: underlayH,
+        });
+        venueNest = { ...placed, vb: draw };
+      }
     } catch {
       underlayInner = null;
     }
@@ -2862,6 +2943,7 @@ export function FloorCanvas({
       leafletCam={leafletCam}
       svgRef={svgRef}
       hall={hallLock}
+      syncKey={viewportTick}
       onWheel={onWheel}
     >
     <svg
@@ -2918,18 +3000,18 @@ export function FloorCanvas({
           );
         })}
       </defs>
-      {showUnderlay && underlayInner && underlayVb ? (
+      {showUnderlay && underlayInner && venueNest.vb ? (
           <g
           className="map-venue-svg"
           pointerEvents={editVenueElements && canEditVenue && tool === "select" ? "auto" : "none"}
         >
           <svg
             ref={nestRef}
-            x={underlayX}
-            y={underlayY}
-            width={underlayW || size.w}
-            height={underlayH || size.h}
-            viewBox={`${underlayVb.x} ${underlayVb.y} ${underlayVb.w} ${underlayVb.h}`}
+            x={venueNest.x}
+            y={venueNest.y}
+            width={venueNest.w}
+            height={venueNest.h}
+            viewBox={`${venueNest.vb.x} ${venueNest.vb.y} ${venueNest.vb.w} ${venueNest.vb.h}`}
             preserveAspectRatio="none"
             overflow="visible"
             colorInterpolation="sRGB"

@@ -22,6 +22,7 @@ import type {
   Tool,
   Units,
 } from "@/lib/types";
+import { fetchVenueSvgMarkup } from "@/lib/venue-svg-load";
 import { HallScene, hallExtent, hallFocus, plotsExtent, type HallSceneProps } from "./HallScene";
 
 export type HallCanvasProps = {
@@ -42,7 +43,9 @@ export type HallCanvasProps = {
   stampKitKind?: MapObject["kitKind"];
   kits?: ExhibitKit[];
   onSelect?: (id: string | null) => void;
-  onChangeObject?: (obj: MapObject) => void;
+  onChangeObject?: (obj: MapObject, meta?: { live?: boolean }) => void;
+  onBeginHistory?: () => void;
+  onEndHistory?: () => void;
   onCreateObject?: (obj: MapObject) => void;
   frameNonce?: number;
   fitNonce?: number;
@@ -89,6 +92,8 @@ export function HallCanvas({
   kits = [],
   onSelect,
   onChangeObject,
+  onBeginHistory,
+  onEndHistory,
   onCreateObject,
   frameNonce = 0,
   fitNonce = 0,
@@ -127,15 +132,9 @@ export function HallCanvas({
       return;
     }
     let cancelled = false;
-    void fetch(url)
-      .then((res) => (res.ok ? res.text() : Promise.reject(new Error("drawing"))))
-      .then((text) => {
-        if (cancelled || !text.includes("<svg")) return;
-        setFetchedSvg(text);
-      })
-      .catch(() => {
-        if (!cancelled) setFetchedSvg(null);
-      });
+    void fetchVenueSvgMarkup(url).then((text) => {
+      if (!cancelled) setFetchedSvg(text);
+    });
     return () => {
       cancelled = true;
     };
@@ -266,6 +265,8 @@ export function HallCanvas({
     kits,
     onSelect,
     onChangeObject,
+    onBeginHistory,
+    onEndHistory,
     onCreateObject,
     onNavLock: setNavLocked,
     spacePan,
