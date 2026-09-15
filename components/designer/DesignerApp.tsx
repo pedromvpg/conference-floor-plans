@@ -111,6 +111,7 @@ import {
   pathfinderSvgLayers,
   type PathfinderOp,
 } from "@/lib/svg-layers";
+import { cloneDesignerSnapshot, DesignerHistory, type DesignerSnapshot } from "@/lib/designer-history";
 import { newId, nowIso } from "@/lib/store";
 import {
   Tooltip,
@@ -441,9 +442,11 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
 
   const bundleRef = useRef(bundle);
   bundleRef.current = bundle;
-  const pastRef = useRef<DraftSlice[]>([]);
-  const futureRef = useRef<DraftSlice[]>([]);
-  const coalesceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const historyRef = useRef(new DesignerHistory());
+  const writeEpoch = useRef(0);
+  const writesAbort = useRef(new AbortController());
+  const objectSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingObjectSaves = useRef(new Map<string, MapObject>());
   const versionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipSvgFetch = useRef<VenueSvgFetchSkip | null>(null);
   const venueSvgByFloorRef = useRef(new Map<string, string>());
@@ -641,29 +644,38 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     units,
   ]);
 
-  function cloneSlice(b = bundleRef.current): DraftSlice {
-    return {
-      floors: structuredClone(b.floors),
-      objects: structuredClone(b.objects),
-    };
+  function snapshotNow(): DesignerSnapshot {
+    return cloneDesignerSnapshot(bundleRef.current.floors, bundleRef.current.objects, venueSvgByFloorRef.current);
   }
 
   function syncUndoFlags() {
-    setCanUndo(pastRef.current.length > 0);
-    setCanRedo(futureRef.current.length > 0);
+    setCanUndo(historyRef.current.canUndo);
+    setCanRedo(historyRef.current.canRedo);
   }
 
-  function markHistory() {
-    if (!coalesceRef.current) {
-      pastRef.current = [...pastRef.current, cloneSlice()].slice(-80);
-      futureRef.current = [];
-      syncUndoFlags();
-    } else {
-      clearTimeout(coalesceRef.current);
-    }
-    coalesceRef.current = setTimeout(() => {
-      coalesceRef.current = null;
-    }, 500);
+  function markHistory(coalesceKey?: string) {
+    if (historyRef.current.capture(snapshotNow(), coalesceKey)) syncUndoFlags();
+  }
+
+  function beginHistory() {
+    historyRef.current.clearCoalesce();
+    markHistory();
+  }
+
+  function applySnapshot(snap: DesignerSnapshot) {
+    bundleRef.current = { ...bundleRef.current, floors: snap.floors, objects: snap.objects };
+    setBundle((b) => ({ ...b, floors: snap.floors, objects: snap.objects }));
+    venueSvgByFloorRef.current = new Map(Object.entries(snap.venueSvgByFloor));
+    const fid = activeFloorIdRef.current;
+    const svg = fid ? (snap.venueSvgByFloor[fid] ?? null) : null;
+    const restored = fid ? snap.floors.find((f) => f.id === fid) : undefined;
+    skipSvgFetch.current = skipAfterVenueSvgPersist({
+      viewingFloorId: fid,
+      targetFloorId: fid,
+      hasLocalSvg: Boolean(svg),
+      underlayUrl: restored?.underlayUrl ?? "",
+    });
+    setVenueSvg(svg);
   }
 
   useEffect(() => {
@@ -719,26 +731,103 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   }
 
   async function persistSlice(slice: DraftSlice) {
+    const epoch = ++writeEpoch.current;
+    const signal = writesAbort.current.signal;
     setSaveLabel("Saving…");
-    const res = await fetch(`/api/events/${slug}/draft`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(slice),
-    });
-    if (!res.ok) {
-      setSaveLabel("Saved");
-      throw new Error("Could not save");
+    try {
+      const res = await fetch(`/api/events/${slug}/draft`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ floors: slice.floors, objects: slice.objects }),
+        signal,
+      });
+      if (epoch !== writeEpoch.current) return;
+      if (!res.ok) {
+        setSaveLabel("Saved");
+        throw new Error("Could not save");
+      }
+      await res.json();
+      if (epoch !== writeEpoch.current) return;
+      markSaved();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      throw err;
     }
-    const saved = (await res.json()) as DraftSlice;
-    setBundle((b) => ({ ...b, floors: saved.floors, objects: saved.objects }));
-    markSaved();
-    return saved;
+  }
+
+  function abortPendingWrites() {
+    writesAbort.current.abort();
+    writesAbort.current = new AbortController();
+    writeEpoch.current += 1;
+    if (objectSaveTimer.current) {
+      clearTimeout(objectSaveTimer.current);
+      objectSaveTimer.current = null;
+    }
+    pendingObjectSaves.current.clear();
+    if (basemapSaveTimer.current) {
+      clearTimeout(basemapSaveTimer.current);
+      basemapSaveTimer.current = null;
+    }
+    if (viewCenterSaveTimer.current) {
+      clearTimeout(viewCenterSaveTimer.current);
+      viewCenterSaveTimer.current = null;
+    }
+    if (venueSvgSaveTimer.current) {
+      clearTimeout(venueSvgSaveTimer.current);
+      venueSvgSaveTimer.current = null;
+    }
+  }
+
+  function flushObjectSaves() {
+    if (objectSaveTimer.current) {
+      clearTimeout(objectSaveTimer.current);
+      objectSaveTimer.current = null;
+    }
+    const objs = [...pendingObjectSaves.current.values()];
+    pendingObjectSaves.current.clear();
+    if (!objs.length) return;
+    const epoch = writeEpoch.current;
+    const signal = writesAbort.current.signal;
+    setSaveLabel("Saving…");
+    void Promise.all(
+      objs.map((obj) =>
+        fetch("/api/objects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(obj),
+          signal,
+        }),
+      ),
+    ).then(
+      () => {
+        if (epoch !== writeEpoch.current) return;
+        markSaved();
+      },
+      (err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+      },
+    );
+  }
+
+  function scheduleObjectSaves(objs: MapObject[], immediate = false) {
+    for (const obj of objs) pendingObjectSaves.current.set(obj.id, obj);
+    setSaveLabel("Saving…");
+    if (immediate) {
+      flushObjectSaves();
+      return;
+    }
+    if (objectSaveTimer.current) clearTimeout(objectSaveTimer.current);
+    objectSaveTimer.current = setTimeout(() => {
+      objectSaveTimer.current = null;
+      flushObjectSaves();
+    }, 280);
   }
 
   const basemapSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function patchBasemap(next: FloorBasemap, immediate = false) {
     if (!floorRecord) return;
+    markHistory("basemap");
     const targetId = inheritedSettingsTargetId(floorRecord, bundleRef.current.floors, "basemap");
     const nextFloors = bundleRef.current.floors.map((f) => (f.id === targetId ? { ...f, basemap: next } : f));
     const objects = bundleRef.current.objects;
@@ -762,6 +851,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
 
   function patchViewCenter(next: { x: number; y: number } | null, immediate = false) {
     if (!floorRecord) return;
+    markHistory("view-center");
     const targetId = floorRecord.id;
     const nextFloors = bundleRef.current.floors.map((f) => (f.id === targetId ? { ...f, viewCenter: next } : f));
     const objects = bundleRef.current.objects;
@@ -789,34 +879,28 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     void patchBasemap({ ...prev, enabled: true, lat: pair.lat, lng: pair.lng });
   }
 
-  async function undo() {
-    if (coalesceRef.current) {
-      clearTimeout(coalesceRef.current);
-      coalesceRef.current = null;
+  function undo() {
+    abortPendingWrites();
+    const prev = historyRef.current.undo(snapshotNow());
+    if (!prev) {
+      syncUndoFlags();
+      return;
     }
-    const prev = pastRef.current.pop();
-    if (!prev) return;
-    futureRef.current = [...futureRef.current, cloneSlice()].slice(-80);
+    applySnapshot(prev);
     syncUndoFlags();
-    setSelectedIds([]);
-    try {
-      await persistSlice(prev);
-    } catch {
-      toast.error("Could not undo");
-    }
+    void persistSlice(prev).catch(() => toast.error("Could not undo"));
   }
 
-  async function redo() {
-    const next = futureRef.current.pop();
-    if (!next) return;
-    pastRef.current = [...pastRef.current, cloneSlice()].slice(-80);
-    syncUndoFlags();
-    setSelectedIds([]);
-    try {
-      await persistSlice(next);
-    } catch {
-      toast.error("Could not redo");
+  function redo() {
+    abortPendingWrites();
+    const next = historyRef.current.redo(snapshotNow());
+    if (!next) {
+      syncUndoFlags();
+      return;
     }
+    applySnapshot(next);
+    syncUndoFlags();
+    void persistSlice(next).catch(() => toast.error("Could not redo"));
   }
 
   async function restoreVersion(id: string) {
@@ -880,41 +964,23 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   const hasSelection =
     selectedIds.length > 0 || (sidebarTab === "venue" && Boolean(selectedVenueEl));
 
-  const patchObject = useCallback(async (obj: MapObject) => {
-    markHistory();
-    setSaveLabel("Saving…");
-    setBundle((b) => ({
-      ...b,
-      objects: b.objects.map((o) => (o.id === obj.id ? obj : o)),
-    }));
-    await fetch("/api/objects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(obj),
-    });
-    markSaved();
-  }, [snapshotVersion]);
+  const patchObject = useCallback(async (obj: MapObject, opts?: { live?: boolean; coalesceKey?: string }) => {
+    if (!opts?.live) markHistory(opts?.coalesceKey);
+    const objects = bundleRef.current.objects.map((o) => (o.id === obj.id ? obj : o));
+    bundleRef.current = { ...bundleRef.current, objects };
+    setBundle((b) => ({ ...b, objects }));
+    scheduleObjectSaves([obj], !opts?.live);
+  }, []);
 
-  const patchObjects = useCallback(async (objs: MapObject[]) => {
+  const patchObjects = useCallback(async (objs: MapObject[], opts?: { live?: boolean; coalesceKey?: string }) => {
     if (!objs.length) return;
-    markHistory();
-    setSaveLabel("Saving…");
+    if (!opts?.live) markHistory(opts?.coalesceKey);
     const byId = new Map(objs.map((o) => [o.id, o]));
-    setBundle((b) => ({
-      ...b,
-      objects: b.objects.map((o) => byId.get(o.id) ?? o),
-    }));
-    await Promise.all(
-      objs.map((obj) =>
-        fetch("/api/objects", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(obj),
-        }),
-      ),
-    );
-    markSaved();
-  }, [snapshotVersion]);
+    const objects = bundleRef.current.objects.map((o) => byId.get(o.id) ?? o);
+    bundleRef.current = { ...bundleRef.current, objects };
+    setBundle((b) => ({ ...b, objects }));
+    scheduleObjectSaves(objs, !opts?.live);
+  }, []);
 
   function applyBoothSize(axis: "w" | "h", raw: string) {
     if (!selected?.polygon) return;
@@ -932,7 +998,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     const nb = ringBounds(polygon);
     setBoothWidth(fmtDim(nb.w, units));
     setBoothHeight(fmtDim(nb.h, units));
-    void patchObject({ ...selected, polygon });
+    void patchObject({ ...selected, polygon }, { coalesceKey: `obj:${selected.id}:size` });
   }
 
   function matchingBoothPresetId(w: number, h: number): string {
@@ -960,11 +1026,12 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     });
   }
 
-  function applyObjectRotation(nextDeg: number) {
+  function applyObjectRotation(nextDeg: number, coalesce = false) {
     if (!selected) return;
     if (!Number.isFinite(nextDeg)) return;
+    const history = coalesce ? { coalesceKey: `obj:${selected.id}:rot` } : undefined;
     if (isPinObject(selected)) {
-      void patchObject({ ...selected, rotation: nextDeg, facingDeg: nextDeg });
+      void patchObject({ ...selected, rotation: nextDeg, facingDeg: nextDeg }, history);
       return;
     }
     if (!selected.polygon) return;
@@ -976,7 +1043,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       path: rotated.path,
       facingDeg: nextDeg,
       rotation: nextDeg,
-    });
+    }, history);
   }
 
   function rotateSelectedGroup(delta: number) {
@@ -1037,6 +1104,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     if (!objs.length) return;
     markHistory();
     setSaveLabel("Saving…");
+    bundleRef.current = { ...bundleRef.current, objects: [...bundleRef.current.objects, ...objs] };
     setBundle((b) => ({ ...b, objects: [...b.objects, ...objs] }));
     setSelectedIds(objs.map((o) => o.id));
     if (!objs.some(isMapPinObject)) setSidebarTab("objects");
@@ -1060,13 +1128,23 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
   );
 
   async function persistVenueSvg(svg: string, targetFloorId: string) {
-    const res = await fetch(`/api/floors/${targetFloorId}/underlay`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ svg }),
-    });
+    const epoch = writeEpoch.current;
+    let res: Response;
+    try {
+      res = await fetch(`/api/floors/${targetFloorId}/underlay`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ svg }),
+        signal: writesAbort.current.signal,
+      });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      throw err;
+    }
+    if (epoch !== writeEpoch.current) return;
     if (!res.ok) throw new Error(await res.text());
     const updated = (await res.json()) as Floor;
+    if (epoch !== writeEpoch.current) return;
     venueSvgByFloorRef.current.set(targetFloorId, svg);
     skipSvgFetch.current = skipAfterVenueSvgPersist({
       viewingFloorId: activeFloorIdRef.current,
@@ -1074,10 +1152,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
       hasLocalSvg: Boolean(venueSvgByFloorRef.current.get(targetFloorId)),
       underlayUrl: updated.underlayUrl ?? "",
     });
-    setBundle((b) => ({
-      ...b,
-      floors: b.floors.map((f) => (f.id === updated.id ? updated : f)),
-    }));
+    const floors = bundleRef.current.floors.map((f) => (f.id === updated.id ? { ...f, ...updated } : f));
+    bundleRef.current = { ...bundleRef.current, floors };
+    setBundle((b) => ({ ...b, floors }));
     markSaved();
   }
 
@@ -1111,10 +1188,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     selectVenueLayer(result.id);
   }
 
-  function commitVenueSvg(next: string) {
+  function commitVenueSvg(next: string, coalesceKey?: string) {
     const id = floor?.id;
     if (!id) return;
-    markHistory();
+    markHistory(coalesceKey);
     venueSvgByFloorRef.current.set(id, next);
     setVenueSvg(next);
     setSaveLabel("Saving…");
@@ -1337,7 +1414,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
     if (!ids.length) return;
     markHistory();
     setSaveLabel("Saving…");
-    setBundle((b) => ({ ...b, objects: b.objects.filter((o) => !ids.includes(o.id)) }));
+    const objects = bundleRef.current.objects.filter((o) => !ids.includes(o.id));
+    bundleRef.current = { ...bundleRef.current, objects };
+    setBundle((b) => ({ ...b, objects }));
     setSelectedIds([]);
     await Promise.all(ids.map((id) => fetch(`/api/objects/${id}`, { method: "DELETE" })));
     markSaved();
@@ -2718,7 +2797,9 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   selectVenueLayer(null);
                   setSelectedIds(id ? [id] : []);
                 }}
-                onChangeObject={(o) => void patchObject(o)}
+                onChangeObject={(o, meta) => void patchObject(o, { live: meta?.live })}
+                onBeginHistory={beginHistory}
+                onEndHistory={flushObjectSaves}
                 onCreateObject={(o) => {
                   void createObject(o);
                   setTool("select");
@@ -2770,8 +2851,10 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   if (ids.length) selectVenueLayer(null);
                   setSelectedIds(ids);
                 }}
-                onChangeObject={(o) => void patchObject(o)}
-                onChangeObjects={(objs) => void patchObjects(objs)}
+                onChangeObject={(o, meta) => void patchObject(o, { live: meta?.live })}
+                onChangeObjects={(objs, meta) => void patchObjects(objs, { live: meta?.live })}
+                onBeginHistory={beginHistory}
+                onEndHistory={flushObjectSaves}
                 onCreateObject={(o) => {
                   void createObject(o);
                   if (isMapPinObject(o)) return;
@@ -2894,7 +2977,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   <Input
                     id="insp-venue-name"
                     value={selectedVenueLayer.name}
-                    onChange={(e) => commitVenueSvg(setSvgLayerName(venueSvg, selectedVenueLayer.id, e.target.value))}
+                    onChange={(e) => commitVenueSvg(setSvgLayerName(venueSvg, selectedVenueLayer.id, e.target.value), `venue:${selectedVenueLayer.id}:name`)}
                   />
                 </div>
                 {selectedVenueMetrics ? (
@@ -2921,7 +3004,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <Textarea
                       id="insp-venue-label"
                       value={selectedVenueLayer.text}
-                      onChange={(e) => commitVenueSvg(setSvgLayerText(venueSvg, selectedVenueLayer.id, e.target.value))}
+                      onChange={(e) => commitVenueSvg(setSvgLayerText(venueSvg, selectedVenueLayer.id, e.target.value), `venue:${selectedVenueLayer.id}:text`)}
                       className="mt-1 min-h-16 text-sm"
                     />
                   </div>
@@ -3152,7 +3235,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                   <Input
                     id="insp-label"
                     value={selected.name}
-                    onChange={(e) => void patchObject({ ...selected, name: e.target.value })}
+                    onChange={(e) => void patchObject({ ...selected, name: e.target.value }, { coalesceKey: `obj:${selected.id}:name` })}
                     placeholder={isMapPinObject(selected) ? MAP_PIN_META[selected.kind].label : "Display name"}
                   />
                 </div>
@@ -3193,7 +3276,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                           id="insp-event-date"
                           type="date"
                           value={selected.eventDate}
-                          onChange={(e) => void patchObject({ ...selected, eventDate: e.target.value })}
+                          onChange={(e) => void patchObject({ ...selected, eventDate: e.target.value }, { coalesceKey: `obj:${selected.id}:date` })}
                         />
                       </div>
                     ) : null}
@@ -3204,7 +3287,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                       <Textarea
                         id="insp-event-desc"
                         value={selected.description}
-                        onChange={(e) => void patchObject({ ...selected, description: e.target.value })}
+                        onChange={(e) => void patchObject({ ...selected, description: e.target.value }, { coalesceKey: `obj:${selected.id}:desc` })}
                         placeholder={selected.kind === "hotel" ? "Hotel name, address" : "What happens here"}
                         className="mt-1 min-h-24 text-sm"
                       />
@@ -3232,7 +3315,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     <Input
                       id="insp-booth-number"
                       value={selected.boothNumber}
-                      onChange={(e) => void patchObject({ ...selected, boothNumber: e.target.value })}
+                      onChange={(e) => void patchObject({ ...selected, boothNumber: e.target.value }, { coalesceKey: `obj:${selected.id}:booth` })}
                       placeholder="A12"
                     />
                   </div>
@@ -3359,7 +3442,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     strokeFallback="#1a1a1a"
                     defaultStrokeWidth={0.08}
                     strokeStep={0.02}
-                    onChange={(next) => void patchObject(withObjectPaint(selected, next))}
+                    onChange={(next) => void patchObject(withObjectPaint(selected, next), { coalesceKey: `obj:${selected.id}:paint` })}
                   />
                 ) : null}
                 {isPinObject(selected) ? (
@@ -3369,7 +3452,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                     strokeFallback={resolvedTheme === "light" ? "#fcfcfc" : "#0a0a0a"}
                     defaultStrokeWidth={0.12}
                     strokeStep={0.02}
-                    onChange={(next) => void patchObject(withObjectPaint(selected, next))}
+                    onChange={(next) => void patchObject(withObjectPaint(selected, next), { coalesceKey: `obj:${selected.id}:paint` })}
                   />
                 ) : null}
                 {selected.kind === "booth" && selected.polygon ? (
@@ -3403,7 +3486,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
                         step="any"
                         className="min-w-0 flex-1"
                         value={Number(((isPinObject(selected) ? selected.rotation : selected.facingDeg) ?? 0).toFixed(2))}
-                        onChange={(e) => applyObjectRotation(Number(e.target.value))}
+                        onChange={(e) => applyObjectRotation(Number(e.target.value), true)}
                       />
                       <span className="shrink-0 text-[10px] text-muted-foreground">°</span>
                       <Button

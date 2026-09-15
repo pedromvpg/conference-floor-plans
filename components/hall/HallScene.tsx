@@ -56,7 +56,9 @@ export type HallSceneProps = {
   stampKitKind?: MapObject["kitKind"];
   kits?: ExhibitKit[];
   onSelect?: (id: string | null) => void;
-  onChangeObject?: (obj: MapObject) => void;
+  onChangeObject?: (obj: MapObject, meta?: { live?: boolean }) => void;
+  onBeginHistory?: () => void;
+  onEndHistory?: () => void;
   onCreateObject?: (obj: MapObject) => void;
   onNavLock?: (locked: boolean) => void;
   spacePan?: boolean;
@@ -210,6 +212,8 @@ export function HallScene({
   kits = [],
   onSelect,
   onChangeObject,
+  onBeginHistory,
+  onEndHistory,
   onCreateObject,
   onNavLock,
   spacePan = false,
@@ -250,6 +254,11 @@ export function HallScene({
   objectsRef.current = objects;
   const onChangeRef = useRef(onChangeObject);
   onChangeRef.current = onChangeObject;
+  const onBeginHistoryRef = useRef(onBeginHistory);
+  onBeginHistoryRef.current = onBeginHistory;
+  const onEndHistoryRef = useRef(onEndHistory);
+  onEndHistoryRef.current = onEndHistory;
+  const gestureHistory = useRef(false);
   const onCreateRef = useRef(onCreateObject);
   onCreateRef.current = onCreateObject;
   const onNavLockRef = useRef(onNavLock);
@@ -372,6 +381,10 @@ export function HallScene({
       }
       const d = drag.current;
       if (!d) return;
+      if (!gestureHistory.current) {
+        gestureHistory.current = true;
+        onBeginHistoryRef.current?.();
+      }
       const obj = objectsRef.current.find((o) => o.id === d.id);
       if (!obj) return;
       if (d.mode === "rotate" && d.startAngle != null && d.startRot != null) {
@@ -380,29 +393,32 @@ export function HallScene({
         let nextDeg = d.startRot + (angleDeg(d.ox, d.oy, raw.x, raw.y) - d.startAngle);
         if (ev.shiftKey) nextDeg = snapDeg(nextDeg, 15);
         if (isPinObject(obj)) {
-          onChangeRef.current?.({ ...obj, rotation: nextDeg, facingDeg: nextDeg });
+          onChangeRef.current?.({ ...obj, rotation: nextDeg, facingDeg: nextDeg }, { live: true });
           return;
         }
         const startPath = d.path?.length ? d.path : obj.polygon ? objectShape({ ...obj, polygon: d.polygon, path: d.path }) : [];
         const rotated = commitShape(rotateBezier(startPath, nextDeg - d.startRot));
-        onChangeRef.current?.({
-          ...obj,
-          polygon: rotated.polygon,
-          path: rotated.path,
-          facingDeg: nextDeg,
-          rotation: nextDeg,
-        });
+        onChangeRef.current?.(
+          {
+            ...obj,
+            polygon: rotated.polygon,
+            path: rotated.path,
+            facingDeg: nextDeg,
+            rotation: nextDeg,
+          },
+          { live: true },
+        );
         return;
       }
       const dx = p.x - d.ox;
       const dy = p.y - d.oy;
       if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return;
       if (isPinObject(obj)) {
-        onChangeRef.current?.({ ...obj, x: (d.x ?? 0) + dx, y: (d.y ?? 0) + dy });
+        onChangeRef.current?.({ ...obj, x: (d.x ?? 0) + dx, y: (d.y ?? 0) + dy }, { live: true });
       } else if (d.polygon || d.path) {
         const path = translateBezier(d.path?.length ? d.path : objectShape({ polygon: d.polygon, path: d.path }), dx, dy);
         const next = commitShape(path);
-        onChangeRef.current?.({ ...obj, polygon: next.polygon, path: next.path });
+        onChangeRef.current?.({ ...obj, polygon: next.polygon, path: next.path }, { live: true });
       }
     }
 
@@ -419,6 +435,10 @@ export function HallScene({
       if (drag.current) {
         drag.current = null;
         onNavLockRef.current?.(false);
+      }
+      if (gestureHistory.current) {
+        gestureHistory.current = false;
+        onEndHistoryRef.current?.();
       }
     }
 
