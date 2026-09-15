@@ -1,6 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { shouldSkipVenueSvgFetch, skipAfterVenueSvgPersist } from "./venue-svg-load.ts";
+import { fetchVenueSvgMarkup, nestedVenuePlacement, shouldSkipVenueSvgFetch, skipAfterVenueSvgPersist } from "./venue-svg-load.ts";
+
+test("does not fetch raster underlays", async () => {
+  assert.equal(await fetchVenueSvgMarkup("https://cdn/hall.png"), null);
+  assert.equal(await fetchVenueSvgMarkup(null), null);
+});
+
+test("nested venue placement keeps calibration mapping for overflow geometry", () => {
+  const placed = nestedVenuePlacement(
+    { x: 0, y: 0, w: 1000, h: 1000 },
+    { x: -500, y: 900, w: 1400, h: 1000 },
+    { x: 0, y: 0, w: 100, h: 100 },
+  );
+  assert.equal(placed.x, -50);
+  assert.equal(placed.y, 90);
+  assert.equal(placed.w, 140);
+  assert.equal(placed.h, 100);
+});
 
 test("does not skip fetch when switching floors, even if skip matches the saved URL", () => {
   const skip = { floorId: "l2", url: "https://cdn/l2.svg" };

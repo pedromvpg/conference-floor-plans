@@ -544,6 +544,53 @@ export function svgViewBox(markup: string): { x: number; y: number; w: number; h
   }
 }
 
+/** ViewBox unioned with drawn geometry so nested SVG does not clip overflow shapes. */
+export function svgDrawingBox(markup: string): { x: number; y: number; w: number; h: number } | null {
+  try {
+    const root = parseRoot(markup);
+    const vb = viewBoxFromRoot(root);
+    if (!vb) return null;
+    let minX = vb.x;
+    let minY = vb.y;
+    let maxX = vb.x + vb.w;
+    let maxY = vb.y + vb.h;
+    for (const el of collectNodes(root)) {
+      if (localName(el) === "g" || localName(el) === "a" || localName(el) === "svg") continue;
+      let n: Element | null = el;
+      let skip = false;
+      while (n) {
+        if (isHidden(n) || isPrivate(n)) {
+          skip = true;
+          break;
+        }
+        if (n === root) break;
+        n = n.parentElement;
+      }
+      if (skip) continue;
+      const box = elementBox(el);
+      if (!box) continue;
+      const corners: Array<[number, number]> = [
+        [box.minX, box.minY],
+        [box.maxX, box.minY],
+        [box.maxX, box.maxY],
+        [box.minX, box.maxY],
+      ];
+      for (const [x, y] of corners) {
+        const [sx, sy] = svgLocalToRoot(el, x, y);
+        if (!Number.isFinite(sx + sy)) continue;
+        minX = Math.min(minX, sx);
+        minY = Math.min(minY, sy);
+        maxX = Math.max(maxX, sx);
+        maxY = Math.max(maxY, sy);
+      }
+    }
+    const pad = 4;
+    return { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
+  } catch {
+    return null;
+  }
+}
+
 function applySvgTransform(t: string, x: number, y: number): [number, number] {
   if (!t.trim()) return [x, y];
   const cmds: Array<{ kind: "t"; x: number; y: number } | { kind: "r"; deg: number; cx: number; cy: number }> = [];

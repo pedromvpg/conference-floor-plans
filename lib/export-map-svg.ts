@@ -12,6 +12,7 @@ import {
   isSvgUnderlay,
   svgViewBox,
 } from "./svg-layers";
+import { fetchVenueSvgMarkup } from "./venue-svg-load";
 import type { Floor, LibraryAsset, MapObject, Sponsor } from "./types";
 import { isMapPinObject, isPinObject, MAP_PIN_META } from "./types";
 
@@ -426,14 +427,5 @@ export async function copySvgForIllustrator(svg: string): Promise<void> {
 
 export async function loadVenueSvgMarkup(floor: Floor, live?: string | null): Promise<string | null> {
   if (live) return live;
-  const url = floor.underlayUrl;
-  if (!url || !isSvgUnderlay(url)) return null;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const text = await res.text();
-    return /<svg[\s>]/i.test(text) ? text : null;
-  } catch {
-    return null;
-  }
+  return fetchVenueSvgMarkup(floor.underlayUrl);
 }
