@@ -1083,16 +1083,96 @@ export function setSvgLayerText(markup: string, id: string, text: string): strin
   return new XMLSerializer().serializeToString(root);
 }
 
-export function translateSvgElement(markup: string, id: string, dx: number, dy: number): string {
-  const root = parseRoot(markup);
-  const el = findLayer(root, id);
-  if (!el) return markup;
+function selectedRootEls(root: SVGSVGElement, ids: string[]): Element[] {
+  const set = new Set(ids);
+  const out: Element[] = [];
+  for (const el of collectNodes(root)) {
+    const id = el.getAttribute(LAYER_ATTR);
+    if (!id || !set.has(id)) continue;
+    let p: Element | null = el.parentElement;
+    let nested = false;
+    while (p && p !== root) {
+      const pid = p.getAttribute(LAYER_ATTR);
+      if (pid && set.has(pid)) {
+        nested = true;
+        break;
+      }
+      p = p.parentElement;
+    }
+    if (!nested) out.push(el);
+  }
+  return out;
+}
+
+function stripCloneIds(el: Element) {
+  el.removeAttribute(LAYER_ATTR);
+  el.removeAttribute("id");
+  for (const child of el.querySelectorAll("*")) {
+    child.removeAttribute(LAYER_ATTR);
+    child.removeAttribute("id");
+  }
+}
+
+function translateEl(el: Element, dx: number, dy: number) {
+  if (!dx && !dy) return;
   ensureOrigTransform(el);
   const x = Number(el.getAttribute(TX_ATTR) || 0) + dx;
   const y = Number(el.getAttribute(TY_ATTR) || 0) + dy;
   el.setAttribute(TX_ATTR, String(x));
   el.setAttribute(TY_ATTR, String(y));
   writeExtraTransform(el);
+}
+
+export function extractSvgLayers(markup: string, ids: string[]): string | null {
+  if (!ids.length) return null;
+  const root = parseRoot(markup);
+  const els = selectedRootEls(root, ids);
+  if (!els.length) return null;
+  const wrap = root.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const attr of ["viewBox", "width", "height"] as const) {
+    const v = root.getAttribute(attr);
+    if (v) wrap.setAttribute(attr, v);
+  }
+  wrap.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  for (const el of els) wrap.appendChild(el.cloneNode(true));
+  return new XMLSerializer().serializeToString(wrap);
+}
+
+export function duplicateSvgLayers(
+  markup: string,
+  ids: string[],
+  dx: number,
+  dy: number,
+): { markup: string; ids: string[] } | null {
+  if (!ids.length) return null;
+  const root = parseRoot(markup);
+  const els = selectedRootEls(root, ids);
+  if (!els.length) return null;
+  const clones: Element[] = [];
+  for (const el of els) {
+    const clone = el.cloneNode(true) as Element;
+    stripCloneIds(clone);
+    el.parentNode?.insertBefore(clone, el.nextSibling);
+    clones.push(clone);
+  }
+  ensureLayerIds(root);
+  for (const clone of clones) translateEl(clone, dx, dy);
+  const nextIds = clones.map((c) => c.getAttribute(LAYER_ATTR)).filter((id): id is string => Boolean(id));
+  if (!nextIds.length) return null;
+  return { markup: new XMLSerializer().serializeToString(root), ids: nextIds };
+}
+
+export function translateSvgElement(markup: string, id: string, dx: number, dy: number): string {
+  return translateSvgElements(markup, [id], dx, dy);
+}
+
+export function translateSvgElements(markup: string, ids: string[], dx: number, dy: number): string {
+  if (!ids.length || (!dx && !dy)) return markup;
+  const root = parseRoot(markup);
+  for (const id of ids) {
+    const el = findLayer(root, id);
+    if (el) translateEl(el, dx, dy);
+  }
   return new XMLSerializer().serializeToString(root);
 }
 
