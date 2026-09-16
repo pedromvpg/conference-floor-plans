@@ -2,6 +2,11 @@ import type { ReactNode } from "react";
 
 type Kind = "plan" | "hall" | "walk";
 
+const svgFill = {
+  viewBox: "0 0 480 360",
+  preserveAspectRatio: "xMidYMid meet",
+} as const;
+
 export function HallSchematic({
   className,
   kind = "hall",
@@ -48,7 +53,7 @@ function BoothHallSchematic({ className }: { className?: string }) {
     [336, 244],
   ];
   return (
-    <svg viewBox="0 0 480 360" className={className} role="img" aria-label="Hall schematic">
+    <svg {...svgFill} className={className} role="img" aria-label="Hall schematic">
       <rect width="480" height="360" fill="#0a0a0a" />
       <Grid w={480} h={360} />
       <rect x="36" y="28" width="408" height="304" fill="none" stroke="#fcfcfc" strokeWidth="1.2" />
@@ -78,8 +83,9 @@ function BoothHallSchematic({ className }: { className?: string }) {
 function Pin({ cx, cy, children }: { cx: number; cy: number; children: ReactNode }) {
   return (
     <g transform={`translate(${cx} ${cy})`}>
-      <circle r="13" fill="#fcfcfc" />
-      <g fill="none" stroke="#111" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle r="15" fill="#fcfcfc" />
+      <circle r="15" fill="none" stroke="#000" strokeOpacity="0.12" />
+      <g fill="none" stroke="#111" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round">
         {children}
       </g>
     </g>
@@ -93,6 +99,7 @@ function Zone({
   h,
   fill,
   label,
+  size = 9,
 }: {
   x: number;
   y: number;
@@ -100,20 +107,21 @@ function Zone({
   h: number;
   fill: string;
   label?: string;
+  size?: number;
 }) {
   return (
     <g>
-      <rect x={x} y={y} width={w} height={h} fill={fill} rx="1.5" />
+      <rect x={x} y={y} width={w} height={h} fill={fill} rx="2" />
       {label ? (
         <text
           x={x + w / 2}
-          y={y + h / 2 + 3.5}
+          y={y + h / 2 + size * 0.35}
           textAnchor="middle"
           fill="#fcfcfc"
-          fontSize="9"
+          fontSize={size}
           fontFamily="ui-sans-serif, system-ui, sans-serif"
-          fontWeight="600"
-          letterSpacing="0.04em"
+          fontWeight="700"
+          letterSpacing="0.03em"
         >
           {label}
         </text>
@@ -122,89 +130,96 @@ function Zone({
   );
 }
 
+function MiniBooth({ x, y, w, h, fill = "#1c1c1c" }: { x: number; y: number; w: number; h: number; fill?: string }) {
+  return (
+    <g>
+      <rect x={x} y={y} width={w} height={h} fill={fill} stroke="#6b6b6b" strokeWidth="0.7" rx="0.6" />
+      <rect x={x + 1.4} y={y + 1.2} width={w * 0.38} height={h * 0.28} fill="#2a2a2a" />
+    </g>
+  );
+}
+
 function PlanSchematic({ className }: { className?: string }) {
-  const booths: [number, number, number, number][] = [];
+  const booths: [number, number][] = [];
   for (let r = 0; r < 4; r++) {
     for (let c = 0; c < 5; c++) {
       if (r === 0 && c > 2) continue;
-      booths.push([248 + c * 18, 168 + r * 16, 15, 13]);
+      booths.push([248 + c * 18, 168 + r * 16]);
     }
   }
   return (
-    <svg viewBox="0 0 480 360" className={className} role="img" aria-label="Floor plan schematic">
-      <rect width="480" height="360" fill="#0a0a0a" />
+    <svg {...svgFill} className={className} role="img" aria-label="Floor plan schematic">
+      <defs>
+        <radialGradient id="planGlow" cx="62%" cy="58%" r="58%">
+          <stop offset="0%" stopColor="#161616" />
+          <stop offset="100%" stopColor="#070707" />
+        </radialGradient>
+        <pattern id="planGrid" width="16" height="16" patternUnits="userSpaceOnUse">
+          <path d="M 16 0 L 0 0 0 16" fill="none" stroke="#2c2c2c" strokeWidth="0.55" />
+        </pattern>
+      </defs>
+      <rect width="480" height="360" fill="url(#planGlow)" />
+      <rect width="480" height="360" fill="url(#planGrid)" opacity="0.55" />
       <path
-        d="M130 8 L390 8 L470 175 L400 352 L80 352 L10 175 Z"
-        fill="#141414"
+        d="M118 4 L402 4 L478 178 L408 356 L72 356 L4 178 Z"
+        fill="#101010"
         stroke="#3a3a3a"
         strokeWidth="1"
       />
-      <path
-        d="M70 40 C52 120 40 175 58 255 L88 340"
-        fill="none"
-        stroke="#2e2e2e"
-        strokeWidth="10"
-        strokeLinecap="round"
-      />
-      <g stroke="#2c2c2c" strokeWidth="0.6" fill="none">
-        {Array.from({ length: 10 }, (_, i) => (
-          <line key={`h${i}`} x1="40" y1={20 + i * 36} x2="440" y2={20 + i * 36} />
-        ))}
-        {Array.from({ length: 14 }, (_, i) => (
-          <line key={`v${i}`} x1={50 + i * 30} y1="12" x2={50 + i * 30} y2="350" />
-        ))}
-      </g>
-      <rect x="214" y="78" width="214" height="236" fill="#111" stroke="#9a9a9a" strokeWidth="1.5" />
-      <Zone x={222} y={86} w={198} h={40} fill="#8b5cf6" />
-      <Zone x={222} y={132} w={78} h={48} fill="#1a1a1a" />
+      <path d="M58 36 C40 118 28 176 48 258 L80 348" fill="none" stroke="#232323" strokeWidth="14" strokeLinecap="round" />
+      <rect x="208" y="72" width="228" height="248" fill="#0e0e0e" stroke="#d4d4d4" strokeWidth="1.8" rx="2" />
+      <Zone x={216} y={80} w={212} h={42} fill="#7c3aed" />
+      <rect x="216" y="80" width="212" height="7" fill="#c4b5fd" opacity="0.28" />
+      <Zone x={216} y={128} w={82} h={50} fill="#171717" />
       <text
-        x="261"
-        y="154"
+        x="257"
+        y="157"
         textAnchor="middle"
         fill="#fcfcfc"
-        fontSize="9"
+        fontSize="9.5"
         fontFamily="ui-sans-serif, system-ui, sans-serif"
-        fontWeight="700"
+        fontWeight="800"
       >
         CARD EXPO
       </text>
-      <Zone x={338} y={132} w={82} h={44} fill="#3b82f6" label="Press" />
-      {booths.map(([x, y, w, h], i) => (
-        <rect key={i} x={x} y={y} width={w} height={h} fill="#1c1c1c" stroke="#5a5a5a" strokeWidth="0.6" />
+      <Zone x={336} y={128} w={92} h={46} fill="#2563eb" label="Press" size={10} />
+      {booths.map(([x, y], i) => (
+        <MiniBooth key={i} x={x} y={y} w={15} h={13} />
       ))}
-      <rect x="248" y="184" width="24" height="18" fill="#166534" />
-      <rect x="274" y="184" width="24" height="18" fill="#166534" />
-      <rect x="248" y="232" width="40" height="18" fill="#9a3412" />
-      <Zone x={338} y={184} w={82} h={54} fill="#52525b" label="Whale" />
-      <Zone x={232} y={254} w={70} h={40} fill="#2563eb" label="DEAL ZONE" />
-      <Zone x={306} y={254} w={114} h={40} fill="#7c3aed" label="GENESIS STAGE" />
-      <Pin cx={196} cy={128}>
+      <rect x="248" y="184" width="24" height="18" fill="#15803d" rx="0.6" />
+      <rect x="274" y="184" width="24" height="18" fill="#16a34a" rx="0.6" />
+      <rect x="248" y="232" width="40" height="18" fill="#c2410c" rx="0.6" />
+      <Zone x={336} y={182} w={92} h={56} fill="#52525b" label="Whale" size={10} />
+      <Zone x={228} y={256} w={78} h={44} fill="#1d4ed8" label="DEAL ZONE" size={8} />
+      <Zone x={310} y={256} w={118} h={44} fill="#6d28d9" label="GENESIS STAGE" size={8.5} />
+      <rect x="336" y="128" width="92" height="46" fill="none" stroke="#93c5fd" strokeWidth="1.2" rx="2" />
+      <Pin cx={186} cy={126}>
         <path d="M-3.5 -2.5 h7 v7 h-7 z" />
         <path d="M-1.5 1.5 h3" />
       </Pin>
-      <Pin cx={178} cy={168}>
+      <Pin cx={168} cy={168}>
         <path d="M0 -4 v8" />
         <path d="M-2.5 -1.5 l2.5 -2.5 2.5 2.5" />
         <path d="M-2.5 3.5 l2.5 -2.5 2.5 2.5" />
       </Pin>
-      <Pin cx={164} cy={208}>
+      <Pin cx={154} cy={210}>
         <path d="M-3.5 3.5 L-3.5 -1 0 -4 3.5 -1 3.5 3.5" />
         <path d="M-1.2 3.5 v-3 h2.4 v3" />
       </Pin>
-      <Pin cx={156} cy={248}>
+      <Pin cx={146} cy={252}>
         <circle cx="0" cy="0" r="4" />
         <path d="M0 -1.6 v3.4" />
         <circle cx="0" cy="-2.6" r="0.4" fill="#111" stroke="none" />
       </Pin>
-      <Pin cx={176} cy={286}>
+      <Pin cx={168} cy={292}>
         <path d="M-3.5 3 v-4.5 a3.5 3.5 0 0 1 7 0 V3" />
         <path d="M-3.5 3 h7" />
       </Pin>
-      <Pin cx={214} cy={308}>
+      <Pin cx={208} cy={318}>
         <path d="M-2.5 2.5 c0 -4 5 -4 5 0" />
         <circle cx="-1" cy="-1.5" r="1.4" />
       </Pin>
-      <Pin cx={438} cy={176}>
+      <Pin cx={448} cy={176}>
         <path d="M-4 2 h8 v-2.5 l-2 -3 h-4 l-2 3 z" />
         <path d="M-1.6 2 v2.4 h3.2 V2" />
       </Pin>
@@ -215,7 +230,7 @@ function PlanSchematic({ className }: { className?: string }) {
 type Box = { x: number; y: number; w: number; d: number; h: number; fill: string };
 
 function project(x: number, y: number, z: number) {
-  return [48 + x * 17.5 + y * 13, 292 - y * 11.2 + x * 2.4 - z * 24] as const;
+  return [40 + x * 18.4 + y * 13.8, 286 - y * 11.6 + x * 2.2 - z * 26] as const;
 }
 
 function poly(pts: readonly (readonly [number, number])[]) {
@@ -228,6 +243,15 @@ function shade(hex: string, amount: number) {
   return `#${[ch(16), ch(8), ch(0)].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
+function BoxShadow({ box }: { box: Box }) {
+  const { x, y, w, d } = box;
+  const s00 = project(x + 0.35, y + 0.2, 0);
+  const s10 = project(x + w + 0.35, y + 0.2, 0);
+  const s11 = project(x + w + 0.35, y + d + 0.2, 0);
+  const s01 = project(x + 0.35, y + d + 0.2, 0);
+  return <polygon points={poly([s00, s10, s11, s01])} fill="#000" opacity="0.28" />;
+}
+
 function Extrude({ box }: { box: Box }) {
   const { x, y, w, d, h, fill } = box;
   const t00 = project(x, y, h);
@@ -238,54 +262,93 @@ function Extrude({ box }: { box: Box }) {
   const b10 = project(x + w, y, 0);
   const b11 = project(x + w, y + d, 0);
   return (
-    <g stroke="#fcfcfc" strokeOpacity="0.28" strokeWidth="0.65" strokeLinejoin="round">
-      <polygon points={poly([t10, t11, b11, b10])} fill={shade(fill, -38)} />
-      <polygon points={poly([t00, t10, b10, b00])} fill={shade(fill, -70)} />
-      <polygon points={poly([t00, t10, t11, t01])} fill={fill} />
+    <g stroke="#fff" strokeOpacity="0.18" strokeWidth="0.55" strokeLinejoin="round">
+      <polygon points={poly([t10, t11, b11, b10])} fill={shade(fill, -42)} />
+      <polygon points={poly([t00, t10, b10, b00])} fill={shade(fill, -78)} />
+      <polygon points={poly([t00, t10, t11, t01])} fill={shade(fill, 18)} />
+      <line x1={t00[0]} y1={t00[1]} x2={t11[0]} y2={t11[1]} stroke="#fff" strokeOpacity="0.12" />
     </g>
   );
 }
 
-function FloorPad({ x, y, w, d }: { x: number; y: number; w: number; d: number }) {
-  const a = project(x, y, 0);
-  const b = project(x + w, y, 0);
-  const c = project(x + w, y + d, 0);
-  const e = project(x, y + d, 0);
-  return <polygon points={poly([a, b, c, e])} fill="none" stroke="#fcfcfc" strokeOpacity="0.28" strokeWidth="0.8" />;
+/** SE camera: south and east are nearer. Draw far (north/west) first. */
+function paintOrder(boxes: Box[]) {
+  return [...boxes].sort((a, b) => {
+    const near = (box: Box) => -box.y * 11.6 + (box.x + box.w) * 2.2;
+    const d = near(a) - near(b);
+    if (Math.abs(d) > 0.01) return d;
+    return a.x + a.w - (b.x + b.w);
+  });
 }
 
 function WalkSchematic({ className }: { className?: string }) {
   const orange = "#ea580c";
+  const floor = [
+    project(-2.2, -4.4, 0),
+    project(22.4, -4.4, 0),
+    project(22.4, 15.2, 0),
+    project(-2.2, 15.2, 0),
+  ];
   const boxes: Box[] = [
-    { x: -1.2, y: 11.4, w: 6.4, d: 3.1, h: 1.25, fill: "#6d28d9" },
-    { x: 6.8, y: 10.6, w: 4.6, d: 2.7, h: 1.2, fill: "#1d4ed8" },
-    { x: 12.6, y: 10.2, w: 7.4, d: 3.2, h: 1.15, fill: orange },
-    { x: -0.4, y: 8.1, w: 3.4, d: 2.1, h: 1.15, fill: "#dc2626" },
-    { x: 3.8, y: 8.0, w: 3.6, d: 2.2, h: 1.1, fill: "#16a34a" },
-    { x: 8.2, y: 7.4, w: 2.0, d: 1.7, h: 1.05, fill: orange },
-    { x: 10.3, y: 7.4, w: 2.0, d: 1.7, h: 1.05, fill: orange },
-    { x: 13.8, y: 6.4, w: 6.8, d: 2.9, h: 1.2, fill: orange },
-    { x: 2.6, y: 4.6, w: 6.8, d: 2.5, h: 1.08, fill: orange },
-    { x: -1.6, y: 2.6, w: 2.0, d: 1.7, h: 1.02, fill: orange },
-    { x: 0.5, y: 2.6, w: 2.0, d: 1.7, h: 1.02, fill: orange },
-    { x: 5.4, y: 1.8, w: 6.6, d: 2.6, h: 1.08, fill: orange },
-    { x: 13.2, y: 1.2, w: 6.6, d: 3.4, h: 1.45, fill: "#1d4ed8" },
-    { x: 6.4, y: -0.5, w: 1.9, d: 1.65, h: 1.0, fill: orange },
-    { x: 8.4, y: -0.5, w: 1.9, d: 1.65, h: 1.0, fill: orange },
-    { x: 6.4, y: -2.25, w: 1.9, d: 1.65, h: 1.0, fill: orange },
-    { x: 8.4, y: -2.25, w: 1.9, d: 1.65, h: 1.0, fill: orange },
-    { x: 11.6, y: -1.8, w: 1.9, d: 1.65, h: 1.0, fill: orange },
-    { x: 13.6, y: -1.8, w: 1.9, d: 1.65, h: 1.0, fill: orange },
-    { x: 11.6, y: -3.55, w: 1.9, d: 1.65, h: 1.0, fill: orange },
-    { x: 13.6, y: -3.55, w: 1.9, d: 1.65, h: 1.0, fill: orange },
-  ].sort((a, b) => b.y + b.d * 0.5 + b.x * 0.15 - (a.y + a.d * 0.5 + a.x * 0.15));
+    { x: -0.6, y: 11.6, w: 7.2, d: 3.0, h: 1.35, fill: "#6d28d9" },
+    { x: 7.4, y: 11.2, w: 5.2, d: 2.6, h: 1.22, fill: "#1d4ed8" },
+    { x: 13.4, y: 10.6, w: 7.8, d: 3.3, h: 1.18, fill: orange },
+    { x: -0.2, y: 8.2, w: 3.6, d: 2.2, h: 1.18, fill: "#dc2626" },
+    { x: 4.0, y: 8.1, w: 3.8, d: 2.3, h: 1.12, fill: "#16a34a" },
+    { x: 8.6, y: 7.6, w: 2.05, d: 1.75, h: 1.05, fill: orange },
+    { x: 10.8, y: 7.6, w: 2.05, d: 1.75, h: 1.05, fill: orange },
+    { x: 14.0, y: 6.6, w: 7.2, d: 3.0, h: 1.22, fill: orange },
+    { x: 2.4, y: 4.6, w: 7.2, d: 2.55, h: 1.1, fill: orange },
+    { x: -1.4, y: 2.5, w: 2.05, d: 1.75, h: 1.02, fill: orange },
+    { x: 0.8, y: 2.5, w: 2.05, d: 1.75, h: 1.02, fill: orange },
+    { x: 5.6, y: 1.7, w: 7.0, d: 2.7, h: 1.1, fill: orange },
+    { x: 13.6, y: 1.1, w: 7.0, d: 3.5, h: 1.55, fill: "#1d4ed8" },
+    { x: 6.6, y: -0.6, w: 2.0, d: 1.7, h: 1.0, fill: orange },
+    { x: 8.7, y: -0.6, w: 2.0, d: 1.7, h: 1.0, fill: orange },
+    { x: 6.6, y: -2.45, w: 2.0, d: 1.7, h: 1.0, fill: orange },
+    { x: 8.7, y: -2.45, w: 2.0, d: 1.7, h: 1.0, fill: orange },
+    { x: 12.0, y: -1.9, w: 2.0, d: 1.7, h: 1.0, fill: orange },
+    { x: 14.1, y: -1.9, w: 2.0, d: 1.7, h: 1.0, fill: orange },
+    { x: 12.0, y: -3.75, w: 2.0, d: 1.7, h: 1.0, fill: orange },
+    { x: 14.1, y: -3.75, w: 2.0, d: 1.7, h: 1.0, fill: orange },
+  ];
+  const ordered = paintOrder(boxes);
+
+  const tiles: [number, number][] = [];
+  for (let y = -3; y < 14; y += 2.2) {
+    for (let x = -1; x < 21; x += 2.4) tiles.push([x, y]);
+  }
 
   return (
-    <svg viewBox="0 0 480 360" className={className} role="img" aria-label="Hall aisle schematic">
-      <rect width="480" height="360" fill="#0a0a0a" />
-      <FloorPad x={3.2} y={0.2} w={2.2} d={1.8} />
-      <FloorPad x={10.2} y={3.4} w={2.4} d={2} />
-      {boxes.map((box) => (
+    <svg {...svgFill} className={className} role="img" aria-label="Hall aisle schematic">
+      <defs>
+        <linearGradient id="walkSky" x1="0" y1="0" x2="0.2" y2="1">
+          <stop offset="0%" stopColor="#121212" />
+          <stop offset="100%" stopColor="#050505" />
+        </linearGradient>
+      </defs>
+      <rect width="480" height="360" fill="url(#walkSky)" />
+      <polygon points={poly(floor)} fill="#0c0c0c" />
+      {tiles.map(([x, y], i) => {
+        const a = project(x, y, 0);
+        const b = project(x + 2.15, y, 0);
+        const c = project(x + 2.15, y + 1.95, 0);
+        const e = project(x, y + 1.95, 0);
+        return (
+          <polygon
+            key={i}
+            points={poly([a, b, c, e])}
+            fill="none"
+            stroke="#fcfcfc"
+            strokeOpacity="0.06"
+            strokeWidth="0.6"
+          />
+        );
+      })}
+      {ordered.map((box) => (
+        <BoxShadow key={`s-${box.x}-${box.y}-${box.w}`} box={box} />
+      ))}
+      {ordered.map((box) => (
         <Extrude key={`${box.x}-${box.y}-${box.w}`} box={box} />
       ))}
     </svg>
