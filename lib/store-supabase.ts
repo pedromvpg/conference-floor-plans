@@ -403,39 +403,43 @@ export class SupabaseStore implements Store {
   }
 
   async upsertObject(obj: MapObject) {
-    const { data, error } = await this.sb
-      .from("objects")
-      .upsert({
-        id: obj.id,
-        floor_id: obj.floorId,
-        kind: obj.kind,
-        polygon: serializePolygon(obj.polygon, obj.path),
-        x: obj.x,
-        y: obj.y,
-        rotation: obj.rotation,
-        booth_number: obj.boothNumber,
-        name: obj.name,
-        description: obj.description ?? "",
-        event_date: obj.eventDate ?? "",
-        sponsor_id: obj.sponsorId,
-        amenity_type: obj.amenityType,
-        color: obj.color,
-        paint: obj.paint ?? null,
-        appearance: obj.appearance,
-        kit_kind: obj.kitKind,
-        facing_deg: obj.facingDeg ?? 0,
-        model_asset_id: obj.modelAssetId,
-        rug_texture_asset_id: obj.rugTextureAssetId,
-        wall_texture_asset_id: obj.wallTextureAssetId,
-        logo_asset_id: obj.logoAssetId,
-        fill_texture_asset_id: obj.fillTextureAssetId,
-        created_at: obj.createdAt,
-        updated_at: nowIso(),
-      })
-      .select("*")
-      .single();
+    const [saved] = await this.upsertObjects([obj]);
+    if (!saved) throw new Error("Could not save object");
+    return saved;
+  }
+
+  async upsertObjects(objs: MapObject[]) {
+    if (!objs.length) return [];
+    const rows = objs.map((obj) => ({
+      id: obj.id,
+      floor_id: obj.floorId,
+      kind: obj.kind,
+      polygon: serializePolygon(obj.polygon, obj.path),
+      x: obj.x,
+      y: obj.y,
+      rotation: obj.rotation,
+      booth_number: obj.boothNumber,
+      name: obj.name,
+      description: obj.description ?? "",
+      event_date: obj.eventDate ?? "",
+      sponsor_id: obj.sponsorId,
+      amenity_type: obj.amenityType,
+      color: obj.color,
+      paint: obj.paint ?? null,
+      appearance: obj.appearance,
+      kit_kind: obj.kitKind,
+      facing_deg: obj.facingDeg ?? 0,
+      model_asset_id: obj.modelAssetId,
+      rug_texture_asset_id: obj.rugTextureAssetId,
+      wall_texture_asset_id: obj.wallTextureAssetId,
+      logo_asset_id: obj.logoAssetId,
+      fill_texture_asset_id: obj.fillTextureAssetId,
+      created_at: obj.createdAt,
+      updated_at: nowIso(),
+    }));
+    const { data, error } = await this.sb.from("objects").upsert(rows).select("*");
     if (error) throw error;
-    return normalizeObject(objectFrom(data as ObjectRow));
+    return (data as ObjectRow[]).map((row) => normalizeObject(objectFrom(row)));
   }
 
   async getObject(id: string) {

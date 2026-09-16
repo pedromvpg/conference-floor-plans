@@ -50,6 +50,7 @@ export interface Store {
   updateFloor(id: string, patch: Partial<Floor>): Promise<Floor>;
   deleteFloor(id: string): Promise<void>;
   upsertObject(obj: MapObject): Promise<MapObject>;
+  upsertObjects(objs: MapObject[]): Promise<MapObject[]>;
   getObject(id: string): Promise<MapObject | null>;
   deleteObject(id: string): Promise<void>;
   replaceSponsors(eventId: string, sponsors: Omit<Sponsor, "id" | "eventId">[]): Promise<Sponsor[]>;

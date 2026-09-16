@@ -481,12 +481,23 @@ export class DemoStore implements Store {
   }
 
   async upsertObject(obj: MapObject) {
+    const [saved] = await this.upsertObjects([obj]);
+    if (!saved) throw new Error("Could not save object");
+    return saved;
+  }
+
+  async upsertObjects(objs: MapObject[]) {
+    if (!objs.length) return [];
     return useDb(true, (db) => {
-      const i = db.objects.findIndex((o) => o.id === obj.id);
-      const next = normalizeObject({ ...obj, updatedAt: nowIso() });
-      if (i >= 0) db.objects[i] = next;
-      else db.objects.push(next);
-      return next;
+      const saved: MapObject[] = [];
+      for (const obj of objs) {
+        const i = db.objects.findIndex((o) => o.id === obj.id);
+        const next = normalizeObject({ ...obj, updatedAt: nowIso() });
+        if (i >= 0) db.objects[i] = next;
+        else db.objects.push(next);
+        saved.push(next);
+      }
+      return saved;
     });
   }
 
