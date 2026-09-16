@@ -1,3 +1,4 @@
+import { ringBounds, ringCentroid } from "./geometry";
 import type { BezierMode, BezierNode, Ring } from "./types";
 
 export type { BezierMode, BezierNode };
@@ -118,6 +119,30 @@ export function rotateBezier(
     const [outDx, outDy] = rot(n.outDx, n.outDy);
     return { ...n, x: cx + dx, y: cy + dy, inDx, inDy, outDx, outDy };
   });
+}
+
+/** Scale a plot in facing-local space so edge labels match `width` × `height`. */
+export function scaleShapeToLocalSize(
+  obj: { polygon: Ring | null; path?: BezierNode[] | null; facingDeg?: number | null },
+  width: number,
+  height: number,
+): { polygon: Ring; path: BezierNode[] } | null {
+  if (!obj.polygon?.length) return null;
+  const facing = obj.facingDeg ?? 0;
+  const path = objectShape(obj);
+  const { x: cx, y: cy } = ringCentroid(obj.polygon);
+  const localPath = facing ? rotateBezier(path, -facing, { x: cx, y: cy }) : path;
+  const localB = ringBounds(tessellate(localPath, true));
+  if (localB.w < EPS || localB.h < EPS) return null;
+  const nextB = {
+    minX: localB.minX + (localB.w - width) / 2,
+    minY: localB.minY + (localB.h - height) / 2,
+    maxX: localB.minX + (localB.w - width) / 2 + width,
+    maxY: localB.minY + (localB.h - height) / 2 + height,
+  };
+  const scaled = applyBoundsToBezier(localPath, localB, nextB);
+  const world = facing ? rotateBezier(scaled, facing, { x: cx, y: cy }) : scaled;
+  return commitShape(world);
 }
 
 export function applyBoundsToBezier(

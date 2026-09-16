@@ -108,6 +108,11 @@ export function scaleRingToSize(ring: Ring, width: number, height: number): Ring
   return ring.map(([x, y]) => [b.minX + (x - b.minX) * sx, b.minY + (y - b.minY) * sy]);
 }
 
+/** Axis-aligned size after un-yaw — matches on-map / 3D edge dimension labels. */
+export function localRingBounds(ring: Ring, facingDeg = 0) {
+  return ringBounds(rotateRing(ring, -(facingDeg || 0)));
+}
+
 export type BoundsHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
 export function handleCursor(handle: BoundsHandle | "rotate"): string {
