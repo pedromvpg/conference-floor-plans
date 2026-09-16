@@ -2909,6 +2909,7 @@ export function FloorCanvas({
         hoverId: underlayHoverLayerId,
         selectedId: selectedVenueElementId,
         selectedIds: selectedVenueElementIds,
+        omitPrivate: mode !== "edit",
       });
       if (underlayVb && underlayW > 0 && underlayH > 0) {
         const draw = svgDrawingBox(displayUnderlaySvg) ?? underlayVb;

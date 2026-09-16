@@ -732,10 +732,27 @@ function samplePathD(d: string): { points: Ring; closed: boolean } | null {
 
 export function svgInnerMarkup(
   markup: string,
-  opts?: { hoverId?: string | null; selectedId?: string | null; selectedIds?: string[] },
+  opts?: {
+    hoverId?: string | null;
+    selectedId?: string | null;
+    selectedIds?: string[];
+    omitPrivate?: boolean;
+  },
 ): string {
   const root = parseRoot(markup);
   root.querySelector(`#${PRIVATE_STYLE_ID}`)?.remove();
+  if (opts?.omitPrivate) {
+    const walk = (el: Element) => {
+      for (const child of [...el.children]) {
+        if (isPrivate(child)) {
+          child.remove();
+          continue;
+        }
+        walk(child);
+      }
+    };
+    walk(root);
+  }
   const hoverId = opts?.hoverId ?? null;
   const selected = new Set(
     opts?.selectedIds?.length ? opts.selectedIds : opts?.selectedId ? [opts.selectedId] : [],
