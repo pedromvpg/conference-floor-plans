@@ -59,8 +59,8 @@ import { useMapViewPrefs } from "@/lib/use-map-view-prefs";
 import { DEFAULT_FLOOR_BASEMAP, BASEMAP_COORD_STEP, bearingSliderValue, parseLatLngPaste, roundBasemapCoord, wrapBearingDeg } from "@/lib/basemap";
 import { withInheritedFloorSettings, inheritedSettingsTargetId } from "@/lib/floor-settings";
 import { shouldSkipVenueSvgFetch, skipAfterVenueSvgPersist, type VenueSvgFetchSkip } from "@/lib/venue-svg-load";
-import { floorSizeMeters, metersFromPixels, ringBounds, scaleRingToSize } from "@/lib/geometry";
-import { commitShape, objectShape, rotateBezier, translateBezier, type BezierNode } from "@/lib/bezier";
+import { floorSizeMeters, localRingBounds, metersFromPixels, ringBounds } from "@/lib/geometry";
+import { commitShape, objectShape, rotateBezier, scaleShapeToLocalSize, translateBezier, type BezierNode } from "@/lib/bezier";
 import { formatArea, formatLength, formatSize, fromMeters, toMeters } from "@/lib/units";
 import { useUnits } from "@/lib/use-units";
 import type {
@@ -107,6 +107,9 @@ import {
   wrapRasterAsSvg,
   appendPastedSvg,
   clipboardLooksLikeSvg,
+  duplicateSvgLayers,
+  extractSvgLayers,
+  translateSvgElements,
   pastedSvgPaths,
   pathfinderSvgLayers,
   type PathfinderOp,
@@ -208,6 +211,7 @@ function objectArea(o: MapObject): number {
 }
 
 const CLIP_PREFIX = "conference-floor-plans-objects:v1:";
+const VENUE_CLIP_PREFIX = "conference-floor-plans-venue:v1:";
 const PASTE_NUDGE_M = 1;
 
 function isTypingTarget(el: EventTarget | null) {
@@ -228,6 +232,12 @@ function withObjectPaint(o: MapObject, paint: ShapePaint): MapObject {
   const fill = paint.fill;
   const color = fill == null || fill === "none" ? null : fill.startsWith("#") ? fill : o.color;
   return { ...o, paint, color };
+}
+
+function parseCopiedVenue(text: string): string | null {
+  if (!text.startsWith(VENUE_CLIP_PREFIX)) return null;
+  const svg = text.slice(VENUE_CLIP_PREFIX.length).trim();
+  return svg ? svg : null;
 }
 
 function parseCopiedObjects(text: string): MapObject[] | null {
@@ -422,6 +432,7 @@ export function DesignerApp({
   const [sponsorSort, setSponsorSort] = useState<SponsorSort>("tier");
   const [sponsorSortDir, setSponsorSortDir] = useState<SortDir>("asc");
   const [busy, setBusy] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"objects" | "furniture" | "venue" | "map">("objects");
   const [alignDrawingToMap, setAlignDrawingToMap] = useState(false);
@@ -462,6 +473,7 @@ export function DesignerApp({
   const activeFloorIdRef = useRef("");
   const venueSvgSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const objectClipboardRef = useRef<MapObject[] | null>(null);
+  const venueClipboardRef = useRef<string | null>(null);
   const pasteGenRef = useRef(1);
   const venueEditRef = useRef({
     el: null as string | null,
@@ -639,15 +651,16 @@ export function DesignerApp({
       setBoothHeight("");
       return;
     }
-    const b = ringBounds(selected.polygon);
+    const b = localRingBounds(selected.polygon, selected.facingDeg ?? 0);
     const nextW = fmtDim(b.w, units);
     const nextH = fmtDim(b.h, units);
     setBoothWidth((w) => (w === nextW ? w : nextW));
     setBoothHeight((h) => (h === nextH ? h : nextH));
   }, [
     selected?.id,
-    selected?.polygon ? Math.round(ringBounds(selected.polygon).w * 1000) : 0,
-    selected?.polygon ? Math.round(ringBounds(selected.polygon).h * 1000) : 0,
+    selected?.facingDeg ?? 0,
+    selected?.polygon ? Math.round(localRingBounds(selected.polygon, selected.facingDeg ?? 0).w * 1000) : 0,
+    selected?.polygon ? Math.round(localRingBounds(selected.polygon, selected.facingDeg ?? 0).h * 1000) : 0,
     units,
   ]);
 
@@ -785,33 +798,31 @@ export function DesignerApp({
     }
   }
 
-  function flushObjectSaves() {
+  function flushObjectSaves(): Promise<void> {
     if (objectSaveTimer.current) {
       clearTimeout(objectSaveTimer.current);
       objectSaveTimer.current = null;
     }
     const objs = [...pendingObjectSaves.current.values()];
     pendingObjectSaves.current.clear();
-    if (!objs.length) return;
+    if (!objs.length) return Promise.resolve();
     const epoch = writeEpoch.current;
     const signal = writesAbort.current.signal;
     setSaveLabel("Saving…");
-    void Promise.all(
-      objs.map((obj) =>
-        fetch("/api/objects", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(obj),
-          signal,
-        }),
-      ),
-    ).then(
-      () => {
+    return fetch("/api/objects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(objs),
+      signal,
+    }).then(
+      (res) => {
         if (epoch !== writeEpoch.current) return;
+        if (!res.ok) throw new Error("Could not save");
         markSaved();
       },
       (err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
+        toast.error("Could not save");
       },
     );
   }
@@ -993,7 +1004,7 @@ export function DesignerApp({
     if (!selected?.polygon) return;
     const entered = toMeters(parseDim(raw), units);
     if (!Number.isFinite(entered) || entered <= 0) return;
-    const b = ringBounds(selected.polygon);
+    const b = localRingBounds(selected.polygon, selected.facingDeg ?? 0);
     let w = axis === "w" ? entered : b.w;
     let h = axis === "h" ? entered : b.h;
     if (constrainProportions && b.w > 0 && b.h > 0) {
@@ -1001,11 +1012,12 @@ export function DesignerApp({
       if (axis === "w") h = w / ratio;
       else w = h * ratio;
     }
-    const polygon = scaleRingToSize(selected.polygon, w, h);
-    const nb = ringBounds(polygon);
+    const shape = scaleShapeToLocalSize(selected, w, h);
+    if (!shape) return;
+    const nb = localRingBounds(shape.polygon, selected.facingDeg ?? 0);
     setBoothWidth(fmtDim(nb.w, units));
     setBoothHeight(fmtDim(nb.h, units));
-    void patchObject({ ...selected, polygon }, { coalesceKey: `obj:${selected.id}:size` });
+    void patchObject({ ...selected, ...shape }, { coalesceKey: `obj:${selected.id}:size` });
   }
 
   function matchingBoothPresetId(w: number, h: number): string {
@@ -1021,13 +1033,14 @@ export function DesignerApp({
     const k = kitByKind(kits, isExhibitKitKind(id) ? id : null);
     const size = k ? { w: k.widthM, d: k.depthM } : null;
     if (!size) return;
-    const polygon = scaleRingToSize(selected.polygon, size.w, size.d);
-    const nb = ringBounds(polygon);
+    const shape = scaleShapeToLocalSize(selected, size.w, size.d);
+    if (!shape) return;
+    const nb = localRingBounds(shape.polygon, selected.facingDeg ?? 0);
     setBoothWidth(fmtDim(nb.w, units));
     setBoothHeight(fmtDim(nb.h, units));
     void patchObject({
       ...selected,
-      polygon,
+      ...shape,
       kitKind: k?.kind ?? selected.kitKind,
       appearance: k ? kitAppearance(k.kind) : selected.appearance,
     });
@@ -1115,15 +1128,11 @@ export function DesignerApp({
     setBundle((b) => ({ ...b, objects: [...b.objects, ...objs] }));
     setSelectedIds(objs.map((o) => o.id));
     if (!objs.some(isMapPinObject)) setSidebarTab("objects");
-    await Promise.all(
-      objs.map((obj) =>
-        fetch("/api/objects", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(obj),
-        }),
-      ),
-    );
+    await fetch("/api/objects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(objs),
+    });
     markSaved();
   }, [snapshotVersion]);
 
@@ -1381,19 +1390,63 @@ export function DesignerApp({
     }
   }
 
+  async function flushPendingDrafts() {
+    const tasks: Promise<unknown>[] = [];
+    let persistDraft = false;
+    if (basemapSaveTimer.current) {
+      clearTimeout(basemapSaveTimer.current);
+      basemapSaveTimer.current = null;
+      persistDraft = true;
+    }
+    if (viewCenterSaveTimer.current) {
+      clearTimeout(viewCenterSaveTimer.current);
+      viewCenterSaveTimer.current = null;
+      persistDraft = true;
+    }
+    if (venueSvgSaveTimer.current) {
+      clearTimeout(venueSvgSaveTimer.current);
+      venueSvgSaveTimer.current = null;
+      const id = activeFloorIdRef.current;
+      const svg = venueSvgRef.current;
+      if (id && svg) {
+        tasks.push(
+          persistVenueSvg(svg, id).catch((err) => {
+            toast.error(err instanceof Error ? err.message : "Could not save layers");
+          }),
+        );
+      }
+    }
+    if (persistDraft) {
+      if (objectSaveTimer.current) {
+        clearTimeout(objectSaveTimer.current);
+        objectSaveTimer.current = null;
+      }
+      pendingObjectSaves.current.clear();
+      tasks.push(
+        persistSlice({ floors: bundleRef.current.floors, objects: bundleRef.current.objects }).catch(() =>
+          toast.error("Could not save map"),
+        ),
+      );
+    } else {
+      tasks.push(flushObjectSaves());
+    }
+    await Promise.all(tasks);
+  }
+
   async function publish() {
-    setBusy(true);
+    if (publishing) return;
+    setPublishing(true);
     try {
+      await flushPendingDrafts();
       const res = await fetch(`/api/events/${bundle.event.slug}/publish`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Publish failed");
       if (typeof data.publishedAt === "string") setPublishedAt(data.publishedAt);
       toast.success("Published");
-      window.open(`/e/${bundle.event.slug}`, "_blank");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Publish failed");
     } finally {
-      setBusy(false);
+      setPublishing(false);
     }
   }
 
@@ -1448,19 +1501,58 @@ export function DesignerApp({
       return objects.filter((o) => ids.has(o.id));
     }
 
-    function copySelected(e: ClipboardEvent | KeyboardEvent) {
-      const items = selectedForClipboard();
-      if (!items.length) return false;
+    function venuePasteNudge(svg: string) {
+      const cal = floor?.calibration;
+      const vb = svgViewBox(svg);
+      if (!cal || !vb) return { dx: 16, dy: 16 };
+      const size = floorSizeMeters(cal);
+      return {
+        dx: size.w > 0 ? (PASTE_NUDGE_M / size.w) * vb.w : 16,
+        dy: size.h > 0 ? (PASTE_NUDGE_M / size.h) * vb.h : 16,
+      };
+    }
+
+    function writeClip(e: ClipboardEvent | KeyboardEvent, payload: string) {
       e.preventDefault();
-      objectClipboardRef.current = items;
       pasteGenRef.current = 1;
-      const payload = CLIP_PREFIX + JSON.stringify(items);
       if (e instanceof ClipboardEvent) {
         e.clipboardData?.setData("text/plain", payload);
       } else {
         void navigator.clipboard.writeText(payload).catch(() => {});
       }
+    }
+
+    function copyVenue(e: ClipboardEvent | KeyboardEvent) {
+      const venue = venueEditRef.current;
+      if (venue.tab !== "venue" || !venue.els.length || !venue.svg) return false;
+      const markup = extractSvgLayers(venue.svg, venue.els);
+      if (!markup) return false;
+      venueClipboardRef.current = markup;
+      writeClip(e, VENUE_CLIP_PREFIX + markup);
       return true;
+    }
+
+    function copySelected(e: ClipboardEvent | KeyboardEvent) {
+      if (copyVenue(e)) return true;
+      const items = selectedForClipboard();
+      if (!items.length) return false;
+      objectClipboardRef.current = items;
+      writeClip(e, CLIP_PREFIX + JSON.stringify(items));
+      return true;
+    }
+
+    function pasteVenue(markup: string) {
+      const host = ensureVenueDrawing();
+      if (!host) return;
+      const imported = appendPastedSvg(host, markup);
+      if (!imported) return;
+      const n = pasteGenRef.current++;
+      const { dx, dy } = venuePasteNudge(imported.markup);
+      const next = translateSvgElements(imported.markup, imported.ids, n * dx, n * dy);
+      commitVenueSvg(next);
+      setSelectedVenueEls(imported.ids);
+      setSelectedVenueEl(imported.ids[imported.ids.length - 1] ?? null);
+      setTool("select");
     }
 
     function pasteObjects(sources: MapObject[]) {
@@ -1539,6 +1631,12 @@ export function DesignerApp({
     function onPaste(e: ClipboardEvent) {
       if (isTypingTarget(e.target) || inPalette(e.target)) return;
       const text = e.clipboardData?.getData("text/plain") ?? "";
+      const venueMarkup = parseCopiedVenue(text) ?? (text.trim() ? null : venueClipboardRef.current);
+      if (venueMarkup && venueEditRef.current.tab === "venue") {
+        e.preventDefault();
+        pasteVenue(venueMarkup);
+        return;
+      }
       const parsed = parseCopiedObjects(text);
       const sources = parsed ?? (text.trim() ? null : objectClipboardRef.current);
       if (sources?.length) {
@@ -1585,10 +1683,19 @@ export function DesignerApp({
       }
     }
 
+    function deleteCopied() {
+      const venue = venueEditRef.current;
+      if (venue.tab === "venue" && venue.els.length) {
+        deleteSelectedVenueElement();
+        return;
+      }
+      void deleteSelectedObjects();
+    }
+
     function onCut(e: ClipboardEvent) {
       if (isTypingTarget(e.target) || inPalette(e.target)) return;
       if (!copySelected(e)) return;
-      void deleteSelectedObjects();
+      deleteCopied();
     }
 
     function onKey(e: KeyboardEvent) {
@@ -1607,6 +1714,18 @@ export function DesignerApp({
       }
       if (chord && e.key.toLowerCase() === "d") {
         if (e.repeat) return;
+        const venue = venueEditRef.current;
+        if (venue.tab === "venue" && venue.els.length && venue.svg) {
+          e.preventDefault();
+          pasteGenRef.current = 1;
+          const { dx, dy } = venuePasteNudge(venue.svg);
+          const dup = duplicateSvgLayers(venue.svg, venue.els, dx, dy);
+          if (!dup) return;
+          commitVenueSvg(dup.markup);
+          setSelectedVenueEls(dup.ids);
+          setSelectedVenueEl(dup.ids[dup.ids.length - 1] ?? null);
+          return;
+        }
         const items = selectedForClipboard();
         if (!items.length) return;
         e.preventDefault();
@@ -1619,7 +1738,7 @@ export function DesignerApp({
         return;
       }
       if (chord && e.key.toLowerCase() === "x") {
-        if (copySelected(e)) void deleteSelected();
+        if (copySelected(e)) deleteCopied();
         return;
       }
       if (chord) return;
@@ -1886,28 +2005,24 @@ export function DesignerApp({
           />
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
-          <div className="group relative">
-            <Button size="sm" onClick={() => void publish()} disabled={busy}>
-              Publish
-            </Button>
-            <div className="invisible absolute right-0 top-full z-50 pt-1 opacity-0 group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
-              <div className="min-w-52 rounded-lg bg-popover p-2 text-sm shadow-md ring-1 ring-foreground/10">
-                <p
-                  className="px-1.5 pb-1.5 text-[11px] leading-snug text-muted-foreground"
-                  suppressHydrationWarning
-                >
-                  {publishedAt
-                    ? `Last published ${formatSavedWhen(new Date(publishedAt), new Date(nowTick))} · ${formatAbsoluteWhen(new Date(publishedAt))}`
-                    : "Not published yet"}
-                </p>
-                <Button size="sm" variant="outline" className="w-full" asChild>
-                  <Link href={viewerUrl} target="_blank">
-                    Viewer
-                  </Link>
-                </Button>
-              </div>
-            </div>
-          </div>
+          <Button size="sm" variant="ghost" asChild>
+            <Link href={viewerUrl} target="_blank">
+              Viewer
+            </Link>
+          </Button>
+          <Button
+            size="sm"
+            variant="inverse"
+            onClick={() => void publish()}
+            disabled={publishing}
+            title={
+              publishedAt
+                ? `Last published ${formatSavedWhen(new Date(publishedAt), new Date(nowTick))}`
+                : "Not published yet"
+            }
+          >
+            {publishing ? "Publishing…" : "Publish"}
+          </Button>
         </div>
       </header>
 
@@ -2885,6 +3000,10 @@ export function DesignerApp({
                 selectedVenueElementIds={sidebarTab === "venue" ? selectedVenueEls : []}
                 onHoverVenueElement={setHoverLayerId}
                 onSelectVenueElement={(id, additive) => selectVenueLayer(id, additive)}
+                onSelectVenueElements={(ids) => {
+                  setSelectedVenueEls(ids);
+                  setSelectedVenueEl(ids[ids.length - 1] ?? null);
+                }}
                 onPreviewVenueSvg={(svg) => {
                   const id = activeFloorIdRef.current;
                   if (id) venueSvgByFloorRef.current.set(id, svg);
@@ -3385,7 +3504,8 @@ export function DesignerApp({
                       Area{" "}
                       <span className="tabular-nums text-foreground">
                         {formatArea(
-                          ringBounds(selected.polygon).w * ringBounds(selected.polygon).h,
+                          localRingBounds(selected.polygon, selected.facingDeg ?? 0).w *
+                            localRingBounds(selected.polygon, selected.facingDeg ?? 0).h,
                           units,
                           2,
                         )}
@@ -3395,8 +3515,8 @@ export function DesignerApp({
                       <Label className="text-[10px] text-muted-foreground">Preset</Label>
                       <Select
                         value={matchingBoothPresetId(
-                          ringBounds(selected.polygon).w,
-                          ringBounds(selected.polygon).h,
+                          localRingBounds(selected.polygon, selected.facingDeg ?? 0).w,
+                          localRingBounds(selected.polygon, selected.facingDeg ?? 0).h,
                         )}
                         onValueChange={(id) => applyBoothPreset(id)}
                       >
