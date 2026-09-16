@@ -4,7 +4,8 @@ import { boothFillHex, darkenHex } from "./colors";
 import { closeRing, ringBounds, ringCentroid, venueWorldRect } from "./geometry";
 import { facingObb, isometricPose, sunPosition, yawRad } from "./hall";
 import type { HallView } from "./hall-view";
-import { resolvedIconPaint } from "./paint";
+import { contrastingLabel, paintIsNone, paintToHex, parseShapePaint, resolvedIconPaint } from "./paint";
+import { fitLabelInBox, svgCenteredTspans } from "./label-layout";
 import { pinIconSvgMarkup } from "./pin-icons";
 import { svgVenueWorldPolylines } from "./svg-layers";
 import type { Floor, MapObject, Ring, Sponsor } from "./types";
@@ -314,12 +315,19 @@ export function buildHallSvg(input: HallExportInput): string {
   for (const o of plots) {
     const ring = plotRing(o)!;
     const sponsor = o.sponsorId ? bySponsor.get(o.sponsorId) : undefined;
-    const fill = boothFillHex(
-      o.color,
-      sponsor?.tier ?? "",
-      "light",
-      resolveAppearance(o) === "stage" ? "stage" : "booth",
-    );
+    const paint = parseShapePaint(o.paint);
+    const fillOverride = paint.fill ?? o.color;
+    const fillOff = paintIsNone(fillOverride);
+    const fill = fillOff
+      ? "#ecece8"
+      : fillOverride && /^#|^rgb|^hsl/i.test(fillOverride)
+        ? paintToHex(fillOverride, "#ecece8")
+        : boothFillHex(
+            o.color,
+            sponsor?.tier ?? "",
+            "light",
+            resolveAppearance(o) === "stage" ? "stage" : "booth",
+          );
     const title = objectTitle(o, sponsor);
     const h = plotHeight(o, hallView.cuboids);
     pushPrism(faces, ring, Math.max(h, 0.04), fill, camPos, sun, title);
@@ -426,9 +434,25 @@ export function buildHallSvg(input: HallExportInput): string {
     const text = (sponsor?.name || o.name || o.boothNumber || "").trim();
     if (!text) continue;
     const b = ringBounds(ring);
+    const paint = parseShapePaint(o.paint);
+    const fillOverride = paint.fill ?? o.color;
+    const fillOff = paintIsNone(fillOverride);
+    const fillHex = fillOff
+      ? "#ecece8"
+      : fillOverride && /^#|^rgb|^hsl/i.test(fillOverride)
+        ? paintToHex(fillOverride, "#ecece8")
+        : boothFillHex(
+            o.color,
+            sponsor?.tier ?? "",
+            "light",
+            resolveAppearance(o) === "stage" ? "stage" : "booth",
+          );
+    const ink = contrastingLabel(fillHex, paint.fillOpacity, "light");
     const fs = Math.max(8, Math.min(b.w, b.h) * scale2 * 0.08);
+    const fitted = fitLabelInBox(text, Math.max(8, b.w * scale2 * 0.7), Math.max(8, b.h * scale2 * 0.35), fs);
+    const x = num(p.x);
     labels.push(
-      `<text x="${num(p.x)}" y="${num(p.y)}" text-anchor="middle" dominant-baseline="middle" font-family="Inter, system-ui, sans-serif" font-size="${num(fs)}" font-weight="700" fill="#1a1a1a">${xmlEscape(text)}</text>`,
+      `<text x="${x}" y="${num(p.y)}" text-anchor="middle" dominant-baseline="middle" font-family="Inter, system-ui, sans-serif" font-size="${num(fitted.fontSize)}" font-weight="700" fill="${ink}">${svgCenteredTspans(x, num(p.y), fitted.fontSize, fitted.lines, xmlEscape)}</text>`,
     );
   }
 

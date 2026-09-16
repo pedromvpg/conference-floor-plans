@@ -102,6 +102,20 @@ export function contrastingGlyph(fillHex: string): string {
   return hexLuminance(fillHex) > 0.45 ? "#0a0a0a" : "#fcfcfc";
 }
 
+const MAP_LUMINANCE = { light: 0.96, dark: 0.07 } as const;
+
+/** Ink color for text sitting on a fill, blended with the map in light/dark mode. */
+export function contrastingLabel(
+  fillHex: string | null | undefined,
+  fillOpacity = 1,
+  tone: "light" | "dark" = "dark",
+): string {
+  if (!fillHex) return tone === "light" ? "#0a0a0a" : "#fcfcfc";
+  const a = clamp01(fillOpacity);
+  const L = hexLuminance(fillHex) * a + MAP_LUMINANCE[tone] * (1 - a);
+  return L > 0.45 ? "#0a0a0a" : "#fcfcfc";
+}
+
 export const THEME_ICON_FILL = "var(--map-icon-fill)";
 export const THEME_ICON_GLYPH = "var(--map-icon-glyph)";
 

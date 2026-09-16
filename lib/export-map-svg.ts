@@ -2,7 +2,8 @@ import { amenityLabel } from "./amenities";
 import { pinIconSvgMarkup } from "./pin-icons";
 import { objectShape, rectangleCorners, svgPathD } from "./bezier";
 import { boothFillHex, darkenHex } from "./colors";
-import { resolvedIconPaint } from "./paint";
+import { contrastingLabel, paintIsNone, paintToHex, parseShapePaint, resolvedIconPaint } from "./paint";
+import { fitLabelInBox, svgCenteredTspans, worldTopLeftOfLocalBox } from "./label-layout";
 import { ringBounds, ringCentroid, rotateRing, venueWorldRect } from "./geometry";
 import { displayLogoUrl } from "./hall";
 import {
@@ -276,8 +277,15 @@ export function buildFloorPlanSvg(input: FloorPlanExportInput): string {
       const sponsor = o.sponsorId ? bySponsor.get(o.sponsorId) : undefined;
       const title = objectTitle(o, sponsor);
       const oid = layerId(title, o.id.slice(0, 8), used);
-      const fill = boothFillHex(o.color, sponsor?.tier ?? "", "light", label === "Stages" ? "stage" : "booth");
-      const stroke = darkenHex(fill, 0.45);
+      const paint = parseShapePaint(o.paint);
+      const fillOverride = paint.fill ?? o.color;
+      const fillOff = paintIsNone(fillOverride);
+      const fill = fillOff
+        ? "none"
+        : fillOverride && /^#|^rgb|^hsl/i.test(fillOverride)
+          ? paintToHex(fillOverride, "#ecece8")
+          : boothFillHex(o.color, sponsor?.tier ?? "", "light", label === "Stages" ? "stage" : "booth");
+      const stroke = fill === "none" ? "#9a9a92" : darkenHex(fill, 0.45);
       const b = ringBounds(o.polygon!);
       const c = ringCentroid(o.polygon!);
       const rectOpen = boothRectMarkup(o, S);
@@ -298,15 +306,24 @@ export function buildFloorPlanSvg(input: FloorPlanExportInput): string {
       const nameLabel = (sponsor?.name || o.name || "").trim();
       const boothLabel = (o.boothNumber || sponsor?.boothNumber || "").trim();
       const fs = Math.max(S * 0.08, Math.min(b.w, b.h) * S * 0.16);
+      const ink = fill === "none" ? "#1a1a1a" : contrastingLabel(fill, paint.fillOpacity, "light");
+      const boxW = b.w * S * 0.88;
       const texts: string[] = [];
-      if (nameLabel) {
+      if (nameLabel && nameLabel !== boothLabel) {
+        const fitted = fitLabelInBox(nameLabel, boxW, b.h * 0.78 * S, fs);
+        const x = num(c.x * S);
+        const y = num(c.y * S);
         texts.push(
-          `<text id="${layerId(`${title} name`, `${o.id}-name`, used)}" x="${num(c.x * S)}" y="${num((c.y - (boothLabel ? b.h * 0.12 : 0)) * S)}" text-anchor="middle" dominant-baseline="middle" font-family="Inter, system-ui, sans-serif" font-size="${num(fs)}" font-weight="700" fill="#1a1a1a">${xmlEscape(nameLabel)}</text>`,
+          `<text id="${layerId(`${title} name`, `${o.id}-name`, used)}" x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-family="Inter, system-ui, sans-serif" font-size="${num(fitted.fontSize)}" font-weight="700" fill="${ink}">${svgCenteredTspans(x, y, fitted.fontSize, fitted.lines, xmlEscape)}</text>`,
         );
       }
       if (boothLabel) {
+        const facing = o.facingDeg ?? 0;
+        const local = rotateRing(o.polygon!, -facing);
+        const lb = ringBounds(local);
+        const pos = worldTopLeftOfLocalBox(c.x, c.y, facing, lb, 0.08);
         texts.push(
-          `<text id="${layerId(`${title} number`, `${o.id}-num`, used)}" x="${num(c.x * S)}" y="${num((c.y + (nameLabel ? b.h * 0.14 : 0)) * S)}" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, monospace" font-size="${num(fs * 0.85)}" font-weight="700" fill="#1a1a1a">${xmlEscape(boothLabel)}</text>`,
+          `<text id="${layerId(`${title} number`, `${o.id}-num`, used)}" x="${num(pos.x * S)}" y="${num(pos.y * S)}" text-anchor="start" dominant-baseline="hanging" font-family="ui-monospace, monospace" font-size="8" fill="${ink}">${xmlEscape(boothLabel)}</text>`,
         );
       }
       const logoUrl = displayLogoUrl(o, assets, sponsor);

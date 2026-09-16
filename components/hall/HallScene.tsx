@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { Grid, Html } from "@react-three/drei";
 import { useThree, type ThreeEvent } from "@react-three/fiber";
 import { pinLucideIcon } from "@/lib/pin-icons";
-import { resolvedIconPaint } from "@/lib/paint";
+import { contrastingLabel, parseShapePaint, resolvedIconPaint } from "@/lib/paint";
 import { hallDefaults, resolveAppearance } from "@/lib/appearance";
 import { kitByKind, kitStampName } from "@/lib/exhibit-kits";
 import { boothFillHex, HALL_THEME, type MapTone } from "@/lib/colors";
@@ -14,6 +14,7 @@ import { displayLogoUrl, objectUrls, snapWorld } from "@/lib/hall";
 import { commitShape, ellipseFromCorners, objectShape, rotateBezier, tessellate, translateBezier } from "@/lib/bezier";
 import { stampPinObject, newMapObject } from "@/lib/new-object";
 import { formatLength, gridSize } from "@/lib/units";
+import { worldTopLeftOfLocalBox } from "@/lib/label-layout";
 import { svgVenueWorldLabels, svgVenueWorldPolylines, type SvgTextWeight } from "@/lib/svg-layers";
 import type {
   AmenityType,
@@ -1019,6 +1020,46 @@ function HallObjectEdgeSizes({
   );
 }
 
+function HallBoothCornerNumber({
+  ring,
+  facingDeg,
+  y,
+  color,
+  text,
+}: {
+  ring: Ring;
+  facingDeg: number;
+  y: number;
+  color: string;
+  text: string;
+}) {
+  const local = rotateRing(ring, -facingDeg);
+  const b = ringBounds(local);
+  const { x: cx, y: cy } = ringCentroid(ring);
+  const pos = worldTopLeftOfLocalBox(cx, cy, facingDeg, b, 0.18);
+  const lightInk = /^#(f[8-9a-f]|e[c-f])/i.test(color);
+  const halo = lightInk ? "#12110f" : "#f4f4f1";
+  return (
+    <Html position={[pos.x, y, pos.y]} zIndexRange={[40, 0]} style={{ pointerEvents: "none" }}>
+      <div
+        style={{
+          fontSize: 9,
+          lineHeight: 1,
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontWeight: 600,
+          color,
+          whiteSpace: "nowrap",
+          pointerEvents: "none",
+          transform: "translate(2px, 2px)",
+          textShadow: `0 0 2px ${halo}, 0 0 2px ${halo}, 0 1px 0 ${halo}`,
+        }}
+      >
+        {text}
+      </div>
+    </Html>
+  );
+}
+
 function HallPlot({
   object,
   sponsor,
@@ -1072,6 +1113,18 @@ function HallPlot({
   const sizes = showSizes ? (
     <HallObjectEdgeSizes ring={object.polygon} facingDeg={object.facingDeg ?? 0} units={units} y={sizeY} color={sizeColor} />
   ) : null;
+  const paint = parseShapePaint(object.paint);
+  const boothInk = contrastingLabel(rug, paint.fillOpacity, tone);
+  const boothLabel = (object.boothNumber || sponsor?.boothNumber || "").trim();
+  const boothNo = boothLabel ? (
+    <HallBoothCornerNumber
+      ring={object.polygon}
+      facingDeg={object.facingDeg ?? 0}
+      y={sizeY}
+      color={boothInk}
+      text={boothLabel}
+    />
+  ) : null;
   if (appearance === "custom" && urls.modelUrl && !cuboid) {
     return (
       <group>
@@ -1094,6 +1147,7 @@ function HallPlot({
           />
         </Suspense>
         {sizes}
+        {boothNo}
       </group>
     );
   }
@@ -1115,6 +1169,7 @@ function HallPlot({
           kitKind={object.kitKind === "secondary_stage" ? "secondary_stage" : "main_stage"}
         />
         {sizes}
+        {boothNo}
       </group>
     );
   }
@@ -1130,6 +1185,7 @@ function HallPlot({
           wallHeight={wallH ?? 2.2}
         />
         {sizes}
+        {boothNo}
       </group>
     );
   }
@@ -1148,6 +1204,7 @@ function HallPlot({
         wallHeight={wallH ?? 2.5}
       />
       {sizes}
+      {boothNo}
     </group>
   );
 }
