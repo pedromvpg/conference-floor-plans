@@ -54,7 +54,8 @@ import { formatLength, formatSize, gridSize, snap } from "@/lib/units";
 import { MapRulers } from "@/components/map/MapRulers";
 import { useTheme } from "@/components/theme-provider";
 import { pinLucideIcon } from "@/lib/pin-icons";
-import { paintIsNone, paintToHex, parseShapePaint, resolvedIconPaint } from "@/lib/paint";
+import { contrastingLabel, paintIsNone, paintToHex, parseShapePaint, resolvedIconPaint } from "@/lib/paint";
+import { fitLabelInBox, LABEL_LINE_EM, worldTopLeftOfLocalBox } from "@/lib/label-layout";
 import { boothFillHex } from "@/lib/colors";
 import { newId, nowIso } from "@/lib/store";
 import { stampPinObject } from "@/lib/new-object";
@@ -89,8 +90,10 @@ import {
   appendSvgImage,
   appendSvgRect,
   appendSvgText,
+  flattenSvgLayers,
   lastSvgLayerId,
   layerAttrSelector,
+  listSvgLayers,
   setSvgElementBezier,
   setSvgElementBox,
   setSvgElementPoint,
@@ -102,6 +105,7 @@ import {
   svgViewBox,
   svgDrawingBox,
   translateSvgElement,
+  translateSvgElements,
 } from "@/lib/svg-layers";
 import { fetchVenueSvgMarkup, nestedVenuePlacement } from "@/lib/venue-svg-load";
 
@@ -161,6 +165,7 @@ type Props = {
   selectedVenueElementIds?: string[];
   onHoverVenueElement?: (id: string | null) => void;
   onSelectVenueElement?: (id: string | null, additive?: boolean) => void;
+  onSelectVenueElements?: (ids: string[]) => void;
   onPreviewVenueSvg?: (svg: string) => void;
   onCommitVenueSvg?: (svg: string) => void;
   venueStampHref?: string | null;
@@ -345,6 +350,52 @@ function rotateAround(
   return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos];
 }
 
+function PlanBoxLabel({
+  x,
+  y,
+  text,
+  boxW,
+  boxH,
+  preferredFont,
+  fill,
+  fontFamily,
+  charWidthEm,
+}: {
+  x: number;
+  y: number;
+  text: string;
+  boxW: number;
+  boxH: number;
+  preferredFont: number;
+  fill: string;
+  fontFamily: string;
+  charWidthEm?: number;
+}) {
+  const { fontSize, lines } = fitLabelInBox(text, boxW, boxH, preferredFont, {
+    minFont: preferredFont * 0.28,
+    charWidthEm,
+  });
+  if (!lines.length) return null;
+  const lineH = fontSize * LABEL_LINE_EM;
+  return (
+    <text
+      textAnchor="middle"
+      dominantBaseline="middle"
+      fontSize={fontSize}
+      fill={fill}
+      fontFamily={fontFamily}
+      fontWeight={700}
+      pointerEvents="none"
+    >
+      {lines.map((line, i) => (
+        <tspan key={`${i}:${line}`} x={x} y={y + (i - (lines.length - 1) / 2) * lineH}>
+          {line}
+        </tspan>
+      ))}
+    </text>
+  );
+}
+
 /** Keep map labels readable: never inverted (head-down). */
 function uprightTextRotation(worldDeg: number): number {
   const a = ((worldDeg % 360) + 360) % 360;
@@ -471,6 +522,42 @@ function ObjectEdgeSizes({
         {formatLength(local.h, units)}
       </text>
     </g>
+  );
+}
+
+function BoothCornerNumber({
+  text,
+  cx,
+  cy,
+  facingDeg,
+  local,
+  ppm,
+  fill,
+}: {
+  text: string;
+  cx: number;
+  cy: number;
+  facingDeg: number;
+  local: { minX: number; minY: number; maxX: number; maxY: number };
+  ppm: number;
+  fill: string;
+}) {
+  const font = screenPx(8, ppm);
+  const inset = screenPx(4, ppm);
+  const { x, y } = worldTopLeftOfLocalBox(cx, cy, facingDeg, local, inset);
+  return (
+    <text
+      x={x}
+      y={y}
+      textAnchor="start"
+      dominantBaseline="hanging"
+      fontSize={font}
+      fill={fill}
+      fontFamily="var(--font-mono), ui-monospace, monospace"
+      pointerEvents="none"
+    >
+      {text}
+    </text>
   );
 }
 
@@ -606,6 +693,7 @@ export function FloorCanvas({
   selectedVenueElementIds,
   onHoverVenueElement,
   onSelectVenueElement,
+  onSelectVenueElements,
   onPreviewVenueSvg,
   onCommitVenueSvg,
   venueStampHref = null,
@@ -667,6 +755,7 @@ export function FloorCanvas({
   const displayUnderlaySvg = underlaySvg ?? fetchedUnderlaySvg;
   const svgElDrag = useRef<{
     id: string;
+    ids?: string[];
     mode: "move" | "vertex" | "handle-in" | "handle-out" | "rotate" | "resize";
     vertex?: number;
     startMarkup: string;
@@ -682,6 +771,7 @@ export function FloorCanvas({
   } | null>(null);
   const svgElPending = useRef<{
     id: string;
+    ids: string[];
     startMarkup: string;
     ox: number;
     oy: number;
@@ -758,7 +848,7 @@ export function FloorCanvas({
     oy: number;
     ids: string[];
   } | null>(null);
-  const marquee = useRef<{ x0: number; y0: number; additive: boolean } | null>(null);
+  const marquee = useRef<{ x0: number; y0: number; additive: boolean; layer?: "objects" | "venue" } | null>(null);
   const [marqueeNow, setMarqueeNow] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const spaceHeld = useRef(false);
   const [spacePan, setSpacePan] = useState(false);
@@ -1236,6 +1326,64 @@ export function FloorCanvas({
   function nestLayerEl(id: string): SVGGraphicsElement | null {
     const el = nestRef.current?.querySelector(layerAttrSelector(id));
     return el instanceof SVGGraphicsElement ? el : null;
+  }
+
+  function venueSelectedIds() {
+    if (selectedVenueElementIds?.length) return selectedVenueElementIds;
+    return selectedVenueElementId ? [selectedVenueElementId] : [];
+  }
+
+  function venueElWorldBox(id: string): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    const live = nestLayerEl(id);
+    const svg = svgRef.current;
+    if (!live || !svg || live.getAttribute(LOCK_ATTR) === "1") return null;
+    if ((live.getAttribute("display") || "").toLowerCase() === "none") return null;
+    try {
+      const b = live.getBBox();
+      const toW = (x: number, y: number) => {
+        const pt = svg.createSVGPoint();
+        pt.x = x;
+        pt.y = y;
+        const ctm = live.getScreenCTM();
+        if (!ctm) return { x: 0, y: 0 };
+        const screen = pt.matrixTransform(ctm);
+        return toWorld(screen.x, screen.y);
+      };
+      const corners = [
+        toW(b.x, b.y),
+        toW(b.x + b.width, b.y),
+        toW(b.x + b.width, b.y + b.height),
+        toW(b.x, b.y + b.height),
+      ];
+      return {
+        minX: Math.min(...corners.map((p) => p.x)),
+        minY: Math.min(...corners.map((p) => p.y)),
+        maxX: Math.max(...corners.map((p) => p.x)),
+        maxY: Math.max(...corners.map((p) => p.y)),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function venueElsInMarquee(box: { minX: number; minY: number; maxX: number; maxY: number }) {
+    if (!underlaySvg) return [];
+    const hits = flattenSvgLayers(listSvgLayers(underlaySvg))
+      .map((layer) => layer.id)
+      .filter((id) => {
+        const b = venueElWorldBox(id);
+        return b ? boundsOverlap(b, box) : false;
+      });
+    const set = new Set(hits);
+    return hits.filter((id) => {
+      let p: Element | null = nestLayerEl(id)?.parentElement ?? null;
+      while (p) {
+        const pid = p.getAttribute(LAYER_ATTR);
+        if (pid && set.has(pid)) return false;
+        p = p.parentElement;
+      }
+      return true;
+    });
   }
 
   const hitTest = useCallback(
@@ -1781,18 +1929,27 @@ export function FloorCanvas({
             svgElPending.current = null;
             return;
           }
-          onSelectVenueElement?.(elId, e.shiftKey);
+          let ids = venueSelectedIds();
+          if (e.shiftKey) {
+            ids = ids.includes(elId) ? ids.filter((id) => id !== elId) : [...ids, elId];
+            onSelectVenueElements?.(ids);
+            if (!onSelectVenueElements) onSelectVenueElement?.(elId, true);
+            setVenueAnchor(null);
+            svgElPending.current = null;
+            return;
+          }
+          if (!ids.includes(elId)) ids = [elId];
+          if (ids.length === 1) onSelectVenueElement?.(ids[0], false);
+          else onSelectVenueElements?.(ids);
           setVenueAnchor(null);
-          if (!e.shiftKey) {
-            const live = nestLayerEl(elId);
-            const parent =
-              live?.parentNode instanceof SVGGraphicsElement ? live.parentNode : nestRef.current;
-            const origin = parent ? clientToSvgEl(parent, e.clientX, e.clientY) : { x: 0, y: 0 };
+          const moveIds = ids.filter((id) => nestLayerEl(id)?.getAttribute(LOCK_ATTR) !== "1");
+          if (moveIds.length) {
             svgElPending.current = {
               id: elId,
+              ids: moveIds,
               startMarkup: underlaySvg,
-              ox: origin.x,
-              oy: origin.y,
+              ox: 0,
+              oy: 0,
               clientX: e.clientX,
               clientY: e.clientY,
             };
@@ -1804,6 +1961,9 @@ export function FloorCanvas({
           onSelectVenueElement?.(null);
           setVenueAnchor(null);
         }
+        marquee.current = { x0: w.x, y0: w.y, additive: e.shiftKey, layer: "venue" };
+        setMarqueeNow({ x0: w.x, y0: w.y, x1: w.x, y1: w.y });
+        return;
       }
       const sole =
         selectedSet.size === 1 ? objects.find((o) => selectedSet.has(o.id)) : undefined;
@@ -1988,7 +2148,7 @@ export function FloorCanvas({
         return;
       }
       if (canEditObjects && tool === "select") {
-        marquee.current = { x0: w.x, y0: w.y, additive: e.shiftKey };
+        marquee.current = { x0: w.x, y0: w.y, additive: e.shiftKey, layer: "objects" };
         setMarqueeNow({ x0: w.x, y0: w.y, x1: w.x, y1: w.y });
         if (!e.shiftKey) emitSelect([]);
         return;
@@ -2145,10 +2305,11 @@ export function FloorCanvas({
       if (hypot(e.clientX - p.clientX, e.clientY - p.clientY) > 4) {
         svgElDrag.current = {
           id: p.id,
+          ids: p.ids,
           mode: "move",
           startMarkup: p.startMarkup,
-          ox: p.ox,
-          oy: p.oy,
+          ox: p.clientX,
+          oy: p.clientY,
         };
         svgElPending.current = null;
       }
@@ -2157,14 +2318,18 @@ export function FloorCanvas({
       const d = svgElDrag.current;
       const live = nestLayerEl(d.id);
       if (d.mode === "move") {
-        const parent =
-          live?.parentNode instanceof SVGGraphicsElement ? live.parentNode : nestRef.current;
-        if (parent) {
+        let next = d.startMarkup;
+        for (const id of d.ids?.length ? d.ids : [d.id]) {
+          const node = nestLayerEl(id);
+          const parent =
+            node?.parentNode instanceof SVGGraphicsElement ? node.parentNode : nestRef.current;
+          if (!parent) continue;
+          const start = clientToSvgEl(parent, d.ox, d.oy);
           const cur = clientToSvgEl(parent, e.clientX, e.clientY);
-          const next = translateSvgElement(d.startMarkup, d.id, cur.x - d.ox, cur.y - d.oy);
-          lastVenuePreview.current = next;
-          onPreviewVenueSvg?.(next);
+          next = translateSvgElement(next, id, cur.x - start.x, cur.y - start.y);
         }
+        lastVenuePreview.current = next;
+        onPreviewVenueSvg?.(next);
       } else if (d.mode === "vertex" && d.vertex != null && live) {
         let local = clientToSvgEl(live, e.clientX, e.clientY);
         if (!altSnapOff.current && d.nodes && !(isRectangleShape(d.nodes) && !e.altKey)) {
@@ -2577,11 +2742,20 @@ export function FloorCanvas({
       const box = marqueeBounds(marquee.current.x0, marquee.current.y0, w.x, w.y);
       const tiny = hypot(w.x - marquee.current.x0, w.y - marquee.current.y0) < screenPx(4, svgUserToScreen(svgRef.current, cam.w, cam.h));
       if (!tiny) {
-        const hits = objectsInMarquee(box).map((o) => o.id);
-        const ids = marquee.current.additive
-          ? [...new Set([...selectedSet, ...hits].filter((id) => id !== VENUE_ID))]
-          : hits;
-        emitSelect(ids);
+        if (marquee.current.layer === "venue") {
+          const hits = venueElsInMarquee(box);
+          const ids = marquee.current.additive
+            ? [...new Set([...venueSelectedIds(), ...hits])]
+            : hits;
+          onSelectVenueElements?.(ids);
+          if (!onSelectVenueElements) onSelectVenueElement?.(ids[ids.length - 1] ?? null);
+        } else {
+          const hits = objectsInMarquee(box).map((o) => o.id);
+          const ids = marquee.current.additive
+            ? [...new Set([...selectedSet, ...hits].filter((id) => id !== VENUE_ID))]
+            : hits;
+          emitSelect(ids);
+        }
       }
       marquee.current = null;
       setMarqueeNow(null);
@@ -2716,6 +2890,15 @@ export function FloorCanvas({
         const step = e.shiftKey ? 10 : 1;
         const dx = (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0) * px.x;
         const dy = (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0) * px.y;
+        if (editVenueElements && canEditVenue && underlaySvg) {
+          const ids = venueSelectedIds().filter((id) => nestLayerEl(id)?.getAttribute(LOCK_ATTR) !== "1");
+          if (!ids.length) return;
+          const from = worldToSvgPt(underlayX, underlayY);
+          const to = worldToSvgPt(underlayX + dx, underlayY + dy);
+          if (!from || !to) return;
+          onCommitVenueSvg?.(translateSvgElements(underlaySvg, ids, to.x - from.x, to.y - from.y));
+          return;
+        }
         const moveIds = [...selectedSet].filter((id) => id !== VENUE_ID);
         if (!moveIds.length || !canEditObjects) return;
         commitGroupMove(snapshotsFor(moveIds), dx, dy);
@@ -3129,28 +3312,26 @@ export function FloorCanvas({
         const boothLabel = (o.boothNumber || sponsor?.boothNumber || "").trim();
         const showName = Boolean(nameLabel) && nameLabel !== boothLabel;
         const showBooth = Boolean(boothLabel);
-        const twoLine = showName && showBooth;
         const showSize = showObjectSizes && screenW > 44 && screenH > 22;
-        const nameFont = Math.min(b.w, b.h) * (showLogo ? 0.12 : twoLine ? 0.13 : 0.18);
-        const boothFont = Math.min(b.w, b.h) * (showLogo ? 0.1 : twoLine ? 0.11 : 0.16);
-        const nameY = showLogo
-          ? b.maxY - b.h * (twoLine ? 0.28 : 0.22)
-          : twoLine
-            ? c.y - b.h * 0.08
-            : c.y;
-        const boothY = showName
-          ? showLogo
-            ? b.maxY - b.h * 0.16
-            : c.y + b.h * 0.1
-          : showLogo
-            ? b.maxY - b.h * 0.22
-            : c.y;
-        const local = rotateRing(o.polygon, -(o.facingDeg ?? 0));
+        const nameFont = Math.min(b.w, b.h) * (showLogo ? 0.12 : 0.18);
+        const labelBoxW = Math.max(0.05, b.w * 0.88);
+        const nameBoxH = showLogo ? b.h * 0.32 : b.h * 0.78;
+        const stackMidY = showLogo ? b.maxY - b.h * 0.22 : c.y;
+        const local = rotateRing(tessellate(objectShape(o), true), -(o.facingDeg ?? 0));
         const lb = ringBounds(local);
         const paint = parseShapePaint(o.paint);
         const fillOverride = paint.fill ?? o.color;
         const fillOff = paintIsNone(fillOverride);
         const strokeOff = paintIsNone(paint.stroke);
+        const fillHex =
+          fillOff || fillUrl
+            ? null
+            : fillOverride && /^#|^rgb|^hsl/i.test(fillOverride)
+              ? paintToHex(fillOverride, "#ecece8")
+              : boothFillHex(o.color, sponsor?.tier ?? "", mapTone);
+        const labelFill = fillHex
+          ? contrastingLabel(fillHex, paint.fillOpacity, mapTone)
+          : "var(--map-label)";
         return (
           <g key={o.id} pointerEvents={canEditVenue ? "none" : undefined} opacity={paint.opacity}>
             <path
@@ -3162,9 +3343,7 @@ export function FloorCanvas({
                     ? "transparent"
                     : fillOff
                       ? "none"
-                      : fillOverride && /^#|^rgb|^hsl/i.test(fillOverride)
-                        ? paintToHex(fillOverride, "#ecece8")
-                        : boothFillHex(o.color, sponsor?.tier ?? "")
+                      : (fillHex ?? "#ecece8")
               }
               fillOpacity={paint.fillOpacity}
               stroke={
@@ -3225,34 +3404,27 @@ export function FloorCanvas({
               </>
             ) : null}
             {showName ? (
-              <text
+              <PlanBoxLabel
                 x={c.x}
-                y={nameY}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                fontSize={nameFont}
-                fill="var(--map-label)"
+                y={stackMidY}
+                text={nameLabel}
+                boxW={labelBoxW}
+                boxH={Math.max(0.05, nameBoxH)}
+                preferredFont={nameFont}
+                fill={labelFill}
                 fontFamily="var(--font-sans), ui-sans-serif, system-ui, sans-serif"
-                fontWeight={700}
-                pointerEvents="none"
-              >
-                {nameLabel}
-              </text>
+              />
             ) : null}
             {showBooth ? (
-              <text
-                x={c.x}
-                y={boothY}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                fontSize={boothFont}
-                fill="var(--map-label)"
-                fontFamily="var(--font-mono), ui-monospace, monospace"
-                fontWeight={700}
-                pointerEvents="none"
-              >
-                {boothLabel}
-              </text>
+              <BoothCornerNumber
+                text={boothLabel}
+                cx={c.x}
+                cy={c.y}
+                facingDeg={o.facingDeg ?? 0}
+                local={lb}
+                ppm={pxPerMeterScreen}
+                fill={labelFill}
+              />
             ) : null}
             {showSize ? (
               <ObjectEdgeSizes
@@ -3286,7 +3458,8 @@ export function FloorCanvas({
         const look = resolvedIconPaint(o.paint, o.color, mapTone);
         const Icon = pinLucideIcon(o.kind, o.amenityType);
         const s = pinWorldScale(pxPerMeterScreen, mapPin, pinPx);
-        const glyph = mapPin ? 1.05 : 1.15;
+        const glyph = mapPin ? 2.05 : 1.15;
+        const glyphY = mapPin ? -1.57 : -glyph / 2;
         return (
           <g
             key={o.id}
@@ -3329,8 +3502,8 @@ export function FloorCanvas({
                 <circle r={1.15} fill="none" stroke="#fff" strokeWidth={0.16} />
               )
             ) : null}
-            <g transform={`translate(${-glyph / 2} ${mapPin ? -1.28 : -glyph / 2})`}>
-              <Icon width={glyph} height={glyph} color={look.glyph} strokeWidth={2.35} aria-hidden />
+            <g transform={`translate(${-glyph / 2} ${glyphY})`}>
+              <Icon width={glyph} height={glyph} color={look.glyph} strokeWidth={mapPin ? 2.1 : 2.35} aria-hidden />
             </g>
           </g>
         );
