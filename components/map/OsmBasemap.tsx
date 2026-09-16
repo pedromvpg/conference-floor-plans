@@ -242,12 +242,13 @@ export function OsmBasemap({ view, camera, svgRef, hall, syncKey = 0 }: Props) {
         ref={hostRef}
         className="pointer-events-none absolute inset-0 z-0 h-full w-full [&_.maplibregl-ctrl-logo]:hidden"
       />
-      <p className="pointer-events-none absolute right-2 bottom-1.5 z-20 text-right text-[10px] leading-none text-muted-foreground/40 [text-shadow:0_0_6px_var(--map-bg)]">
+      <p className="pointer-events-none absolute right-2 bottom-1.5 z-20 rounded-sm bg-background/70 px-1.5 py-0.5 text-right text-[11px] leading-snug text-muted-foreground [text-shadow:0_0_8px_var(--map-bg)] backdrop-blur-[2px]">
+        <span>© </span>
         <a
           href="https://www.openstreetmap.org/copyright"
           target="_blank"
           rel="noreferrer"
-          className="pointer-events-auto hover:text-muted-foreground hover:underline"
+          className="pointer-events-auto hover:text-foreground hover:underline"
         >
           OpenStreetMap
         </a>
@@ -256,7 +257,7 @@ export function OsmBasemap({ view, camera, svgRef, hall, syncKey = 0 }: Props) {
           href="https://carto.com/attributions"
           target="_blank"
           rel="noreferrer"
-          className="pointer-events-auto hover:text-muted-foreground hover:underline"
+          className="pointer-events-auto hover:text-foreground hover:underline"
         >
           CARTO
         </a>
