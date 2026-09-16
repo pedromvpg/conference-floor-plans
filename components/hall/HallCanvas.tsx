@@ -150,6 +150,7 @@ export function HallCanvas({
   const [camNonce, setCamNonce] = useState(0);
   const [focusId, setFocusId] = useState<string | null>(null);
   const prevSelectedId = useRef<string | null | undefined>(undefined);
+  const ignorePointerMissed = useRef(false);
 
   useEffect(() => {
     setFocusId(highlightId ?? null);
@@ -263,7 +264,10 @@ export function HallCanvas({
     stampModelAssetId,
     stampKitKind,
     kits,
-    onSelect,
+    onSelect: (id) => {
+      if (id) ignorePointerMissed.current = true;
+      onSelect?.(id);
+    },
     onChangeObject,
     onBeginHistory,
     onEndHistory,
@@ -300,6 +304,10 @@ export function HallCanvas({
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: envLit ? 0.95 : 1 }}
         camera={{ fov: 42, near: 0.08, far: 800, position: startPose.position }}
         onPointerMissed={() => {
+          if (ignorePointerMissed.current) {
+            ignorePointerMissed.current = false;
+            return;
+          }
           if (!placing && !spacePan) onSelect?.(null);
         }}
       >
