@@ -1,6 +1,13 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import {
+  blobFilePath,
+  blobPutBytes,
+  isBlobConfigured,
+  loadBlobDbJson,
+  saveBlobDbJson,
+} from "./blob-backend";
 import type {
   AgendaSession,
   AgendaSpeaker,
@@ -20,6 +27,9 @@ import { buildMapDocument } from "./map-document";
 import { hallDefaults, normalizeObject } from "./appearance";
 import { defaultExhibitKits, inferKitKindFromName, kitAppearance, sortExhibitKits, withCurrentKitDefaults } from "./exhibit-kits";
 import { normalizeFloorBasemap } from "./basemap";
+import type { AppUser, EventEditorGrant, InviteRecord } from "./access";
+import { grantAccess, isBootstrapAdmin } from "./access";
+import { hashInviteToken, newInviteToken } from "./invite-token";
 import { newId, nowIso, type NewEventInput, type NewLibraryAsset, type Store } from "./store";
 import zones from "../seed/bhk26-zones.json";
 
@@ -35,6 +45,9 @@ type Db = {
   publications: Publication[];
   draftVersions?: DraftVersion[];
   editors: string[];
+  users?: AppUser[];
+  eventEditors?: EventEditorGrant[];
+  invites?: InviteRecord[];
 };
 
 const DATA_DIR = path.join(process.cwd(), ".data");
@@ -102,11 +115,73 @@ async function emptyDb(): Promise<Db> {
     kits: [],
     publications: [],
     draftVersions: [],
-    editors: ["demo@local"],
+    editors: [],
+    users: [],
+    eventEditors: [],
+    invites: [],
   };
 }
 
+function hydrateDb(raw: string): { db: Db; repaired: boolean } {
+  const db = parseDbJson(raw);
+  db.floors = db.floors.map((f) => ({ ...f, basemap: normalizeFloorBasemap(f.basemap) }));
+  db.draftVersions ??= [];
+  db.sessions ??= [];
+  db.speakers ??= [];
+  db.assets ??= [];
+  db.kits ??= [];
+  db.users ??= [];
+  db.eventEditors ??= [];
+  for (const g of db.eventEditors) {
+    g.access = grantAccess(g);
+  }
+  db.invites ??= [];
+  for (const event of db.events) {
+    event.isPublic = event.isPublic === true;
+    if (!db.kits.some((k) => k.eventId === event.id)) {
+      db.kits.push(...defaultExhibitKits(event.id, event.slug));
+    }
+  }
+  for (const email of db.editors ?? []) {
+    const e = email.toLowerCase();
+    if (!db.users.some((u) => u.email === e)) {
+      db.users.push({
+        email: e,
+        role: isBootstrapAdmin(e) ? "admin" : "editor",
+        allEvents: isBootstrapAdmin(e),
+        createdAt: nowIso(),
+      });
+    }
+  }
+  let repaired = false;
+  try {
+    JSON.parse(raw);
+  } catch {
+    repaired = true;
+  }
+  return { db, repaired };
+}
+
 async function loadDbUnlocked(): Promise<Db> {
+  if (isBlobConfigured()) {
+    let raw = await loadBlobDbJson();
+    if (!raw && existsSync(DB_PATH)) {
+      raw = await readFile(DB_PATH, "utf8");
+      const { db, repaired } = hydrateDb(raw);
+      await saveDbUnlocked(db);
+      if (repaired) return db;
+      return db;
+    }
+    if (!raw) {
+      const db = await seedBhk26(await emptyDb());
+      await saveDbUnlocked(db);
+      return db;
+    }
+    const { db, repaired } = hydrateDb(raw);
+    if (repaired) await saveDbUnlocked(db);
+    return db;
+  }
+
   await mkdir(DATA_DIR, { recursive: true });
   await mkdir(FILES_DIR, { recursive: true });
   if (!existsSync(DB_PATH)) {
@@ -115,29 +190,19 @@ async function loadDbUnlocked(): Promise<Db> {
     return db;
   }
   const raw = await readFile(DB_PATH, "utf8");
-  const db = parseDbJson(raw);
-  db.floors = db.floors.map((f) => ({ ...f, basemap: normalizeFloorBasemap(f.basemap) }));
-  db.draftVersions ??= [];
-  db.sessions ??= [];
-  db.speakers ??= [];
-  db.assets ??= [];
-  db.kits ??= [];
-  for (const event of db.events) {
-    if (!db.kits.some((k) => k.eventId === event.id)) {
-      db.kits.push(...defaultExhibitKits(event.id, event.slug));
-    }
-  }
-  try {
-    JSON.parse(raw);
-  } catch {
-    await saveDbUnlocked(db);
-  }
+  const { db, repaired } = hydrateDb(raw);
+  if (repaired) await saveDbUnlocked(db);
   return db;
 }
 
 async function saveDbUnlocked(db: Db): Promise<void> {
+  const raw = JSON.stringify(db, null, 2);
+  if (isBlobConfigured()) {
+    await saveBlobDbJson(raw);
+    return;
+  }
   await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(DB_TMP_PATH, JSON.stringify(db, null, 2));
+  await writeFile(DB_TMP_PATH, raw);
   await rename(DB_TMP_PATH, DB_PATH);
 }
 
@@ -158,6 +223,7 @@ function normalizeEvent(e: MapEvent): MapEvent {
     sponsorsSyncedAt: e.sponsorsSyncedAt ?? null,
     agendaSyncedAt: e.agendaSyncedAt ?? null,
     speakersSyncedAt: e.speakersSyncedAt ?? null,
+    isPublic: e.isPublic === true,
   };
 }
 
@@ -196,6 +262,7 @@ async function seedBhk26(db: Db): Promise<Db> {
     speakersSyncedAt: null,
     createdAt: t,
     updatedAt: t,
+    isPublic: false,
   };
   const floor: Floor = {
     id: newId(),
@@ -319,6 +386,7 @@ export class DemoStore implements Store {
         speakersSyncedAt: null,
         createdAt: t,
         updatedAt: t,
+        isPublic: false,
       };
       db.events.push(event);
       db.kits = [...(db.kits ?? []), ...defaultExhibitKits(event.id, event.slug)];
@@ -422,6 +490,10 @@ export class DemoStore implements Store {
     });
   }
 
+  async getObject(id: string) {
+    return useDb(false, (db) => db.objects.find((o) => o.id === id) ?? null);
+  }
+
   async deleteObject(id: string) {
     await useDb(true, (db) => {
       db.objects = db.objects.filter((o) => o.id !== id);
@@ -479,6 +551,10 @@ export class DemoStore implements Store {
 
   async listAssets(eventId: string) {
     return useDb(false, (db) => (db.assets ?? []).filter((a) => a.eventId === eventId));
+  }
+
+  async getAsset(id: string) {
+    return useDb(false, (db) => (db.assets ?? []).find((a) => a.id === id) ?? null);
   }
 
   async createAsset(input: NewLibraryAsset) {
@@ -628,17 +704,210 @@ export class DemoStore implements Store {
   }
 
   async isEditor(email: string) {
-    return useDb(false, (db) => db.editors.includes(email.toLowerCase()));
+    const user = await this.getUser(email);
+    return Boolean(user);
   }
 
   async addEditor(email: string) {
-    await useDb(true, (db) => {
+    await this.upsertUser(email, { role: "editor" });
+  }
+
+  async getUser(email: string) {
+    return useDb(false, (db) => {
       const e = email.toLowerCase();
-      if (!db.editors.includes(e)) db.editors.push(e);
+      return (db.users ?? []).find((u) => u.email === e) ?? null;
     });
   }
 
-  async putFile(filePath: string, body: Buffer, _contentType: string) {
+  async listUsers() {
+    return useDb(false, (db) => [...(db.users ?? [])].sort((a, b) => a.email.localeCompare(b.email)));
+  }
+
+  async upsertUser(email: string, patch: { role?: AppUser["role"]; allEvents?: boolean; passwordHash?: string }) {
+    return useDb(true, (db) => {
+      db.users ??= [];
+      const e = email.toLowerCase();
+      const existing = db.users.find((u) => u.email === e);
+      if (existing) {
+        if (patch.role) existing.role = patch.role;
+        if (typeof patch.allEvents === "boolean") existing.allEvents = patch.allEvents;
+        if (patch.passwordHash) existing.passwordHash = patch.passwordHash;
+        if (existing.role === "admin") existing.allEvents = true;
+        return existing;
+      }
+      const role = patch.role ?? (isBootstrapAdmin(e) ? "admin" : "editor");
+      const user: AppUser = {
+        email: e,
+        role,
+        allEvents: patch.allEvents ?? role === "admin",
+        createdAt: nowIso(),
+        passwordHash: patch.passwordHash,
+      };
+      db.users.push(user);
+      if (!db.editors.includes(e)) db.editors.push(e);
+      return user;
+    });
+  }
+
+  async deleteUser(email: string) {
+    await useDb(true, (db) => {
+      const e = email.toLowerCase();
+      db.users = (db.users ?? []).filter((u) => u.email !== e);
+      db.editors = (db.editors ?? []).filter((ed) => ed !== e);
+      db.eventEditors = (db.eventEditors ?? []).filter((g) => g.email !== e);
+    });
+  }
+
+  async listEventEditors() {
+    return useDb(false, (db) => [...(db.eventEditors ?? [])]);
+  }
+
+  async listEventIdsForEditor(email: string) {
+    return useDb(false, (db) => {
+      const e = email.toLowerCase();
+      const user = (db.users ?? []).find((u) => u.email === e);
+      if (!user) return [];
+      if (user.role === "admin") return "all";
+      if (user.allEvents && user.role !== "viewer") return "all";
+      return (db.eventEditors ?? [])
+        .filter((g) => g.email === e && grantAccess(g) === "editor")
+        .map((g) => g.eventId);
+    });
+  }
+
+  async listEventIdsForViewer(email: string) {
+    return useDb(false, (db) => {
+      const e = email.toLowerCase();
+      const user = (db.users ?? []).find((u) => u.email === e);
+      if (!user) return [];
+      if (user.role === "admin" || user.allEvents) return "all";
+      return (db.eventEditors ?? []).filter((g) => g.email === e).map((g) => g.eventId);
+    });
+  }
+
+  async setEventEditors(email: string, eventIds: string[]) {
+    await useDb(true, (db) => {
+      const e = email.toLowerCase();
+      const keepView = (db.eventEditors ?? []).filter((g) => g.email === e && grantAccess(g) === "viewer");
+      db.eventEditors = (db.eventEditors ?? []).filter((g) => g.email !== e);
+      db.eventEditors.push(...keepView);
+      for (const eventId of eventIds) {
+        if (!db.events.some((ev) => ev.id === eventId)) continue;
+        db.eventEditors = db.eventEditors.filter((g) => !(g.email === e && g.eventId === eventId));
+        db.eventEditors.push({ eventId, email: e, access: "editor" });
+      }
+    });
+  }
+
+  async setEventAccess(email: string, eventId: string, access: "editor" | "viewer" | null) {
+    await useDb(true, (db) => {
+      const e = email.toLowerCase();
+      if (!db.events.some((ev) => ev.id === eventId)) throw new Error("Event not found");
+      db.eventEditors = (db.eventEditors ?? []).filter((g) => !(g.email === e && g.eventId === eventId));
+      if (access) db.eventEditors.push({ eventId, email: e, access });
+    });
+  }
+
+  async setEventPublic(eventId: string, isPublic: boolean) {
+    return useDb(true, (db) => {
+      const event = db.events.find((e) => e.id === eventId);
+      if (!event) throw new Error("Event not found");
+      event.isPublic = isPublic;
+      event.updatedAt = nowIso();
+      return normalizeEvent(event);
+    });
+  }
+
+  async listInvites() {
+    return useDb(false, (db) =>
+      [...(db.invites ?? [])].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+    );
+  }
+
+  async createInvite(input: {
+    email: string;
+    role: AppUser["role"];
+    eventIds: string[] | "all";
+    createdBy: string;
+    origin: string;
+  }) {
+    const token = newInviteToken();
+    const invite = await useDb(true, (db) => {
+      db.invites ??= [];
+      const rec: InviteRecord = {
+        id: newId(),
+        tokenHash: hashInviteToken(token),
+        token,
+        email: input.email.trim().toLowerCase(),
+        role: input.role,
+        eventIds: input.eventIds,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        usedAt: null,
+        createdBy: input.createdBy,
+        createdAt: nowIso(),
+      };
+      db.invites.push(rec);
+      return rec;
+    });
+    return { ...invite, token, url: `${input.origin.replace(/\/$/, "")}/invite/${token}` };
+  }
+
+  async consumeInvite(token: string, email: string, passwordHash: string) {
+    const e = email.trim().toLowerCase();
+    return useDb(true, (db) => {
+      db.invites ??= [];
+      db.users ??= [];
+      db.eventEditors ??= [];
+      const hash = hashInviteToken(token);
+      const invite = db.invites.find((i) => i.tokenHash === hash);
+      if (!invite || invite.usedAt) throw new Error("Invite is invalid or already used");
+      if (Date.parse(invite.expiresAt) < Date.now()) throw new Error("Invite expired");
+      if (invite.email !== e) throw new Error("This invite is for a different email");
+      invite.usedAt = nowIso();
+      delete invite.token;
+      let user = db.users.find((u) => u.email === e);
+      if (!user) {
+        user = {
+          email: e,
+          role: invite.role,
+          allEvents: invite.role === "admin" || invite.eventIds === "all",
+          createdAt: nowIso(),
+          passwordHash,
+        };
+        db.users.push(user);
+      } else {
+        if (invite.role === "admin") user.role = "admin";
+        else if (invite.role === "editor" && user.role === "viewer") user.role = "editor";
+        if (invite.eventIds === "all" || user.role === "admin") user.allEvents = true;
+        user.passwordHash = passwordHash;
+      }
+      if (!db.editors.includes(e)) db.editors.push(e);
+      if (invite.eventIds !== "all" && user.role !== "admin" && !user.allEvents) {
+        const access = invite.role === "viewer" ? "viewer" : "editor";
+        for (const eventId of invite.eventIds) {
+          const existing = db.eventEditors.find((g) => g.email === e && g.eventId === eventId);
+          if (!existing) db.eventEditors.push({ eventId, email: e, access });
+          else if (access === "editor") existing.access = "editor";
+        }
+      }
+      return user;
+    });
+  }
+
+  async deleteInvite(id: string) {
+    await useDb(true, (db) => {
+      db.invites ??= [];
+      const next = db.invites.filter((i) => i.id !== id);
+      if (next.length === db.invites.length) throw new Error("Invite not found");
+      db.invites = next;
+    });
+  }
+
+  async putFile(filePath: string, body: Buffer, contentType: string) {
+    if (isBlobConfigured()) {
+      await blobPutBytes(blobFilePath(filePath), body, contentType);
+      return `/api/files/${filePath}`;
+    }
     const dest = path.join(FILES_DIR, filePath);
     await mkdir(path.dirname(dest), { recursive: true });
     await writeFile(dest, body);

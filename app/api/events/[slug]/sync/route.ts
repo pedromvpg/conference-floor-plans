@@ -1,5 +1,5 @@
 import { getStore } from "@/lib/get-store";
-import { requireEditor } from "@/lib/auth";
+import { requireEventEditorBySlug } from "@/lib/auth";
 import { fetchAirtableSponsors, mapAirtableSponsor } from "@/lib/airtable";
 import { resolveAirtable } from "@/lib/airtable-conf";
 import { cacheLogo } from "@/lib/logos";
@@ -8,8 +8,8 @@ type Ctx = { params: Promise<{ slug: string }> };
 
 export async function POST(_req: Request, ctx: Ctx) {
   try {
-    await requireEditor();
     const { slug } = await ctx.params;
+    await requireEventEditorBySlug(slug);
     const store = getStore();
     const event = await store.getEventBySlug(slug);
     if (!event) return Response.json({ error: "Not found" }, { status: 404 });

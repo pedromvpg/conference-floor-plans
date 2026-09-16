@@ -1,5 +1,8 @@
+import { notFound } from "next/navigation";
 import { ViewerApp } from "@/components/viewer/ViewerApp";
+import { getSessionUser } from "@/lib/auth";
 import { getStore } from "@/lib/get-store";
+import { mayViewMap } from "@/lib/map-access";
 
 export const dynamic = "force-dynamic";
 
@@ -12,8 +15,11 @@ export default async function ViewerPage({
 }) {
   const { slug } = await params;
   const q = await searchParams;
+  const user = await getSessionUser();
+  const access = await mayViewMap(slug, user);
+  if (!access.ok) notFound();
   const pub = await getStore().getPublicationBySlug(slug);
-  if (!pub) {
+  if (!pub || access.unpublished) {
     return (
       <main className="flex min-h-dvh items-center justify-center px-6 text-center">
         <div>

@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { getStore } from "@/lib/get-store";
-import { requireEditor } from "@/lib/auth";
+import { requireEventEditor } from "@/lib/auth";
 import { newId } from "@/lib/store";
 import { calibrationFromPrimary, primaryFloor } from "@/lib/floor-settings";
 import { svgForPublishedUnderlay } from "@/lib/svg-layers";
@@ -21,9 +21,11 @@ function svgSize(svg: string): { w: number; h: number } | null {
 
 export async function POST(req: Request, ctx: Ctx) {
   try {
-    await requireEditor();
     const { id } = await ctx.params;
     const store = getStore();
+    const existing = await store.getFloor(id);
+    if (!existing) return Response.json({ error: "Floor not found" }, { status: 404 });
+    await requireEventEditor(existing.eventId);
     const form = await req.formData();
     const file = form.get("file");
     if (!(file instanceof File)) {
@@ -65,8 +67,6 @@ export async function POST(req: Request, ctx: Ctx) {
     const underlayPath = `underlays/${id}/${newId()}.${ext}`;
     const underlayUrl = await store.putFile(underlayPath, underlayBuf, underlayType);
 
-    const existing = await store.getFloor(id);
-    if (!existing) return Response.json({ error: "Floor not found" }, { status: 404 });
     const siblings = await store.listFloors(existing.eventId);
     const primary = primaryFloor(siblings);
     const floor = await store.updateFloor(id, {
@@ -85,17 +85,18 @@ export async function POST(req: Request, ctx: Ctx) {
 
 export async function PUT(req: Request, ctx: Ctx) {
   try {
-    await requireEditor();
     const { id } = await ctx.params;
+    const store = getStore();
+    const existingFloor = await store.getFloor(id);
+    if (!existingFloor) return Response.json({ error: "Floor not found" }, { status: 404 });
+    await requireEventEditor(existingFloor.eventId);
     const body = (await req.json()) as { svg?: string };
     const raw = typeof body.svg === "string" ? body.svg : "";
     if (!raw.includes("<svg")) {
       return Response.json({ error: "svg required" }, { status: 400 });
     }
     const svg = svgForPublishedUnderlay(raw);
-    const store = getStore();
-    const existing = await store.getFloor(id);
-    if (!existing) return Response.json({ error: "Floor not found" }, { status: 404 });
+    const existing = existingFloor;
     const size = svgSize(svg);
     const siblings = await store.listFloors(existing.eventId);
     const primary = primaryFloor(siblings);

@@ -13,56 +13,45 @@ Standalone floor-plan **designer** and public **viewer** for Bitcoin conferences
 
 ## Testing: local vs deployed
 
-The UI is the same. Persistence is not.
+We will use **Supabase** (likely an existing org project) once someone can authorize it. Until then, **Vercel Blob** is the shared store: laptop `next dev` and the deployed app must use the same `BLOB_READ_WRITE_TOKEN` (pull Development env). Disk `.data/` is only an offline fallback.
 
-| | Your laptop (`npm run dev`) | Vercel preview / production |
+| | Blob (now) | Supabase (later) |
 | --- | --- | --- |
-| **Login** | Sign in → **Continue as editor**. No email. | Magic link to an allowlisted work email. Demo login is off. |
-| **Saves** | Gitignored `.data/db.json` on disk | Shared Supabase (Postgres + `maps` storage bucket) |
-| **Seed** | Bitcoin Asia 2026 at `/e/bhk26` | Only events already in that database |
-| **Viewer** | `/e/:slug` after local publish | Same paths on the Vercel host; no login to view |
+| **Login** | Work email + Node `scrypt` hash (16-byte salt, 64-byte key, stored `salt:hex`). Session cookie is the email, not the password. Protect the Vercel URL with Deployment Protection. | Magic link / password + `allowed_editors` |
+| **Saves** | Shared `maps/db.json` in Blob | Postgres + `maps` bucket |
+| **Overlap** | Banner if another email is in Designer | Same last-write-wins until locks |
 
-Vercel functions have a **read-only** filesystem. Writing `.data/` there fails with `EROFS`. Do not expect “Continue as editor” on the hosted URL.
+In-app: `/docs` → **Local vs deploy**.
 
-In-app copy of this: `/docs` → **Local vs deploy**.
+### Shared Blob (laptop + Vercel)
 
-### Try it locally (any teammate)
+1. Create a Blob store on the `conference-maps` Vercel project (Production, Preview, **Development**).
+2. `vercel env pull .env.local` (leave Supabase empty). Redeploy.
+3. Open local or the Vercel URL → sign in with your work email → edit. Same Blob.
+
+If Blob is empty and this machine still has `.data/db.json`, that JSON is uploaded once. Re-upload underlays that only lived on disk.
+
+### Offline laptop only
 
 ```bash
-git clone <this-repo>
-cd conference-floor-plans
 npm install
 npm run dev
 ```
 
-Leave `NEXT_PUBLIC_SUPABASE_*` and `SUPABASE_SERVICE_ROLE_KEY` empty (see `.env.example`). Open [http://localhost:3000](http://localhost:3000), continue as editor, open **bhk26**, draw in Designer, publish, then check:
-
-- Viewer: [http://localhost:3000/e/bhk26](http://localhost:3000/e/bhk26)
-- 3D: [http://localhost:3000/e/bhk26?view=3d](http://localhost:3000/e/bhk26?view=3d)
-- JSON: [http://localhost:3000/e/bhk26/map.json](http://localhost:3000/e/bhk26/map.json)
-
-Your draft is only on that machine. Delete `.data/` to reset.
+No Blob token → gitignored `.data/db.json` on that machine only.
 
 Viewer query params (override saved prefs): `view=3d|2d|hall|plan`, `floor=` (id or name), `sizes=1`, `grid=1`, `rulers=1`, `panel=1`, `booth=`, `airtable=`. Hall: `ortho`, `cuboids`, `fog`, `ao`, `shadows`, `env`, `pt`, `az`, `el`, `dist`, `sun`, `sunEl`, `light`, `fill`, `fogI`.
 
 Paste a published viewer URL into btc-app admin → Venue Map.
 
-### Try the Vercel app (shared data)
+## Production setup (operators, when Supabase is authorized)
 
-1. Ask an operator to add your email to `allowed_editors` or `ALLOWED_EMAILS`.
-2. Open the deployment URL → Sign in → magic link.
-3. Edit and publish against the shared database. Anyone can still open `/e/:slug` without an account.
-
-To point **local** at that same database, copy `.env.example` → `.env.local`, fill the three Supabase keys, restart `npm run dev`. Login then matches production (magic link, not demo).
-
-## Production setup (operators)
-
-1. Create a Supabase project. Run [`supabase/schema.sql`](supabase/schema.sql).
+1. Attach an **existing** Supabase project if possible. Run [`supabase/schema.sql`](supabase/schema.sql) and later files in `supabase/migrations/`.
 2. Create a **public** Storage bucket named `maps`.
-3. Auth: enable email magic links. Redirect URL: `https://<host>/auth/callback` (and `http://localhost:3000/auth/callback` if developing against the same project).
+3. Auth: enable email. Redirect URL: `https://<host>/auth/callback` (and `http://localhost:3000/auth/callback`).
 4. Insert editor emails into `allowed_editors`, or set `ALLOWED_EMAILS`.
-5. `vercel link` this repo. Set env from `.env.example` for Production **and** Preview — including `SUPABASE_SERVICE_ROLE_KEY`. Redeploy.
-6. Airtable: same `CONF_BITCOINASIA2026` JSON as conference-screens bitcoinAsia2026 (Vercel env + `.env.local`). Tokens and table ids are not stored on the event.
+5. Set the three Supabase env vars for Production, Preview, and Development. Redeploy. Blob mode stops when they are set.
+6. Airtable: same `CONF_BITCOINASIA2026` JSON as conference-screens bitcoinAsia2026 (Vercel env + `.env.local`).
 
 The app uses the service role on the server. RLS still protects the tables from the anon key.
 

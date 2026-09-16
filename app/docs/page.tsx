@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { SiteHeader } from "@/components/chrome/SiteHeader";
 import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = {
   title: "Docs — Conference Floor Plans",
-  description: "Studio workflow, viewer query params, embed contract, hall coordinates, and local vs Vercel testing.",
+  description: "Studio workflow, viewer, embed, Blob vs Supabase, and how to migrate when the existing project is authorized.",
 };
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,7 @@ const toc = [
   ["#json", "map.json"],
   ["#hall", "Hall space"],
   ["#run", "Local vs deploy"],
+  ["#migrate", "Blob → Supabase"],
 ] as const;
 
 const studioNav = [
@@ -115,7 +117,8 @@ function Code({ children }: { children: React.ReactNode }) {
 
 export default async function DocsPage() {
   const user = await getSessionUser();
-  const studio = user ? "/events" : "/login";
+  if (!user) redirect("/login");
+  const studio = "/events";
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
@@ -355,105 +358,167 @@ export default async function DocsPage() {
               Local vs deploy
             </h2>
             <p className="mt-5 max-w-2xl text-[15px] leading-relaxed text-muted-foreground">
-              Two storage modes. Local demo writes a JSON file on your machine. Vercel cannot do that (the function
-              filesystem is read-only), so the hosted app must use Supabase. Same UI; different login and
-              persistence.
+              Target backend is <strong>Supabase</strong> (Postgres + Auth + Storage), most likely an{" "}
+              <strong>existing org project</strong> once someone can authorize it — we are not creating a new paid
+              database until then. Until that lands, laptop and Vercel share one <strong>Vercel Blob</strong> store
+              so testers save on the hosted URL and stay in sync with <Code>next dev</Code>.
+            </p>
+            <p className="mt-4 max-w-2xl text-[15px] leading-relaxed text-muted-foreground">
+              Access: the public internet only sees maps an admin marks <strong>public</strong> (home gallery +{" "}
+              <Code>/e/:slug</Code> + <Code>map.json</Code>, after publish). Everything else needs a signed-in
+              account. Admins invite teammates with a <strong>copy-link</strong> URL (no email product). Bootstrap
+              admins are <Code>ADMIN_EMAILS</Code> or <Code>ALLOWED_EMAILS</Code>. Per-event editor grants and
+              roles are managed at <Code>/admin</Code>. Your maps are listed on <Code>/account</Code>. Passwords
+              are hashed with Node <Code>scrypt</Code> (64-byte key, random 16-byte salt, stored as{" "}
+              <Code>salt:hex</Code>) and checked with a timing-safe compare — the plaintext never goes in Blob.
             </p>
             <div className="mt-6 overflow-x-auto rounded-xl border border-border">
               <table className="w-full min-w-[36rem] text-left text-[14px]">
                 <thead className="bg-muted text-[12px] tracking-wide text-muted-foreground uppercase">
                   <tr>
                     <th className="px-4 py-3 font-medium"> </th>
-                    <th className="px-4 py-3 font-medium">Your laptop</th>
-                    <th className="px-4 py-3 font-medium">Vercel (preview or production)</th>
+                    <th className="px-4 py-3 font-medium">Now (Blob)</th>
+                    <th className="px-4 py-3 font-medium">Later (Supabase)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border text-muted-foreground">
                   <tr className="align-top">
                     <td className="px-4 py-3 font-medium text-foreground">Who can edit</td>
-                    <td className="px-4 py-3">Anyone. Sign in → Continue as editor. No email.</td>
                     <td className="px-4 py-3">
-                      Invited work emails only (magic link). Address must be in <Code>allowed_editors</Code> or{" "}
+                      Work email + <Code>scrypt</Code> password hash (salted, not reversible). Session is still an
+                      httpOnly email cookie. First login for a bootstrap admin (<Code>ADMIN_EMAILS</Code>) sets
+                      the password; everyone else needs an invite. Gate the deployment with Vercel Authentication
+                      as well.
+                    </td>
+                    <td className="px-4 py-3">
+                      Magic link / password against GoTrue. Email must be in <Code>allowed_editors</Code> or{" "}
                       <Code>ALLOWED_EMAILS</Code>.
                     </td>
                   </tr>
                   <tr className="align-top">
                     <td className="px-4 py-3 font-medium text-foreground">Where drafts live</td>
                     <td className="px-4 py-3">
-                      <Code>.data/db.json</Code> on disk (gitignored). Yours alone; wipe by deleting{" "}
-                      <Code>.data/</Code>.
+                      One Blob object (<Code>maps/db.json</Code>) plus files under <Code>maps/files/</Code>. Local
+                      and Vercel use the same token from <Code>vercel env pull</Code>. Disk <Code>.data/</Code>{" "}
+                      only if Blob env is missing (laptop sandbox).
                     </td>
-                    <td className="px-4 py-3">Shared Supabase Postgres. Uploads go in the public <Code>maps</Code> bucket.</td>
+                    <td className="px-4 py-3">Shared Postgres. Uploads in the public <Code>maps</Code> bucket.</td>
                   </tr>
                   <tr className="align-top">
-                    <td className="px-4 py-3 font-medium text-foreground">Seeded map</td>
+                    <td className="px-4 py-3 font-medium text-foreground">Overlap</td>
                     <td className="px-4 py-3">
-                      Bitcoin Asia 2026 is created automatically at <Code>/e/bhk26</Code>.
+                      Designer shows a banner if another email is in the same event. Last save still wins — not a
+                      merge.
                     </td>
-                    <td className="px-4 py-3">Only what is in the database. Seed or create events in studio.</td>
+                    <td className="px-4 py-3">Same last-write-wins until exclusive locks ship.</td>
                   </tr>
                   <tr className="align-top">
                     <td className="px-4 py-3 font-medium text-foreground">Public viewer</td>
                     <td className="px-4 py-3">
-                      <Code>/e/:slug</Code> after you publish locally. Fine for iframe tests on localhost.
+                      <Code>/e/:slug</Code> and <Code>map.json</Code> without login. Prefer Deployment Protection
+                      so unpublished drafts are not world-writable.
                     </td>
-                    <td className="px-4 py-3">
-                      Same paths on the Vercel URL. No login needed to view a published map or{" "}
-                      <Code>/e/:slug/map.json</Code>.
-                    </td>
+                    <td className="px-4 py-3">Same public viewer paths; editors use Auth.</td>
                   </tr>
                 </tbody>
               </table>
             </div>
 
-            <h3 className="mt-10 text-[16px] font-medium">Try it on your machine</h3>
+            <h3 className="mt-10 text-[16px] font-medium">Blob auth (now)</h3>
             <p className="mt-2 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
-              Clone the repo. Leave Supabase env vars empty (see <Code>.env.example</Code>). Then:
+              There is no Supabase user table yet. Sign-in stores your work email in an httpOnly cookie and treats
+              you as an editor. That email is what the concurrent-edit banner shows. It is <strong>not</strong> a
+              password or identity provider. Protect Preview/Production in the Vercel project (Deployment
+              Protection → Vercel Authentication) so only the team can reach login. Viewer routes can stay public
+              if you need embed tests; studio/API should sit behind that protection.
+            </p>
+
+            <h3 className="mt-10 text-[16px] font-medium">Share one Blob (laptop + Vercel)</h3>
+            <ol className="mt-3 max-w-2xl list-decimal space-y-2 pl-5 text-[14px] leading-relaxed text-muted-foreground">
+              <li>
+                Vercel → Storage → create a Blob store on <Code>conference-maps</Code>. Include Production,
+                Preview, <strong>and Development</strong> so <Code>BLOB_READ_WRITE_TOKEN</Code> exists for{" "}
+                <Code>vercel env pull</Code>.
+              </li>
+              <li>
+                <Code>vercel env pull .env.local --yes</Code> (keep Airtable <Code>CONF_*</Code> if pull overwrites).
+                Leave Supabase keys empty.
+              </li>
+              <li>
+                Redeploy. First Blob write: if the pulling machine still has <Code>.data/db.json</Code>, that file
+                is uploaded once when the Blob is empty. Underlays already only on disk must be re-uploaded.
+              </li>
+              <li>
+                Teammates clone, pull the same env, <Code>npm run dev</Code>, sign in with their email. Saves hit
+                the same Blob as production.
+              </li>
+            </ol>
+
+            <h3 className="mt-10 text-[16px] font-medium">Offline laptop only</h3>
+            <p className="mt-2 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
+              No Blob token → <Code>.data/db.json</Code> on that machine. Do not expect that folder to appear on
+              Vercel.
             </p>
             <pre className="mt-4 overflow-x-auto rounded-xl border border-border bg-muted p-4 font-mono text-[12.5px] leading-relaxed text-foreground/80">
               {`npm install
 npm run dev`}
             </pre>
-            <ol className="mt-4 max-w-2xl list-decimal space-y-2 pl-5 text-[14px] leading-relaxed text-muted-foreground">
-              <li>
-                Open <Code>http://localhost:3000</Code>, sign in, choose <strong>Continue as editor</strong>.
-              </li>
-              <li>
-                Open Event <Code>bhk26</Code> → Designer. Draw, undo, save. That write hits{" "}
-                <Code>.data/</Code>, not the cloud.
-              </li>
-              <li>
-                Publish, then open <Code>/e/bhk26</Code> and <Code>/e/bhk26?view=3d</Code> in another tab (or an
-                iframe) to see the attendee view.
-              </li>
-            </ol>
-            <p className="mt-4 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
-              Optional: copy <Code>.env.example</Code> to <Code>.env.local</Code> and fill Supabase if you want
-              local to talk to the same database as production. Then login becomes magic link, same as Vercel.
-            </p>
 
-            <h3 className="mt-10 text-[16px] font-medium">Try the hosted app</h3>
+            <h3 id="migrate" className="mt-10 scroll-mt-28 text-[16px] font-medium">
+              Switching to Supabase later
+            </h3>
+            <p className="mt-2 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
+              The running app is already dual-backend: <Code>getStore()</Code> uses Postgres the moment the three
+              Supabase env vars are set, and Blob/disk drop out. That cutover is easy. <strong>Data does not move
+              by itself.</strong> There is no migrate script yet; Blob is one JSON file plus files, Supabase is
+              tables + a public <Code>maps</Code> bucket. Flip env without a load and the hosted app looks empty.
+            </p>
+            <p className="mt-3 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
+              Prefer an <strong>existing org project</strong> once someone can authorize it. Confirm it is empty
+              (or a dedicated schema) so event slugs/UUIDs do not collide.
+            </p>
             <ol className="mt-3 max-w-2xl list-decimal space-y-2 pl-5 text-[14px] leading-relaxed text-muted-foreground">
-              <li>Ask an admin to add your work email to the editor allowlist, then open the Vercel URL.</li>
               <li>
-                Sign in with a magic link. “Continue as editor” is disabled on Vercel — a file store there cannot
-                save (<Code>EROFS</Code> on <Code>.data/</Code>).
+                Apply <Code>supabase/schema.sql</Code> <strong>and</strong> every file in{" "}
+                <Code>supabase/migrations/</Code> so columns match the app (<Code>view_center</Code>, kits, object
+                media, …). Create or reuse a public Storage bucket named <Code>maps</Code>. Enable Email auth;
+                redirect <Code>/auth/callback</Code> on the Vercel host and localhost.
               </li>
               <li>
-                Anyone can open the public viewer and <Code>map.json</Code> without an account. Editing and publish
-                need the magic-link session.
+                Freeze Designer saves (or accept the last Blob write). Download <Code>maps/db.json</Code> and list{" "}
+                <Code>maps/files/</Code>.
               </li>
+              <li>
+                Load rows in FK order, keeping the same UUIDs: <Code>allowed_editors</Code> → <Code>events</Code> →{" "}
+                <Code>floors</Code> → sponsors / sessions / speakers / library assets / kits → <Code>objects</Code>{" "}
+                → draft versions → publications.
+              </li>
+              <li>
+                Copy each Blob file into Storage at the same path. Rewrite <Code>/api/files/…</Code> to the public
+                Storage URL on floor underlays, library assets, and JSON inside <Code>publications.snapshot</Code>{" "}
+                and draft-version snapshots. Skip this and underlays break after cutover.
+              </li>
+              <li>
+                Create Auth users for the editor emails (<Code>createUser</Code> + confirm). Blob stored scrypt
+                hashes, not GoTrue passwords — do not copy hashes; have people set a new password.
+              </li>
+              <li>
+                Set <Code>NEXT_PUBLIC_SUPABASE_URL</Code>, <Code>NEXT_PUBLIC_SUPABASE_ANON_KEY</Code>, and{" "}
+                <Code>SUPABASE_SERVICE_ROLE_KEY</Code> on Production, Preview, and Development. Redeploy.{" "}
+                <Code>vercel env pull</Code> locally. Smoke: designer save, publish, <Code>/e/:slug/map.json</Code>.
+                Airtable <Code>CONF_*</Code> stays in env, not copied from old event rows.
+              </li>
+              <li>Keep Blob read-only for a week as backup, then delete.</li>
             </ol>
-            <p className="mt-4 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
-              Operators: Vercel env must include <Code>NEXT_PUBLIC_SUPABASE_URL</Code>,{" "}
-              <Code>NEXT_PUBLIC_SUPABASE_ANON_KEY</Code>, and <Code>SUPABASE_SERVICE_ROLE_KEY</Code> (plus Airtable{" "}
-              <Code>CONF_BITCOINASIA2026</Code> if you sync sponsors). Run <Code>supabase/schema.sql</Code>, public
-              bucket <Code>maps</Code>, magic-link redirect <Code>/auth/callback</Code>. Tokens stay in env, not on
-              the event row.
+            <p className="mt-3 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
+              Concurrent-edit banner is Blob-only until exclusive locks exist on Postgres. When you have project
+              URL + service role, add a one-shot ETL (for example <Code>scripts/migrate-blob-to-supabase</Code>) and
+              dry-run before cutover.
             </p>
             <p className="mt-6 text-[13px] leading-relaxed text-muted-foreground">
-              Stack: Next.js 16 (App Router, proxy.ts), React 19, Vercel Fluid Compute, Supabase Postgres + Storage,
-              Airtable caches, three.js + R3F, optional MapLibre, shadcn/ui + Tailwind 4, pdfjs + sharp.
+              Stack: Next.js 16 (App Router, proxy.ts), React 19, Vercel Fluid Compute, Vercel Blob (interim) then
+              Supabase Postgres + Storage, Airtable caches, three.js + R3F, optional MapLibre, shadcn/ui + Tailwind
+              4, pdfjs + sharp.
             </p>
           </section>
 

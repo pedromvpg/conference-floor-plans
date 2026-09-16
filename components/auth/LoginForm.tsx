@@ -10,6 +10,7 @@ import { createBrowserSupabase } from "@/lib/supabase/client";
 export function LoginForm({ demo }: { demo: boolean }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -24,18 +25,35 @@ export function LoginForm({ demo }: { demo: boolean }) {
       setBusy(false);
       return;
     }
-    const { error: err } = await sb.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
-    });
+    const { error: err } = password
+      ? await sb.auth.signInWithPassword({ email, password })
+      : await sb.auth.signInWithOtp({
+          email,
+          options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+        });
     setBusy(false);
     if (err) setError(err.message);
-    else setSent(true);
+    else if (password) {
+      router.push("/events");
+      router.refresh();
+    } else setSent(true);
   }
 
-  async function demoLogin() {
+  async function demoLogin(e: React.FormEvent) {
+    e.preventDefault();
     setBusy(true);
-    await fetch("/api/auth/demo", { method: "POST" });
+    setError("");
+    const res = await fetch("/api/auth/demo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = (await res.json()) as { error?: string };
+    setBusy(false);
+    if (!res.ok) {
+      setError(data.error || "Could not sign in.");
+      return;
+    }
     router.push("/events");
     router.refresh();
   }
@@ -43,14 +61,41 @@ export function LoginForm({ demo }: { demo: boolean }) {
   return (
     <div className="w-full max-w-sm space-y-6">
       {demo ? (
-        <div className="space-y-3">
+        <form onSubmit={(e) => void demoLogin(e)} className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Local demo mode — no Supabase. Production uses invited email magic links.
+            Sign in with the work email an admin invited and your password. First sign-in for a bootstrap admin
+            sets the password. New teammates need a copy-link invite — there is no public sign-up.
           </p>
-          <Button className="w-full" variant="inverse" size="lg" onClick={() => void demoLogin()} disabled={busy}>
-            Continue as editor
+          <div>
+            <Label htmlFor="email">Work email</Label>
+            <Input
+              id="email"
+              className="mt-1"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+            />
+          </div>
+          <div>
+            <Label htmlFor="password">Password</Label>
+            <Input
+              id="password"
+              className="mt-1"
+              type="password"
+              required
+              minLength={8}
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          <Button className="w-full" variant="inverse" size="lg" type="submit" disabled={busy}>
+            Sign in
           </Button>
-        </div>
+        </form>
       ) : sent ? (
         <p className="text-sm">Check {email} for a sign-in link.</p>
       ) : (
@@ -67,9 +112,21 @@ export function LoginForm({ demo }: { demo: boolean }) {
               placeholder="you@company.com"
             />
           </div>
+          <div>
+            <Label htmlFor="password">Password (optional)</Label>
+            <Input
+              id="password"
+              className="mt-1"
+              type="password"
+              minLength={8}
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           <Button className="w-full" variant="inverse" size="lg" type="submit" disabled={busy}>
-            Send magic link
+            {password ? "Sign in" : "Send magic link"}
           </Button>
         </form>
       )}

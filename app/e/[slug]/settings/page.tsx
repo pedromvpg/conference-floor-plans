@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSessionUser } from "@/lib/auth";
+import { requireStudio } from "@/lib/auth";
 import { getStore } from "@/lib/get-store";
 import { airtableEnvStatus } from "@/lib/airtable-conf";
 import { EditorNav } from "@/components/editor/EditorNav";
@@ -9,9 +9,8 @@ import { SettingsForm } from "@/components/events/SettingsForm";
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage({ params }: { params: Promise<{ slug: string }> }) {
-  const user = await getSessionUser();
-  if (!user) redirect("/login");
   const { slug } = await params;
+  await requireStudio(slug);
   const event = await getStore().getEventBySlug(slug);
   if (!event) redirect("/events");
   return (

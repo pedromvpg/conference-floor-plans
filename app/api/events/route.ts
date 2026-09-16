@@ -1,11 +1,11 @@
 import { getStore } from "@/lib/get-store";
-import { requireEditor } from "@/lib/auth";
+import { eventsForUser, requireAdmin, requireEditor } from "@/lib/auth";
 import { slugify } from "@/lib/store";
 
 export async function GET() {
   try {
-    await requireEditor();
-    const events = await getStore().listEvents();
+    const user = await requireEditor();
+    const events = await eventsForUser(user.email);
     return Response.json({
       events: events.map((e) => ({
         id: e.id,
@@ -21,7 +21,7 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    await requireEditor();
+    await requireAdmin();
     const body = (await req.json()) as {
       name?: string;
       slug?: string;
@@ -33,7 +33,14 @@ export async function POST(req: Request) {
       name,
       slug,
     });
-    return Response.json(event);
+    return Response.json({
+      id: event.id,
+      slug: event.slug,
+      name: event.name,
+      isPublic: event.isPublic,
+      createdAt: event.createdAt,
+      updatedAt: event.updatedAt,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed";
     const status = message === "Unauthorized" ? 401 : 400;

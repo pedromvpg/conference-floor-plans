@@ -18,6 +18,8 @@ import { MAX_DRAFT_VERSIONS, sliceKey } from "./draft-versions";
 import { buildMapDocument } from "./map-document";
 import { normalizeFloorBasemap } from "./basemap";
 import { parseStoredPolygon, serializePolygon } from "./bezier";
+import type { AppUser, CreatedInvite, InviteRecord, UserRole } from "./access";
+import { isBootstrapAdmin } from "./access";
 import { nowIso } from "./store";
 import type { NewEventInput, NewLibraryAsset, Store } from "./store";
 import { normalizeObject } from "./appearance";
@@ -110,6 +112,7 @@ function eventFrom(r: EventRow): MapEvent {
     speakersSyncedAt: r.speakers_synced_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    isPublic: Boolean((r as { is_public?: boolean }).is_public),
   };
 }
 
@@ -435,6 +438,12 @@ export class SupabaseStore implements Store {
     return normalizeObject(objectFrom(data as ObjectRow));
   }
 
+  async getObject(id: string) {
+    const { data, error } = await this.sb.from("objects").select("*").eq("id", id).maybeSingle();
+    if (error) throw error;
+    return data ? normalizeObject(objectFrom(data as ObjectRow)) : null;
+  }
+
   async deleteObject(id: string) {
     const { error } = await this.sb.from("objects").delete().eq("id", id);
     if (error) throw error;
@@ -551,6 +560,12 @@ export class SupabaseStore implements Store {
       .single();
     if (error) throw error;
     return assetFrom(data as AssetRow);
+  }
+
+  async getAsset(id: string) {
+    const { data, error } = await this.sb.from("library_assets").select("*").eq("id", id).maybeSingle();
+    if (error) throw error;
+    return data ? assetFrom(data as AssetRow) : null;
   }
 
   async deleteAsset(id: string) {
@@ -821,6 +836,105 @@ export class SupabaseStore implements Store {
       .from("allowed_editors")
       .upsert({ email: email.toLowerCase() }, { onConflict: "email" });
     if (error) throw error;
+  }
+
+  async getUser(email: string): Promise<AppUser | null> {
+    const e = email.toLowerCase();
+    const ok = await this.isEditor(e);
+    if (!ok && !isBootstrapAdmin(e)) return null;
+    return {
+      email: e,
+      role: isBootstrapAdmin(e) ? "admin" : "editor",
+      allEvents: true,
+      createdAt: nowIso(),
+    };
+  }
+
+  async listUsers(): Promise<AppUser[]> {
+    const { data, error } = await this.sb.from("allowed_editors").select("email, created_at");
+    if (error) throw error;
+    return (data ?? []).map((row: { email: string; created_at?: string }) => {
+      const email = row.email.toLowerCase();
+      return {
+        email,
+        role: (isBootstrapAdmin(email) ? "admin" : "editor") as UserRole,
+        allEvents: true,
+        createdAt: row.created_at ?? nowIso(),
+      };
+    });
+  }
+
+  async upsertUser(email: string, patch: { role?: UserRole; allEvents?: boolean; passwordHash?: string }) {
+    await this.addEditor(email);
+    const user = await this.getUser(email);
+    if (!user) throw new Error("Could not save user");
+    if (patch.role) user.role = patch.role;
+    if (typeof patch.allEvents === "boolean") user.allEvents = patch.allEvents;
+    return user;
+  }
+
+  async deleteUser(email: string) {
+    const e = email.toLowerCase();
+    const { error } = await this.sb.from("allowed_editors").delete().eq("email", e);
+    if (error) throw error;
+  }
+
+  async listEventEditors() {
+    return [];
+  }
+
+  async listEventIdsForEditor(email: string) {
+    const user = await this.getUser(email);
+    if (!user) return [];
+    if (user.role === "viewer") return [];
+    return "all" as const;
+  }
+
+  async listEventIdsForViewer(email: string) {
+    const user = await this.getUser(email);
+    if (!user) return [];
+    return "all" as const;
+  }
+
+  async setEventEditors(_email: string, _eventIds: string[]) {
+    /* per-event grants live in Blob until SQL exists */
+  }
+
+  async setEventAccess(_email: string, _eventId: string, _access: "editor" | "viewer" | null) {
+    /* per-event grants live in Blob until SQL exists */
+  }
+
+  async setEventPublic(eventId: string, isPublic: boolean) {
+    const { data, error } = await this.sb
+      .from("events")
+      .update({ is_public: isPublic, updated_at: nowIso() })
+      .eq("id", eventId)
+      .select("*")
+      .single();
+    if (error) throw new Error("This project has no is_public column yet. Use Blob until the migration is applied.");
+    return eventFrom(data as EventRow);
+  }
+
+  async listInvites(): Promise<InviteRecord[]> {
+    return [];
+  }
+
+  async createInvite(_input: {
+    email: string;
+    role: UserRole;
+    eventIds: string[] | "all";
+    createdBy: string;
+    origin: string;
+  }): Promise<CreatedInvite> {
+    throw new Error("Copy-link invites require the Blob store until Supabase invite tables exist.");
+  }
+
+  async consumeInvite(_token: string, _email: string, _passwordHash: string): Promise<AppUser> {
+    throw new Error("Copy-link invites require the Blob store until Supabase invite tables exist.");
+  }
+
+  async deleteInvite(_id: string): Promise<void> {
+    throw new Error("Copy-link invites require the Blob store until Supabase invite tables exist.");
   }
 
   async putFile(filePath: string, body: Buffer, contentType: string) {

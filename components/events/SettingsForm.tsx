@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +18,6 @@ export function SettingsForm({
   envStatus: { keys: string[]; loadedKey: string | null };
 }) {
   const [name, setName] = useState(event.name);
-  const [invite, setInvite] = useState("");
   const [units, setUnits] = useUnits();
   const envLoaded = Boolean(envStatus.loadedKey);
 
@@ -33,20 +33,6 @@ export function SettingsForm({
       return;
     }
     toast.success("Saved");
-  }
-
-  async function addEditor() {
-    const res = await fetch("/api/auth/invite", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: invite }),
-    });
-    if (!res.ok) {
-      toast.error("Invite failed");
-      return;
-    }
-    toast.success(`Added ${invite}`);
-    setInvite("");
   }
 
   return (
@@ -107,24 +93,13 @@ export function SettingsForm({
 
       <StudioPanel>
         <StudioKicker>Access</StudioKicker>
-        <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.04em]">Invite editor</h2>
+        <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.04em]">Editors</h2>
         <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">
-          Editors can open the designer and publish maps.
+          Invites and per-map grants live on the Admin page.
         </p>
-        <div className="mt-6 flex flex-col gap-2 sm:flex-row">
-          <Input
-            id="invite-email"
-            type="email"
-            className={studioFieldClass}
-            value={invite}
-            onChange={(e) => setInvite(e.target.value)}
-            placeholder="producer@company.com"
-            aria-label="Editor email"
-          />
-          <Button type="button" variant="glass" size="lg" onClick={() => void addEditor()}>
-            Invite
-          </Button>
-        </div>
+        <Button asChild variant="glass" size="lg" className="mt-6">
+          <Link href="/admin">Open admin</Link>
+        </Button>
       </StudioPanel>
     </div>
   );

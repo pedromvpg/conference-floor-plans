@@ -1,3 +1,5 @@
+import { isBlobConfigured } from "./blob-backend";
+import type { AppUser, CreatedInvite, EventAccess, EventEditorGrant, InviteRecord, UserRole } from "./access";
 import type {
   AgendaSession,
   AgendaSpeaker,
@@ -48,6 +50,7 @@ export interface Store {
   updateFloor(id: string, patch: Partial<Floor>): Promise<Floor>;
   deleteFloor(id: string): Promise<void>;
   upsertObject(obj: MapObject): Promise<MapObject>;
+  getObject(id: string): Promise<MapObject | null>;
   deleteObject(id: string): Promise<void>;
   replaceSponsors(eventId: string, sponsors: Omit<Sponsor, "id" | "eventId">[]): Promise<Sponsor[]>;
   listSponsors(eventId: string): Promise<Sponsor[]>;
@@ -57,6 +60,7 @@ export interface Store {
   listSpeakers(eventId: string): Promise<AgendaSpeaker[]>;
   listAssets(eventId: string): Promise<LibraryAsset[]>;
   createAsset(input: NewLibraryAsset): Promise<LibraryAsset>;
+  getAsset(id: string): Promise<LibraryAsset | null>;
   deleteAsset(id: string): Promise<void>;
   listKits(eventId: string): Promise<ExhibitKit[]>;
   upsertKit(kit: ExhibitKit): Promise<ExhibitKit>;
@@ -69,6 +73,26 @@ export interface Store {
   isEditor(email: string): Promise<boolean>;
   addEditor(email: string): Promise<void>;
   putFile(path: string, body: Buffer, contentType: string): Promise<string>;
+  getUser(email: string): Promise<AppUser | null>;
+  listUsers(): Promise<AppUser[]>;
+  upsertUser(email: string, patch: { role?: UserRole; allEvents?: boolean; passwordHash?: string }): Promise<AppUser>;
+  deleteUser(email: string): Promise<void>;
+  listEventEditors(): Promise<EventEditorGrant[]>;
+  listEventIdsForEditor(email: string): Promise<string[] | "all">;
+  listEventIdsForViewer(email: string): Promise<string[] | "all">;
+  setEventEditors(email: string, eventIds: string[]): Promise<void>;
+  setEventAccess(email: string, eventId: string, access: EventAccess | null): Promise<void>;
+  setEventPublic(eventId: string, isPublic: boolean): Promise<MapEvent>;
+  listInvites(): Promise<InviteRecord[]>;
+  createInvite(input: {
+    email: string;
+    role: UserRole;
+    eventIds: string[] | "all";
+    createdBy: string;
+    origin: string;
+  }): Promise<CreatedInvite>;
+  consumeInvite(token: string, email: string, passwordHash: string): Promise<AppUser>;
+  deleteInvite(id: string): Promise<void>;
 }
 
 const SUPABASE_ENV = [
@@ -89,16 +113,25 @@ export function isSupabaseConfigured(): boolean {
   return missingSupabaseEnv().length === 0;
 }
 
-/** File-backed `.data/` store. Never on Vercel — the function FS is read-only. */
+export { isBlobConfigured } from "./blob-backend";
+
+/** JSON store: Vercel Blob when configured, otherwise local `.data/` (laptop only). */
 export function canUseDemoStore(): boolean {
-  return !process.env.VERCEL && !isSupabaseConfigured();
+  if (isSupabaseConfigured()) return false;
+  if (isBlobConfigured()) return true;
+  return !process.env.VERCEL;
 }
 
 export function supabaseRequiredError(): Error {
+  if (!isBlobConfigured()) {
+    return new Error(
+      "This deployment cannot save: add a Vercel Blob store (BLOB_READ_WRITE_TOKEN on Production, Preview, and Development) or Supabase. The local .data/ file store is read-only on Vercel.",
+    );
+  }
   const missing = missingSupabaseEnv();
   return new Error(
     missing.length
-      ? `Supabase is not configured on this deployment (missing ${missing.join(", ")}). Set those Vercel env vars for Production/Preview and redeploy. Local .data/ storage cannot save on Vercel.`
+      ? `Supabase is not configured (missing ${missing.join(", ")}).`
       : "Supabase client could not be created.",
   );
 }

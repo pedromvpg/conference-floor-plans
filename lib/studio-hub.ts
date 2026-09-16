@@ -1,4 +1,5 @@
 import type { DraftBundle } from "@/lib/types";
+import { redactEmail } from "@/lib/privacy";
 
 export type HubIssue = { href: string; label: string; detail: string };
 
@@ -119,7 +120,7 @@ export function hubModel(draft: DraftBundle, airtableLoaded: boolean) {
   return {
     published: Boolean(publication),
     publishedAt,
-    publishedBy: publication?.publishedBy ?? null,
+    publishedBy: publication?.publishedBy ? redactEmail(publication.publishedBy) : null,
     liveIsStale,
     publishedLabel: publication ? `Published ${when(publishedAt)}` : "Draft only",
     floors: floorRows,

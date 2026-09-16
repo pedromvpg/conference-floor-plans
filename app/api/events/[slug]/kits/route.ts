@@ -1,5 +1,5 @@
 import { getStore } from "@/lib/get-store";
-import { requireEditor } from "@/lib/auth";
+import { requireEventEditorBySlug } from "@/lib/auth";
 import { isExhibitKitKind, isStageKitKind } from "@/lib/exhibit-kits";
 import type { ExhibitKit } from "@/lib/types";
 
@@ -7,8 +7,8 @@ type Ctx = { params: Promise<{ slug: string }> };
 
 export async function PATCH(req: Request, ctx: Ctx) {
   try {
-    await requireEditor();
     const { slug } = await ctx.params;
+    await requireEventEditorBySlug(slug);
     const store = getStore();
     const event = await store.getEventBySlug(slug);
     if (!event) return Response.json({ error: "Not found" }, { status: 404 });

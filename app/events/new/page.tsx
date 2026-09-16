@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 export default async function NewEventPage() {
   const user = await getSessionUser();
   if (!user) redirect("/login");
+  if (user.role !== "admin") redirect("/events");
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <SiteHeader

@@ -113,6 +113,7 @@ export type MapEvent = {
   speakersSyncedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  isPublic: boolean;
 };
 
 export type Floor = {

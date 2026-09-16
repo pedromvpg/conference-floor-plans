@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getSessionUser } from "@/lib/auth";
-import { getStore } from "@/lib/get-store";
+import { eventsForUser, getSessionUser, canEditEvent } from "@/lib/auth";
+import { eventCover } from "@/lib/event-cover";
 import { eventStudioHref } from "@/lib/studio-nav";
 import { PromoBanner } from "@/components/marketing/PromoBanner";
 import { SectionLabel } from "@/components/chrome/SectionLabel";
@@ -10,25 +10,23 @@ import { Button } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
 
-function eventCover(slug: string) {
-  if (slug.includes("amsterdam")) return "/marketing/amsterdam-cover.png";
-  if (slug === "bitcoin-2027") return "/marketing/bitcoin-2027-cover.png";
-  if (slug === "bhk26") return "/marketing/bhk26-cover.png";
-  return undefined;
-}
-
 export default async function EventsPage() {
   const user = await getSessionUser();
   if (!user) redirect("/login");
-  const events = await getStore().listEvents();
+  const events = await eventsForUser(user.email);
+  const canEdit = new Set(
+    (await Promise.all(events.map(async (e) => ((await canEditEvent(user.email, e.id)) ? e.id : "")))).filter(Boolean),
+  );
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <SiteHeader
         action={
-          <Button asChild variant="inverse" size="lg">
-            <Link href="/events/new">New event</Link>
-          </Button>
+          user.role === "admin" ? (
+            <Button asChild variant="inverse" size="lg">
+              <Link href="/events/new">New event</Link>
+            </Button>
+          ) : undefined
         }
       />
       <main className="px-4 pb-20 sm:px-8">
@@ -42,7 +40,7 @@ export default async function EventsPage() {
         {events.length ? (
           <>
             <SectionLabel trailing={`${events.length} event${events.length === 1 ? "" : "s"}`}>
-              Studio
+              Your maps
             </SectionLabel>
             <ul className="mt-6 grid gap-5 lg:grid-cols-1">
               {events.map((e) => (
@@ -52,10 +50,10 @@ export default async function EventsPage() {
                     shout={false}
                     title={e.name}
                     kicker={`/e/${e.slug}`}
-                    href={eventStudioHref(e.slug)}
-                    cta="Open event"
-                    secondaryHref={`/e/${e.slug}`}
-                    secondaryCta="Viewer"
+                    href={canEdit.has(e.id) ? eventStudioHref(e.slug) : `/e/${e.slug}`}
+                    cta={canEdit.has(e.id) ? "Open event" : "Viewer"}
+                    secondaryHref={canEdit.has(e.id) ? `/e/${e.slug}` : undefined}
+                    secondaryCta={canEdit.has(e.id) ? "Viewer" : undefined}
                     className="min-h-[260px] sm:min-h-[340px]"
                   />
                 </li>
@@ -64,10 +62,12 @@ export default async function EventsPage() {
           </>
         ) : (
           <div className="mt-10 rounded-[28px] border border-border px-6 py-20 text-center">
-            <p className="text-[16px] text-muted-foreground">No events yet.</p>
-            <Button asChild variant="inverse" className="mt-6" size="lg">
-              <Link href="/events/new">Create an event</Link>
-            </Button>
+            <p className="text-[16px] text-muted-foreground">No events assigned to you yet.</p>
+            {user.role === "admin" ? (
+              <Button asChild variant="inverse" className="mt-6" size="lg">
+                <Link href="/events/new">Create an event</Link>
+              </Button>
+            ) : null}
           </div>
         )}
       </main>

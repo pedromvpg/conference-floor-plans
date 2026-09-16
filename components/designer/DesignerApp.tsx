@@ -119,6 +119,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { toast } from "sonner";
+import { ConcurrentEditBanner } from "@/components/designer/ConcurrentEditBanner";
 
 const HallCanvas = dynamic(() => import("@/components/hall/HallCanvas"), {
   ssr: false,
@@ -374,7 +375,13 @@ function PathfinderGlyph({ op }: { op: PathfinderOp }) {
   );
 }
 
-export function DesignerApp({ initial }: { initial: DraftBundle }) {
+export function DesignerApp({
+  initial,
+  sharedBlob = false,
+}: {
+  initial: DraftBundle;
+  sharedBlob?: boolean;
+}) {
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
   const [bundle, setBundle] = useState(initial);
@@ -1719,6 +1726,7 @@ export function DesignerApp({ initial }: { initial: DraftBundle }) {
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
+      <ConcurrentEditBanner slug={bundle.event.slug} enabled={sharedBlob} />
       <header className="grid h-10 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-sidebar-border bg-sidebar px-1.5">
         <div className="flex min-w-0 items-center gap-1.5">
           <Button size="icon-sm" variant="ghost" asChild>

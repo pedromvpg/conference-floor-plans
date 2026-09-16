@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { blobFilePath, blobGetBytes, isBlobConfigured } from "@/lib/blob-backend";
 import { isSupabaseConfigured } from "@/lib/store";
+import { mayReadStoredFile } from "@/lib/file-access";
 
 type Ctx = { params: Promise<{ path: string[] }> };
 
@@ -22,15 +24,28 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
   const { path: parts } = await ctx.params;
   const rel = parts.join("/");
-  if (rel.includes("..")) return new Response("Bad path", { status: 400 });
+  if (rel.includes("..") || !(await mayReadStoredFile(rel))) {
+    return new Response("Not found", { status: 404 });
+  }
+  const ext = rel.split(".").pop()?.toLowerCase() ?? "";
+  const type = TYPES[ext] || "application/octet-stream";
+  if (isBlobConfigured()) {
+    const file = await blobGetBytes(blobFilePath(rel));
+    if (!file) return new Response("Not found", { status: 404 });
+    return new Response(new Uint8Array(file.body), {
+      headers: {
+        "Content-Type": file.contentType || type,
+        "Cache-Control": "private, max-age=3600",
+      },
+    });
+  }
   const file = path.join(process.cwd(), ".data", "files", rel);
   try {
     const buf = await readFile(file);
-    const ext = rel.split(".").pop()?.toLowerCase() ?? "";
     return new Response(buf, {
       headers: {
-        "Content-Type": TYPES[ext] || "application/octet-stream",
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Content-Type": type,
+        "Cache-Control": "private, max-age=3600",
       },
     });
   } catch {
