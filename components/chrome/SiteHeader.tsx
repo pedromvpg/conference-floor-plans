@@ -19,16 +19,12 @@ export async function SiteHeader({
     nav ??
     (user
       ? [
-          { href: "/", label: "Home" },
           { href: "/events", label: "Events" },
           { href: "/docs", label: "Docs" },
           { href: "/account", label: "Account" },
           ...(user.role === "admin" ? [{ href: "/admin", label: "Admin" }] : []),
         ]
-      : [
-          { href: "/", label: "Home" },
-          { href: "/login", label: "Sign in" },
-        ]);
+      : [{ href: "/login", label: "Sign in" }]);
   return (
     <header className="sticky top-0 z-30 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-b border-border bg-background/55 px-4 py-3 backdrop-blur-xl sm:px-6 sm:py-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:px-8">
       <Link href="/" className="min-w-0 justify-self-start">
