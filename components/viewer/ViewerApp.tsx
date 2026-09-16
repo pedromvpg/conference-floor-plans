@@ -703,6 +703,9 @@ export function ViewerApp({
       <Dialog modal={false} open={detailOpen && Boolean(selected)} onOpenChange={setDetailOpen}>
         <DialogContent
           overlayClassName="bg-transparent backdrop-blur-none supports-backdrop-filter:backdrop-blur-none pointer-events-none"
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
           className={`top-4 left-4 w-[min(22rem,calc(100%-2rem))] max-w-sm translate-x-0 translate-y-0 rounded-xl sm:max-w-sm ${sidebarOpen ? "md:left-[276px]" : "md:left-[56px]"}`}
         >
           {selected ? (
